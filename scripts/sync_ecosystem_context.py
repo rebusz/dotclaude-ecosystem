@@ -117,7 +117,12 @@ def _atomic_write(p: Path, content: str) -> None:
 
 
 def discover_repos() -> list[Path]:
-    """List repos under d:/APPS (top-level dirs)."""
+    """List real repos under d:/APPS (top-level dirs).
+
+    Skips git worktrees (where `.git` is a file, not a directory) — they appear
+    when running `git worktree add ...` and would duplicate the parent repo's
+    content under a different slug.
+    """
     if not BASE.exists():
         return []
     out = []
@@ -126,8 +131,16 @@ def discover_repos() -> list[Path]:
             continue
         if p.name in EXCLUDED_REPOS:
             continue
-        # heuristic: actual repo if it has design/ OR .git OR CLAUDE.md
-        if (p / "design").exists() or (p / ".git").exists() or (p / "CLAUDE.md").exists():
+        git_path = p / ".git"
+        # Real repo = .git is a directory. Worktree = .git is a file.
+        if git_path.is_dir():
+            out.append(p)
+            continue
+        if git_path.is_file():
+            # worktree — skip
+            continue
+        # No .git at all: include only if it has design/ or CLAUDE.md (legacy / non-git project)
+        if (p / "design").exists() or (p / "CLAUDE.md").exists():
             out.append(p)
     return sorted(out, key=lambda x: x.name.lower())
 
