@@ -25,6 +25,26 @@
                         "timeout": 30
                     }
                 ]
+            },
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python \"~/.claude/scripts/auto_sync_context_hook.py\"",
+                        "timeout": 10
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python \"~/.claude/scripts/auto_sync_context_hook.py\"",
+                        "timeout": 10
+                    }
+                ]
             }
         ],
         "UserPromptSubmit": [
