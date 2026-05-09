@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+node_modules/
+
+# Never commit any auth files even if accidentally placed here
+auth.json
+*.token
+*.key
+.env
+.env.*
+credentials*
+secrets/

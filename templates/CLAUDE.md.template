@@ -1,0 +1,107 @@
+# Global Claude Code Rules — `<your-ecosystem>`
+
+> Personalize this file. Replace `<your-ecosystem>`, the repo table, and risk class definitions to match your domain. The Plan Lifecycle Hooks section below is the system contract — keep it verbatim.
+
+## Ecosystem
+
+| Repo | Path | Purpose |
+|------|------|---------|
+| <repo-1> | `<base>/<repo-1>` | <description> |
+| <repo-2> | `<base>/<repo-2>` | <description> |
+
+## Plans and design docs — ALWAYS IN THE REPO
+
+Every plan, design doc, test plan, audit, or post-mortem is written to the **project repo**, not to scratch directories.
+
+- `<repo>/design/plans/YYYY-MM-DD_<slug>.md`
+- `<repo>/design/audits/YYYY-MM-DD_<slug>/`
+- `<repo>/design/visions/<slug>.md`
+- `<repo>/IDEA_BOX.md`
+
+### HARD RULE: commit + push design docs immediately
+
+After every Write or Edit to `design/plans/`, `design/audits/`, or `design/visions/`:
+
+1. `git add <file>` — immediately
+2. `git commit -m "docs: <description>"` — same turn
+3. `git push origin HEAD` — local commit alone is not enough
+
+A PostToolUse hook (`autocommit_design_docs.py`) enforces this automatically.
+
+## Plan Lifecycle Hooks (HARD CONTRACT)
+
+When a user invokes ANY skill that creates, reviews, or executes a plan/module, AI MUST follow this contract.
+
+### Triggers
+
+- `mode architect`, `mode implement`, `mode ship`, `mode autoplan`, `mode operator`, `mode integrate`, `mode contract`
+- `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/plan-tune`, `/autoplan`, `/executor`, `/office-hours`, `/design-review`
+- Polish equivalents: `tryb architekt`, `tryb implementuj`, `nowy plan`, `tworzymy plan`, `nowy moduł`
+- English equivalents: `new plan`, `create plan`, `design plan`, `new module`, `design module`, `create module`
+
+### PRE-step (BEFORE designing/coding) — MANDATORY
+
+```bash
+python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <plan-path-if-known>]
+```
+
+The output is wrapped in `<plan-context>...</plan-context>`. AI MUST:
+1. Reference vision Why+DoD when scoping the plan
+2. Cross-check IDEA_BOX — if work resolves an item, note the slug for POST-step
+3. Avoid duplicating work already in PLANS.md (in-progress or draft)
+4. If no `vision:` in plan frontmatter and a relevant vision exists for the repo → propose attaching it
+
+### POST-step (AFTER landing/shipping) — MANDATORY
+
+```bash
+python ~/.claude/scripts/plan_context_updater.py --plan <plan-path> [--shipped] [--note "<one-line>"] [--resolved-ideas "<slug1,slug2>"]
+```
+
+Regenerates `~/.claude/PLANS.md` and `~/.claude/VISIONS.md`, appends to vision auto-log (with `--shipped`), and marks resolved IDEA_BOX entries (with `--resolved-ideas`).
+
+### Exceptions
+
+- R0 ad-hoc edits (typo fix, single-line tweak) — skip both
+- Pure debugging without plan creation — skip PRE; skip POST unless plan status changed
+- If the loader fails for any reason — note it, continue work; never block
+
+## Global Vision Catalog
+
+`/vision` is GLOBAL across the whole ecosystem. Strategic goals live in repo-local `<repo>/design/visions/<slug>.md`. A vision explains WHY a group of plans exists, the Definition of Done, and the manually-curated roadmap. Tactical plans attach upward via frontmatter:
+
+- `vision: <slug>` — one kebab-case slug; empty or missing means no vision context.
+- The slug must match the vision filename without `.md`.
+- Cross-repo visions set `repos: [...]` and `primary_repo:`; the primary repo holds the canonical file.
+
+Auto-generated indexes:
+
+- Human: `~/.claude/VISIONS.md`
+- Machine: `~/.claude/.vision_index.json`
+
+Regen: `python ~/.claude/scripts/vision_catalog.py`.
+
+## Idea Boxes
+
+When asked "what next", about development direction, or priorities across any repo — check the relevant idea box:
+
+- **Global**: `~/.claude/ECOSYSTEM_IDEA_BOX.md` — bridge contracts, phase gates, architectural policies ONLY
+- **Per-repo**: each repo root has `IDEA_BOX.md` — features, bugs, TODOs, refactoring
+- Cross-repo ranked digest: `python ~/.claude/scripts/idea_digest.py`
+
+When the user uses phrases like "we should", "someday", "TODO:", "idea:", or "add to backlog", offer to append to the most relevant IDEA_BOX.md.
+
+## Engineering Risk Classes (personalize these)
+
+- R0: docs/prompts only — proceed freely
+- R1: non-live tooling, tests, mirrors — proceed normally
+- R2: contracts, persistence, ingestion — plan + GO
+- R3: production / live runtime / order path — plan + GO + rollback + validation
+
+## SHIP-ON ENABLED-BY-DEFAULT POLICY
+
+- New features ship **ENABLED by default**
+- Do **NOT** propose "soak periods", "shadow mode", "OFF by default until validated"
+- If a flag must exist (kill-switch, R3 rollback path), default it ON
+- After landing a feature: next session, **verify it is still ON**
+
+This rule does **not** override R3 rollback requirements — once GO is given, the feature lands ON, not OFF-pending-soak.

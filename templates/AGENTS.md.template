@@ -1,0 +1,52 @@
+## Plan Lifecycle Hooks (HARD CONTRACT — applies to plan-creating work)
+
+Mirror of the rule active for Claude Code in `~/.claude/CLAUDE.md`. When the user asks Codex to create, review, or execute a plan/module, Codex MUST follow this contract.
+
+### Triggers
+
+- "new plan", "create plan", "design plan", "new module", "design module"
+- "mode architect", "mode implement", "mode autoplan", "mode ship"
+- Polish: "nowy plan", "tworzymy plan", "nowy moduł", "tryb architekt", "implementuj"
+
+### PRE-step — MANDATORY
+
+Run **before any other tool call** in the planning/coding work:
+
+```bash
+python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <plan-path-if-known>]
+```
+
+The output is wrapped in `<plan-context>...</plan-context>`. Codex MUST read it and:
+1. Reference vision Why+DoD when scoping the plan
+2. Cross-check IDEA_BOX — if work resolves an item, note the slug for POST-step
+3. Avoid duplicating work already in PLANS.md (in-progress or draft)
+4. Propose `vision: <slug>` frontmatter if missing and a relevant vision exists
+
+### POST-step — MANDATORY
+
+Run **after** code/plan changes are committed (or at end of work):
+
+```bash
+python ~/.claude/scripts/plan_context_updater.py --plan <plan-path> [--shipped] [--note "<one-line>"] [--resolved-ideas "<slug1,slug2>"]
+```
+
+### EPILOG_PAYLOAD before final user-facing reply
+
+For any plan-creating mode (architect, implement, autoplan, ship), include before the final summary:
+
+```
+EPILOG_PAYLOAD:
+  start_sha: <SHA before any changes>
+  end_sha: <git rev-parse HEAD now>
+  plan_path: <plan path if known, else empty>
+  committed: <true or false>
+  resolved_ideas: <comma-separated IDEA_BOX slugs marked DONE based on PRE-step context, else empty>
+```
+
+Then run the POST-step using values from the payload.
+
+### Exceptions
+
+- R0 ad-hoc edits — skip both
+- Pure debugging without plan creation — skip PRE; skip POST unless plan status changed
+- If the loader fails — note it, continue work; never block

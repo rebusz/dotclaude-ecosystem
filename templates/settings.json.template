@@ -1,0 +1,43 @@
+{
+    "permissions": {
+        "allow": [],
+        "deny": [],
+        "defaultMode": "acceptEdits"
+    },
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python \"~/.claude/scripts/autocommit_design_docs.py\"",
+                        "timeout": 30
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python \"~/.claude/scripts/autocommit_design_docs.py\"",
+                        "timeout": 30
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python \"~/.claude/scripts/plan_keyword_detector.py\"",
+                        "timeout": 15
+                    }
+                ]
+            }
+        ]
+    }
+}
