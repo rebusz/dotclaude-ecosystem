@@ -45,6 +45,15 @@ class TestBlockReplacement(unittest.TestCase):
         self.assertTrue(result.startswith("# Title\n\n" + sar.BEGIN))
         self.assertIn("Manual body", result)
 
+    def test_empty_file_uses_default_title_when_init_enabled(self):
+        result = sar.replace_or_insert_block(
+            "",
+            "generated\n",
+            init=True,
+            default_title="# AGENTS.md instructions for Demo",
+        )
+        self.assertTrue(result.startswith("# AGENTS.md instructions for Demo\n\n" + sar.BEGIN))
+
     def test_missing_block_without_init_is_drift(self):
         with self.assertRaises(sar.DriftError):
             sar.replace_or_insert_block("# Title\n", "generated\n", init=False)
@@ -96,6 +105,13 @@ class TestRenderAndSync(unittest.TestCase):
     def test_non_allowlisted_repo_rejected(self):
         with self.assertRaises(sar.SyncError):
             sar.target_specs(Path("rules"), Path("D:/APPS/OtherRepo"))
+
+    def test_tier1_includes_generic_repo_targets(self):
+        specs = sar.tier_target_specs("tier1")
+        names = {spec.name for spec in specs}
+        self.assertIn("tsignallab-codex", names)
+        self.assertIn("h10-flow-claude", names)
+        self.assertNotIn("tsignal-5.0-codex", names)
 
 
 if __name__ == "__main__":

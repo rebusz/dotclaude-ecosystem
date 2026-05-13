@@ -45,6 +45,7 @@ class TargetSpec:
     sources: tuple[Path, ...]
     line_limit: int | None = None
     byte_limit: int | None = None
+    default_title: str | None = None
 
 
 @dataclass
@@ -167,9 +168,17 @@ def find_managed_block(text: str) -> tuple[int, int] | None:
     return begin, end
 
 
-def replace_or_insert_block(existing: str, rendered: str, init: bool) -> str:
+def replace_or_insert_block(
+    existing: str,
+    rendered: str,
+    init: bool,
+    *,
+    default_title: str | None = None,
+) -> str:
     normalized = existing.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.splitlines()
+    if not lines and default_title:
+        lines = [default_title]
     block = find_managed_block(normalized)
     rendered_lines = [BEGIN, *rendered.rstrip("\n").splitlines(), END]
 
@@ -215,29 +224,80 @@ def target_specs(source_root: Path, repo: Path | None) -> list[TargetSpec]:
 
     if repo is not None:
         resolved = repo.resolve()
-        if resolved != TSIGNAL_REPO.resolve():
-            raise SyncError(f"repo is not allowlisted for pilot sync: {repo}")
-        specs.extend(
-            [
-                TargetSpec(
-                    name="tsignal-claude",
-                    path=resolved / "CLAUDE.md",
-                    sources=(
-                        Path("repos/tsignal-5.0/shared.md"),
-                        Path("repos/tsignal-5.0/claude.md"),
-                    ),
-                ),
-                TargetSpec(
-                    name="tsignal-codex",
-                    path=resolved / "AGENTS.md",
-                    sources=(
-                        Path("repos/tsignal-5.0/shared.md"),
-                        Path("repos/tsignal-5.0/codex.md"),
-                    ),
-                    byte_limit=32 * 1024,
-                ),
-            ]
-        )
+        specs.extend(repo_target_specs(resolved))
+    return specs
+
+
+@dataclass(frozen=True)
+class RepoRuleSet:
+    slug: str
+    path: Path
+    source_dir: Path = Path("repos/generic")
+
+
+REPO_RULESETS: tuple[RepoRuleSet, ...] = (
+    RepoRuleSet("tsignal-5.0", TSIGNAL_REPO, Path("repos/tsignal-5.0")),
+    RepoRuleSet("tsignallab", Path("D:/APPS/TsignalLAB")),
+    RepoRuleSet("h10-flow", Path("D:/APPS/H10 Flow")),
+    RepoRuleSet("hue-flow", Path("D:/APPS/Hue Flow")),
+    RepoRuleSet("vavo-os", Path("D:/APPS/Vavo OS")),
+    RepoRuleSet("tsignal-remote", Path("D:/APPS/Tsignal Remote")),
+    RepoRuleSet("bnt-map", Path("D:/APPS/BNT Map")),
+    RepoRuleSet("vavo-website", Path("D:/APPS/VAVO website")),
+    RepoRuleSet("modly-3d-print", Path("D:/APPS/Modly 3D print")),
+    RepoRuleSet("yegmap", Path("D:/APPS/YEGmap")),
+)
+
+TIER1_REPO_SLUGS = {
+    "tsignallab",
+    "h10-flow",
+    "hue-flow",
+    "vavo-os",
+    "tsignal-remote",
+    "bnt-map",
+    "vavo-website",
+    "modly-3d-print",
+    "yegmap",
+}
+
+
+def _find_repo_ruleset(repo: Path) -> RepoRuleSet:
+    resolved = repo.resolve()
+    for rule_set in REPO_RULESETS:
+        if resolved == rule_set.path.resolve():
+            return rule_set
+    allowed = ", ".join(str(rule_set.path) for rule_set in REPO_RULESETS)
+    raise SyncError(f"repo is not allowlisted for agent-rules sync: {repo}; allowed: {allowed}")
+
+
+def repo_target_specs(repo: Path) -> list[TargetSpec]:
+    rule_set = _find_repo_ruleset(repo)
+    source_dir = rule_set.source_dir
+    label = rule_set.path.name
+    return [
+        TargetSpec(
+            name=f"{rule_set.slug}-claude",
+            path=rule_set.path / "CLAUDE.md",
+            sources=(source_dir / "shared.md", source_dir / "claude.md"),
+            default_title=f"# CLAUDE.md instructions for {label}",
+        ),
+        TargetSpec(
+            name=f"{rule_set.slug}-codex",
+            path=rule_set.path / "AGENTS.md",
+            sources=(source_dir / "shared.md", source_dir / "codex.md"),
+            byte_limit=32 * 1024,
+            default_title=f"# AGENTS.md instructions for {label}",
+        ),
+    ]
+
+
+def tier_target_specs(tier: str) -> list[TargetSpec]:
+    if tier != "tier1":
+        raise SyncError(f"unknown tier: {tier}")
+    specs: list[TargetSpec] = []
+    for rule_set in REPO_RULESETS:
+        if rule_set.slug in TIER1_REPO_SLUGS:
+            specs.extend(repo_target_specs(rule_set.path))
     return specs
 
 
@@ -251,7 +311,12 @@ def sync_target(
 ) -> TargetResult:
     rendered, checksum = render_block(source_root, spec.sources)
     existing = _read_text(spec.path) if spec.path.exists() else ""
-    new_text = replace_or_insert_block(existing, rendered, init=init)
+    new_text = replace_or_insert_block(
+        existing,
+        rendered,
+        init=init,
+        default_title=spec.default_title,
+    )
     validate_constraints(spec, new_text)
     changed = existing.replace("\r\n", "\n").replace("\r", "\n").rstrip() != new_text.rstrip()
 
@@ -271,7 +336,12 @@ def sync_target(
         try:
             # Re-read while holding the lock so concurrent edits are not lost.
             locked_existing = _read_text(spec.path) if spec.path.exists() else ""
-            locked_new = replace_or_insert_block(locked_existing, rendered, init=init)
+            locked_new = replace_or_insert_block(
+                locked_existing,
+                rendered,
+                init=init,
+                default_title=spec.default_title,
+            )
             validate_constraints(spec, locked_new)
             backup = _write_atomic(spec.path, locked_new)
         finally:
@@ -288,7 +358,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action.add_argument("--diff", action="store_true", help="Print unified diff without writing")
     action.add_argument("--write", action="store_true", help="Write managed blocks")
     parser.add_argument("--init-managed-blocks", action="store_true", help="Insert missing managed blocks")
-    parser.add_argument("--repo", type=Path, default=None, help="Pilot repo path to include")
+    parser.add_argument("--repo", type=Path, default=None, help="Allowlisted repo path to include")
+    parser.add_argument("--tier", choices=["tier1"], default=None, help="Include an allowlisted repo tier")
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument(
         "--target",
@@ -308,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         specs = target_specs(source_root, args.repo)
+        if args.tier:
+            specs.extend(tier_target_specs(args.tier))
         if args.target:
             wanted = set(args.target)
             specs = [spec for spec in specs if spec.name in wanted]
