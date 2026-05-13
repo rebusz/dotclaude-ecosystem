@@ -246,6 +246,9 @@ REPO_RULESETS: tuple[RepoRuleSet, ...] = (
     RepoRuleSet("vavo-website", Path("D:/APPS/VAVO website")),
     RepoRuleSet("modly-3d-print", Path("D:/APPS/Modly 3D print")),
     RepoRuleSet("yegmap", Path("D:/APPS/YEGmap")),
+    RepoRuleSet("garmin-flow", Path("D:/APPS/Garmin Flow")),
+    RepoRuleSet("ernie-ai", Path("D:/APPS/Ernie AI")),
+    RepoRuleSet("betf", Path("D:/APPS/BetF")),
 )
 
 TIER1_REPO_SLUGS = {
@@ -258,6 +261,11 @@ TIER1_REPO_SLUGS = {
     "vavo-website",
     "modly-3d-print",
     "yegmap",
+}
+
+TIER2_REPO_SLUGS = {
+    "garmin-flow",
+    "ernie-ai",
 }
 
 
@@ -292,11 +300,15 @@ def repo_target_specs(repo: Path) -> list[TargetSpec]:
 
 
 def tier_target_specs(tier: str) -> list[TargetSpec]:
-    if tier != "tier1":
+    if tier == "tier1":
+        selected = TIER1_REPO_SLUGS
+    elif tier == "tier2":
+        selected = TIER2_REPO_SLUGS
+    else:
         raise SyncError(f"unknown tier: {tier}")
     specs: list[TargetSpec] = []
     for rule_set in REPO_RULESETS:
-        if rule_set.slug in TIER1_REPO_SLUGS:
+        if rule_set.slug in selected:
             specs.extend(repo_target_specs(rule_set.path))
     return specs
 
@@ -359,7 +371,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action.add_argument("--write", action="store_true", help="Write managed blocks")
     parser.add_argument("--init-managed-blocks", action="store_true", help="Insert missing managed blocks")
     parser.add_argument("--repo", type=Path, default=None, help="Allowlisted repo path to include")
-    parser.add_argument("--tier", choices=["tier1"], default=None, help="Include an allowlisted repo tier")
+    parser.add_argument(
+        "--tier",
+        choices=["tier1", "tier2"],
+        default=None,
+        help="Include an allowlisted repo tier",
+    )
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument(
         "--target",

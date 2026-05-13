@@ -113,6 +113,13 @@ class TestRenderAndSync(unittest.TestCase):
         self.assertIn("h10-flow-claude", names)
         self.assertNotIn("tsignal-5.0-codex", names)
 
+    def test_tier2_includes_clean_candidates_only(self):
+        specs = sar.tier_target_specs("tier2")
+        names = {spec.name for spec in specs}
+        self.assertIn("garmin-flow-codex", names)
+        self.assertIn("ernie-ai-claude", names)
+        self.assertNotIn("betf-codex", names)
+
 
 if __name__ == "__main__":
     unittest.main()
