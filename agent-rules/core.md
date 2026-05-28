@@ -23,6 +23,15 @@
 - Pin abstraction level: produce work fit for a production codebase under code review, not tutorial-level examples.
 - Stage production-shaped context: tests and examples should include realistic messy inputs, not only clean synthetic fixtures.
 
+## Context And Token Hygiene
+
+- Intent-layers first: before scanning a repo, read its root `CLAUDE.md`/`AGENTS.md` and any `.claude/refs/` or nested module pointers; treat them as the architecture map. Do not blind-scan to rediscover entry points.
+- Progressive disclosure: load skills, refs, and deep docs on demand when the task matches, not preemptively. Keep root agent files lean; deep detail belongs in `.claude/refs/`, `design/`, or nested module files.
+- Prefer code intelligence over guessing: when a code-dependency-graph or impact/blast-radius tool is available, query it for callers and impact before editing instead of reading many files to infer relationships.
+- Startup hygiene: keep only ecosystem-relevant MCP servers and connectors active; unrelated connectors are startup token tax, not capability.
+- Handoff over bloat: when context fills or a research phase ends, checkpoint the condensed conclusions to durable memory/handoff and continue from that summary rather than re-reading the full history.
+- Keep agent instruction files verifiable and current: concrete invariants over generic advice; prune stale lines; deep procedures live behind pointers, not inline.
+
 ## Execution Defaults
 
 - When the user approves a concrete plan, slice chain, or says `ok go`, `jedziesz`, `dzialaj`, or `implementuj`, execute end-to-end.
