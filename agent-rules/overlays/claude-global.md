@@ -13,7 +13,7 @@
 - For `mode auditai`, `mode audit_ai`, `audytAI`, or `audit AI`, read `~/.claude/AUDIT_AI.md`.
 - For `mode auditpx`, `mode audit_px`, `audytPX`, `audit PX`, `mode auditppl`, `mode audit_ppl`, `audytPPL`, or `audit PPL`, read `~/.claude/AUDIT_AI.md`.
 - Use `.claude/rules` for path-scoped lazy rules and `.claude/refs` for long procedures read only when triggered.
-- When the `code-review-graph` MCP is connected, use it (impact radius, flows, semantic node search) for cross-file impact before editing; if stale, refresh with `uvx code-review-graph update --repo <repo>` rather than blind-scanning.
+- When the `code-review-graph` MCP is connected, use the graph tools it actually exposes for cross-file impact before editing; do not assume old names such as `get_impact_radius`, `query_graph`, or `semantic_search_nodes` are present. If MCP lacks the needed operation or the graph is stale, refresh/probe with `uvx code-review-graph update --repo <repo>` and `uvx code-review-graph status --repo <repo>` before narrow `rg` fallback.
 
 ## Silence Policy
 

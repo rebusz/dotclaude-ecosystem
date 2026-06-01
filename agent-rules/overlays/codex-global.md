@@ -18,3 +18,4 @@
 
 - Use `C:/Users/dszub/.codex/AGENTS.md` for durable global Codex behavior, not `config.toml`.
 - Codex loads `AGENTS.md` hierarchically; keep repo-local files focused on local contracts and avoid duplicating global footer/execution policy.
+- For `code-review-graph` in Codex, use the MCP tools currently exposed by `mcp__code_review_graph` (for example `list_graph_stats`, `get_review_context`, `get_architecture_overview`, `get_knowledge_gaps`, `get_bridge_nodes`, and `get_suggested_questions`). Do not call stale tool names from older repo docs. If Codex MCP lacks a needed graph operation, use the local CLI (`code-review-graph status --repo <repo>`, `code-review-graph detect-changes --repo <repo>`, `code-review-graph update --repo <repo>`) before targeted `rg` fallback.
