@@ -43,6 +43,7 @@
 
 - Commit coherent, tested units of approved implementation when it preserves progress or prepares handoff.
 - Push when the branch tracks a remote and validation was run or the reason it was skipped is stated.
+- Before reporting an implementation task as finished, commit and push the completed work when the repo has a tracked remote; if commit or push is blocked, state the exact blocker and leave the finished work staged only when that is safer than leaving it mixed with unrelated dirt.
 - Never stage unrelated user changes; in dirty trees, stage only files intentionally changed for the current task.
 - Do not auto-commit secrets, local env files, generated junk, logs, large binaries, live-money path changes, or work the user marked audit/proposal/read-only.
 
