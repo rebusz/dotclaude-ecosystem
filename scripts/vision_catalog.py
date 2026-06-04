@@ -27,6 +27,9 @@ VISION_TAG_RE = re.compile(r"\[VISION:\s*([a-z0-9-]+)\s*\]")
 AUTO_STATE_BEGIN = "<!-- BEGIN AUTO-STATE"
 AUTO_STATE_END = "<!-- END AUTO-STATE -->"
 EXTRA_EXCLUSIONS = frozenset(["_shared", "_status", "Prompts"])
+TERMINAL_PLAN_STATUSES = frozenset({"abandoned", "closed-eng-reviewed", "superseded"})
+SHIPPED_PLAN_STATUSES = frozenset({"shipped"})
+IN_PROGRESS_PLAN_STATUSES = frozenset({"in-progress"})
 
 
 def canonical_path(path: Path) -> str:
@@ -211,10 +214,18 @@ def _count_ideas(repos: list[Path]) -> dict[str, int]:
 
 
 def _progress(plans: list[dict[str, Any]], roadmap_total: int) -> dict[str, int]:
-    shipped = sum(1 for p in plans if p["status"] == "shipped")
-    in_progress = sum(1 for p in plans if p["status"] == "in-progress")
-    total = max(len(plans), roadmap_total)
-    pending = max(total - shipped - in_progress, 0)
+    active_plans = [p for p in plans if p["status"] not in TERMINAL_PLAN_STATUSES]
+    shipped = sum(1 for p in active_plans if p["status"] in SHIPPED_PLAN_STATUSES)
+    in_progress = sum(1 for p in active_plans if p["status"] in IN_PROGRESS_PLAN_STATUSES)
+    explicit_pending = sum(
+        1
+        for p in active_plans
+        if p["status"] not in SHIPPED_PLAN_STATUSES
+        and p["status"] not in IN_PROGRESS_PLAN_STATUSES
+    )
+    total = max(len(active_plans), roadmap_total)
+    roadmap_pending = max(roadmap_total - len(active_plans), 0)
+    pending = explicit_pending + roadmap_pending
     return {"shipped": shipped, "in_progress": in_progress, "pending": pending, "total": total}
 
 
