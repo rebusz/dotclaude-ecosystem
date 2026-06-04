@@ -42,6 +42,7 @@
 - Do not prune connectors, skills, MCP servers, or account-level surfaces without audit evidence and explicit GO; record owner, affected projects, rollback path, and whether the action is manual/account-level.
 - Token-budget rules are subordinate to risk classes, repo boundaries, live-money boundaries, and the rule that LLM agents never touch broker API or order path.
 - Scope handoff tokens: any next GO token must include scope, risk class, no-go boundaries, and a requirement to refresh repo truth before execution.
+- Use compact handoffs when pausing or compacting: include repo/cwd, branch/HEAD, dirty-tree boundary, files changed, validation, blockers, exact next command or GO token, and explicit no-go boundaries.
 
 ## Execution Defaults
 
