@@ -92,6 +92,8 @@ def bounded_lines(lines: Sequence[str], max_lines: int, max_chars: int) -> list[
 def interesting_lines(lines: Iterable[str], pattern: re.Pattern[str], limit: int = 8) -> list[str]:
     found: list[str] = []
     for line in lines:
+        if is_success_test_line(line):
+            continue
         if pattern.search(line):
             found.append(redact_text(line.strip()))
             if len(found) >= limit:
@@ -99,9 +101,15 @@ def interesting_lines(lines: Iterable[str], pattern: re.Pattern[str], limit: int
     return found
 
 
+def is_success_test_line(line: str) -> bool:
+    return bool(re.search(r"\s\.\.\.\s+(ok|passed)\s*$", line, re.IGNORECASE))
+
+
 def repeated_groups(lines: Iterable[str], limit: int = 5) -> list[dict[str, object]]:
     normalized: list[str] = []
     for line in lines:
+        if is_success_test_line(line):
+            continue
         if not re.search(r"(?i)(error|fail|failed|warning|warn|traceback|assert)", line):
             continue
         text = re.sub(r"\d+", "#", redact_text(line.strip()))

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,15 @@ class TestTerminalEvidence(unittest.TestCase):
             self.assertEqual(summary["repeated_error_groups"][0]["count"], 3)
             artifact_text = Path(str(summary["artifact_path"])).read_text(encoding="utf-8")
             self.assertIn("===== STDERR =====", artifact_text)
+
+    def test_successful_test_names_do_not_create_failure_false_positives(self):
+        lines = [
+            "test_failure_exit_code_visible (tests.Case.test_failure_exit_code_visible) ... ok",
+            "test_stderr_and_repeated_errors_are_preserved (tests.Case.test_stderr_and_repeated_errors_are_preserved) ... ok",
+        ]
+        failure_rx = re.compile(r"(?i)(failed|failure|error|traceback|assert|exception|timed out)")
+        self.assertEqual(te.interesting_lines(lines, failure_rx), [])
+        self.assertEqual(te.repeated_groups(lines), [])
 
     def test_timeout_returns_124_and_keeps_artifact(self):
         with tempfile.TemporaryDirectory() as d:
