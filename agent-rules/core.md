@@ -4,7 +4,7 @@
 
 - Work primarily under `D:/APPS/<repo>`.
 - Tsignal is the execution authority, WatchF is advisory/discovery, TsignalLAB is research, and Obsidian Flow is memory.
-- Trading data flow is one-way: Tsignal -> TsignalLAB -> Obsidian Flow. Never reverse it.
+- Trading data flow defaults one-way (Tsignal -> TsignalLAB -> Obsidian Flow). Reverse contribution of DATA/insight is allowed ONLY through a validated, async, gated seam (candidate store + validation gate + shadow + signed operator GO); the live path owns its own state, never synchronously depends on research/cloud, and nothing writes live decision/order state except the live brain. Forbidden control-coupling: a research/LAB process writing the live store directly, the live path blocking on a research call, or a shared mutable store on the live path. (Distinct from, and additional to, the absolute LLM order-path boundary in Risk Classes below.)
 - Read `D:/APPS/_shared/PORTS.md` before changing or starting local servers.
 
 ## Repo Truth
