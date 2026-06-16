@@ -9,9 +9,11 @@
 
 ## Claude-Only Routing
 
-- For `mode auditq`, `mode audit_q`, `audytQ`, or `audit Q`, read `~/.claude/AUDIT_Q.md`.
-- For `mode auditai`, `mode audit_ai`, `audytAI`, or `audit AI`, read `~/.claude/AUDIT_AI.md`.
-- For `mode auditpx`, `mode audit_px`, `audytPX`, `audit PX`, `mode auditppl`, `mode audit_ppl`, `audytPPL`, or `audit PPL`, read `~/.claude/AUDIT_AI.md`.
+- For `mode auditf`, `mode audit_f`, `audytF`, or `audit F`, read `~/.claude/AUDIT_F.md`. (CANONICAL free audit — all lanes: OR-free + Perplexity/Gemini/GPT CDP.)
+- For `mode auditp`, `mode audit_p`, `audytP`, or `audit P`, read `~/.claude/AUDIT_P.md`. (CANONICAL paid audit — complement basket only.)
+- For `mode auditq`, `mode audit_q`, `audytQ`, or `audit Q`, read `~/.claude/AUDIT_Q.md`. (SUPERSEDED 2026-06-15 by auditF — kept as OR-only alias.)
+- For `mode auditai`, `mode audit_ai`, `audytAI`, or `audit AI`, read `~/.claude/AUDIT_AI.md`. (SUPERSEDED 2026-06-15 by auditP — kept as alias.)
+- For `mode auditpx`, `mode audit_px`, `audytPX`, `audit PX`, `mode auditppl`, `mode audit_ppl`, `audytPPL`, or `audit PPL`, read `~/.claude/AUDIT_AI.md`. (Perplexity lane now folded into auditF.)
 - Use `.claude/rules` for path-scoped lazy rules and `.claude/refs` for long procedures read only when triggered.
 - When the `code-review-graph` MCP is connected, use the graph tools it actually exposes for cross-file impact before editing; do not assume old names such as `get_impact_radius`, `query_graph`, or `semantic_search_nodes` are present. If MCP lacks the needed operation or the graph is stale, refresh/probe with `uvx code-review-graph update --repo <repo>` and `uvx code-review-graph status --repo <repo>` before narrow `rg` fallback.
 
