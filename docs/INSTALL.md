@@ -80,3 +80,24 @@ Move-Item ~/.claude.bak.<timestamp> ~/.claude
 rm -rf ~/.claude
 mv ~/.claude.bak.<timestamp> ~/.claude
 ```
+
+## Taste skills (frontend, optional)
+
+The curated [taste-skill](https://github.com/Leonxlnx/taste-skill) set (anti-slop frontend) is
+installed globally across Claude Code / Codex / Cursor via the Vercel `skills` CLI, **pinned**
+in `skills/taste-skill.lock.json`. It is intentionally **not** wired into `install.ps1` (kept
+separate so a normal ecosystem install doesn't pull a frontend pack). To install or restore
+after a skills-dir wipe:
+
+```powershell
+.\install\install_taste_skills.ps1      # Windows
+```
+```bash
+bash install/install_taste_skills.sh    # POSIX
+```
+
+This clones the pinned commit, runs `npx skills add` (copy mode, global), then copies into the
+Codex (`~/.codex/skills`) and Cursor (`~/.cursor/skills-cursor`) native dirs — the CLI copy-mode
+only populates `~/.claude/skills` + the canonical `~/.agents/skills`. Update by bumping
+`pinned_commit` in the lockfile and re-running. The TSU-specific live-dashboard override
+(`tsu-dashboard-taste`) is maintained in the TSU repo (`design/skills/`), not here.

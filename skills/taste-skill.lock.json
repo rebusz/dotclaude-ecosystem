@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/Leonxlnx/taste-skill",
+  "pinned_commit": "06d6028b5c623016c59ce8536f578e5a1127b499",
+  "installed": [
+    "design-taste-frontend",
+    "gpt-taste",
+    "redesign-existing-projects",
+    "minimalist-ui",
+    "image-to-code"
+  ],
+  "agents": ["claude-code", "codex", "cursor"],
+  "mode": "copy",
+  "scope": "global",
+  "cli": "vercel-labs/skills (npx skills add)",
+  "native_dirs": {
+    "claude-code": "~/.claude/skills",
+    "codex": "~/.codex/skills",
+    "cursor": "~/.cursor/skills-cursor",
+    "canonical": "~/.agents/skills"
+  },
+  "notes": "CLI copy-mode physically populated ~/.claude/skills + ~/.agents/skills only; Codex (~/.codex/skills) and Cursor (~/.cursor/skills-cursor) were populated by a manual copy fallback (see install_taste_skills.ps1). Audited raw SKILL.md at pinned SHA: no network/exec/exfil patterns, MIT. Override for live trading dashboards lives in TSU repo: design/skills/tsu-dashboard-taste.",
+  "installed_at": "2026-06-21"
+}

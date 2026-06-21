@@ -20,3 +20,6 @@ auth.json
 .env.*
 credentials*
 secrets/
+
+# taste-skill local checkout cache
+vendor/
