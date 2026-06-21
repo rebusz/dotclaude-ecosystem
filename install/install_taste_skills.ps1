@@ -51,4 +51,24 @@ foreach ($dst in $targets) {
   }
   Write-Host "  copied $($lock.installed.Count) skills -> $dst"
 }
+
+# 4. Redeploy ecosystem-local overlays (house rules) into every agent skill dir
+$overlays = @('frontend-house-rules')
+$overlayDirs = @(
+  (Join-Path $home_ '.claude/skills'),
+  (Join-Path $home_ '.agents/skills'),
+  (Join-Path $home_ '.codex/skills'),
+  (Join-Path $home_ '.cursor/skills-cursor')
+)
+foreach ($ov in $overlays) {
+  $osrc = Join-Path $EcoRoot "skills/$ov"
+  if (-not (Test-Path $osrc)) { continue }
+  foreach ($od in $overlayDirs) {
+    if (-not (Test-Path $od)) { continue }
+    $dd = Join-Path $od $ov
+    if (Test-Path $dd) { Remove-Item $dd -Recurse -Force }
+    Copy-Item $osrc $dd -Recurse
+  }
+  Write-Host "  deployed overlay $ov"
+}
 Write-Host "Done. Review skills before use; they run with full agent permissions."

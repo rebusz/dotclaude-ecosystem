@@ -28,4 +28,17 @@ for dst in "$HOME/.codex/skills" "$HOME/.cursor/skills-cursor"; do
   done
   echo "  copied ${#SKILLS[@]} skills -> $dst"
 done
+
+# 4. Redeploy ecosystem-local overlays (house rules) into every agent skill dir
+OVERLAYS=(frontend-house-rules)
+OVERLAY_DIRS=("$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills-cursor")
+for ov in "${OVERLAYS[@]}"; do
+  osrc="$ECO_ROOT/skills/$ov"
+  [ -d "$osrc" ] || continue
+  for od in "${OVERLAY_DIRS[@]}"; do
+    [ -d "$od" ] || continue
+    rm -rf "$od/$ov"; cp -r "$osrc" "$od/$ov"
+  done
+  echo "  deployed overlay $ov"
+done
 echo "Done. Review skills before use; they run with full agent permissions."
