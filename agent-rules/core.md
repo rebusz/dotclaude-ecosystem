@@ -67,6 +67,14 @@
 - Docs-only or CI-ignored path changes may use the normal commit/push flow, but still avoid unnecessary pushes.
 - In final summaries, state whether the PR is draft or ready, what local validation ran, and whether CI was intentionally deferred.
 
+## Land-On-Main Lifecycle
+
+- When a task/plan is done and locally validated, run the WHOLE git lifecycle yourself so the change reaches `main` and the operator's main working checkout is current - the operator never hand-reconciles commits, merges, pulls, or divergence.
+- ONE clean path per change: branch -> validate -> review gate (see Post-Implementation Review Gate) -> push -> PR -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout to `origin/main`. Report it in one line.
+- Never create avoidable divergence: do NOT cherry-pick a change onto local main AND also open a PR for it (that leaves a duplicate commit the operator must untangle). If a fix must go live immediately, still land it through the single branch->merge path, then fast-forward local main.
+- Two-checkout reality: an agent often works in a `.claude/worktrees/...` branch while the operator runs from the main `D:/APPS/<repo>` checkout; after merge, update that main checkout (fetch + fast-forward) so the change appears on main without the operator pulling.
+- Hard gate: R3 / live-money / order-path / broker-API merges need explicit operator GO; never unattended auto-merge a live or trading branch. Stop and surface only on those gates, merge conflicts needing judgment, or failed validation.
+
 ## Risk Classes
 
 - R0: docs/prompts only; proceed freely.
@@ -74,6 +82,14 @@
 - R2: contracts, persistence, ingestion; plan plus GO.
 - R3: execution/runtime/order path; plan plus GO plus rollback plus validation.
 - LLM agents never touch broker API or order path. External signals stay advisory unless the operator explicitly changes that boundary.
+
+## Post-Implementation Review Gate
+
+- Stamp a grade (the R-class) on every plan/task at creation; it drives an automatic diff review before the land-on-main merge.
+- R3 and R2: ALWAYS run a post-implementation review of the diff as a blocking pre-merge gate. R1: only when the diff is large (>~5 files or >~150 net lines). R0: none.
+- Review the actual diff (Claude: `/code-review`; Codex: its review pass). SHIP-BLOCKING findings must be fixed before the merge proceeds; FIX-LATER findings are noted, not blocking.
+- R3 additionally warrants a deeper independent review before merge (Claude: `/code-review ultra` cloud; Codex: an auditF / second-model pass); recommend it - the operator triggers billed cloud reviews.
+- This review supersedes any generic epilog review for R2/R3 - do not double-review.
 
 ## Ship-On Default
 
