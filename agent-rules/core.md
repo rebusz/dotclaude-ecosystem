@@ -76,6 +76,13 @@
 - Two-checkout reality: an agent often works in a `.claude/worktrees/...` branch while the operator runs from the main `D:/APPS/<repo>` checkout; after merge, update that main checkout (fetch + fast-forward) so the change appears on main without the operator pulling.
 - Hard gate: R3 / live-money / order-path / broker-API merges need explicit operator GO; never unattended auto-merge a live or trading branch. Stop and surface only on those gates, merge conflicts needing judgment, or failed validation.
 
+## Repo Hygiene
+
+- Integrate small and often: a fast-forward is safe, a far-diverged branch is where big-bang merges break. Land work via the Land-On-Main Lifecycle instead of letting worktrees and branches pile up.
+- A janitor automat runs daily (Windows task `TsignalGitHygiene` -> `~/.claude/scripts/git_hygiene.py`, canonical in `dotclaude-ecosystem/scripts/`): a DRY-RUN report plus a primary-off-main / unpushed-R3 ALARM under `~/.claude/state/git_hygiene/`. It reaps nothing on its own.
+- Reaping is MANUAL and gated: `git_hygiene.py --repo <path> --apply` deletes only fully-merged, not-checked-out branches and merged+clean+unlocked worktrees. Run it ONLY when other live sessions are quiesced - it protects locked/dirty/unmerged and the running session's own worktree, but a freshly-spawned clean worktree from a runtime that does not lock (e.g. Codex) is not lock-protected.
+- Lock your worktree if your runtime supports it so the reaper preserves it; never run `--apply` while other agents may be working unprotected worktrees.
+
 ## Risk Classes
 
 - R0: docs/prompts only; proceed freely.
