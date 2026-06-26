@@ -31,6 +31,7 @@
 - Startup hygiene: keep only ecosystem-relevant MCP servers and connectors active; unrelated connectors are startup token tax, not capability.
 - Handoff over bloat: when context fills or a research phase ends, checkpoint the condensed conclusions to durable memory/handoff and continue from that summary rather than re-reading the full history.
 - Keep agent instruction files verifiable and current: concrete invariants over generic advice; prune stale lines; deep procedures live behind pointers, not inline.
+- Hot/cold memory discipline: any always-loaded index or agent file (Claude `MEMORY.md`, Codex `AGENTS.md`) is a HOT working set, not an append log; keep it well under its context-load cap. When an entry/section is DONE or superseded, MOVE it to a cold on-demand store (Claude `ARCHIVE.md`; Codex a pointer / `design/` / sibling `ARCHIVE`) instead of deleting it; promote it back if it reopens. Deep history stays recoverable from git, `design/`, and claude-mem.
 
 ### Token Budget Protocol
 
