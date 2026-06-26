@@ -59,6 +59,14 @@
 - Never stage unrelated user changes; in dirty trees, stage only files intentionally changed for the current task.
 - Do not auto-commit secrets, local env files, generated junk, logs, large binaries, live-money path changes, or work the user marked audit/proposal/read-only.
 
+## GitHub Actions Cost Discipline
+
+- For GitHub repos with metered Actions, open implementation PRs as drafts by default (`gh pr create --draft`) so draft-skipped CI does not burn minutes while development is still moving.
+- Batch pushes on draft PRs, validate locally first, then run `gh pr ready <pr>` exactly once when the work is done and ready for the single paid CI run.
+- Do not push per-slice to a ready PR; if follow-up fixes are needed after a PR is ready, batch them into one validated push whenever possible.
+- Docs-only or CI-ignored path changes may use the normal commit/push flow, but still avoid unnecessary pushes.
+- In final summaries, state whether the PR is draft or ready, what local validation ran, and whether CI was intentionally deferred.
+
 ## Risk Classes
 
 - R0: docs/prompts only; proceed freely.
