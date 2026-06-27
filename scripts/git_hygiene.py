@@ -413,6 +413,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--protect", action="append", default=[],
                     help="worktree path to never reap (repeatable). The current working "
                          "directory's worktree is always auto-protected.")
+    ap.add_argument("--allow-primary-drift", action="store_true",
+                    help="bypass the primary-unpushed-R3 reap refusal — reaping never touches "
+                         "the primary checkout; explicit operator override.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON instead of text")
     a = ap.parse_args(argv)
 
@@ -432,11 +435,17 @@ def main(argv: list[str]) -> int:
     rc = 0
     if a.apply:
         print("\n=== APPLYING ===")
-        # Reaping is destructive — refuse if the primary holds unpushed R3 work.
-        if r.primary.get("r3"):
-            print("REFUSING reap: PRIMARY has unpushed R3 work. Resolve that first.", file=sys.stderr)
+        # Reaping is destructive — refuse if the primary holds unpushed R3 work,
+        # unless explicitly overridden (reaping never touches the primary checkout).
+        if r.primary.get("r3") and not a.allow_primary_drift:
+            print("REFUSING reap: PRIMARY has unpushed R3 work. Resolve that first, or pass "
+                  "--allow-primary-drift to reap anyway (reap never touches the primary).",
+                  file=sys.stderr)
             rc = 2
         else:
+            if r.primary.get("r3"):
+                print("[override] reaping despite primary unpushed R3 (--allow-primary-drift); "
+                      "the primary checkout is never touched by reap.")
             do_apply(a.repo, r)
         # Deploy is additive + WIP-safe (conflict guard skips any primary-owned/dirty
         # file), so it runs independently of the destructive-reap refusal.
