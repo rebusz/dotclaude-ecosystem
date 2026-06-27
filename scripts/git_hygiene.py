@@ -371,7 +371,19 @@ def do_apply(repo: str, r: Report) -> None:
         print(f"  worktree prune: {len(r.prune_worktrees)} stale entr(ies)")
     for b in r.reap_branches:
         cp = run_git(repo, ["branch", "-d", b], check=False)
-        print(f"  branch -d {b}: {'ok' if cp.returncode == 0 else cp.stderr.strip()}")
+        if cp.returncode == 0:
+            print(f"  branch -d {b}: ok")
+            continue
+        # `git branch -d` measures "merged" against the current HEAD (which may be a
+        # feature branch, not base) and refuses. The branch is in reap_branches only
+        # because the tool already proved it is an ancestor of base — re-verify and
+        # force-delete (commits are preserved in base, so no work is lost).
+        if is_ancestor(repo, b, r.base):
+            cp2 = run_git(repo, ["branch", "-D", b], check=False)
+            print(f"  branch -D {b} (proven merged to {r.base}): "
+                  f"{'ok' if cp2.returncode == 0 else cp2.stderr.strip()}")
+        else:
+            print(f"  branch -d {b}: {cp.stderr.strip()}")
 
 
 def do_deploy(repo: str, r: Report, base: str) -> None:
