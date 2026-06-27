@@ -105,7 +105,7 @@ ARTIFACT BUS   (packets · audits · handoffs)  ──►  OBSIDIAN FLOW (memory
 ## 6. Slice 0 — kernel-slim (R0, ~30 min) + Slice 0b (R1, gated, post-PR#141)
 
 ### 6a. Slice 0 — Thin-kernel refactor (R0, recommended "now")
-**Current state (measured):** `~/.claude/CLAUDE.md` = 178 lines / 17,815 B; managed block (core.md + claude-global overlay) ≈ 12.5 KB; manual tail ≈ 5.3 KB. `MEMORY.md` auto-index = 15,107 B / **52 entries** (violates the operator's own hot/cold cap). `$CMEM` SessionStart ≈ 8,837 tok. Steering hook (conditional) ≈ 3,174 tok. **Σ fresh-session startup ≈ 20k tok before the task begins.**
+**Current state (measured):** `~/.claude/CLAUDE.md` = 178 lines / 17,815 B; managed block (core.md + claude-global overlay) ≈ 12.5 KB; manual tail ≈ 5.3 KB. `MEMORY.md` auto-index = 15,618 B / **53 entries** (violates the operator's own hot/cold cap). `$CMEM` SessionStart ≈ 8,837 tok. Steering hook (conditional) ≈ 3,174 tok. **Σ fresh-session startup ≈ 20k tok before the task begins.**
 
 **Moves — EDIT AT SOURCE (eng-review HIGH): anything inside a managed block must be edited at its `overlays/`/`core.md` SOURCE, never the rendered file — the next `sync --write` clobbers rendered-file edits. PRE-CREATE `~/.claude/ARCHIVE.md`, `~/.claude/refs/audit-aliases.md`, and `agent-rules/refs/` before the pointers resolve.**
 1. **Stale Micro-Skill Routing block** — in the **MANUAL TAIL** of `~/.claude/CLAUDE.md` (lines 154–169, *outside* the managed block which ends line 145) → **edit the rendered file directly** + CREATE `~/.claude/ARCHIVE.md` and move the block there. (§6b mattpocock reinstall makes the routing real.)
