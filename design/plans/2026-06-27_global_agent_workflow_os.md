@@ -197,3 +197,28 @@ ARTIFACT BUS   (packets · audits · handoffs)  ──►  OBSIDIAN FLOW (memory
 4. last30days additivity over Perplexity-recency — dedup gate.
 5. Antigravity/Cline path conventions — verify against live install before writing any sync target.
 6. Opportunity cost vs PR #141 — operator's conscious sequencing choice (§0).
+
+---
+
+## AUTOPLAN REVIEW (CEO)
+
+**Workflow:** `wwzi348v4` (AUTOPLAN, CEO/founder strategic lens). **Verdict: GO-WITH-AMENDMENTS** — *"a well-built plan whose only real risk is that it's bigger than the action it recommends — split, don't ship whole."*
+
+**Dimension verdicts:** Right-problem GO · Premises-valid GO · **Scope-vs-MVP FLAG** · Alternatives/build-vs-buy GO · Trajectory/opportunity-cost GO · Boundary-discipline GO · Reversibility GO. (CEO independently verified: CLAUDE.md = 178 lines/17,815 B; MEMORY index = **53** entries — genuinely violating core.md line 34 hot/cold cap; all scripts the plan leans on exist.)
+
+**Critical issues / amendments (accepted):**
+1. **[HIGH] Scope center-of-mass > recommended action.** Ship **Slice 0 only**; demote §6b/§7/§8/§10 to a separate gated-backlog doc behind the §0 "after PR #141" gate. Don't let registry/matrix/platform-wiring compete with TSU PR #141 for attention.
+2. **[MED] §10 registry is speculative scaffolding** for a "now" set of ONE adopt. Keep the schema as documented future shape; **do NOT build the live `agent_capabilities.yaml` + health_check runner until ≥3 gated tools pass their §9 gate.**
+3. **[MED] Kernel can silently regrow** (core.md is an append-magnet). **FINDING:** `sync_agent_rules.py` ALREADY enforces line/byte limits (lines 198–205; specs 215/221/296 = line_limit 200, byte_limit 32 KB) but 32 KB is loose. **Amendment: tighten those two constants to just above the slimmed kernel size (fail-closed on regrowth)** — a constant change, not new infra. Folded into Slice 0.
+4. **[LOW] `~/.claude/ARCHIVE.md` does not exist** — Slice 0 move #1 must CREATE it (move #4's MEMORY `ARCHIVE.md` does exist).
+
+**Taste decisions (auto-decided, for awareness):** ratify Slice-0-now + defer rest (§0a) · defer §10 live registry · add kernel-size guardrail · native logger over tokencost proxy · forbid global `ANTHROPIC_BASE_URL` · markitdown strictly AFTER sanitizer · write NO Cline/Antigravity sync targets until live-install verification.
+
+**User Challenges (operator-only — never auto-decided):**
+- Wiring research-plane (deer-flow/autoresearch/Vibe-Trading) candidates closer to the live path — stays advisory + LAB-only + existing gated seam + operator GO + R-class re-stamp.
+- The §0 sequencing choice itself (even the 30-min kernel-slim before PR #141).
+- Adopting the tokencost proxy at all (against the native-logger default) = deliberate risk acceptance.
+
+**Expansion opportunities (CEO-proposed):** (a) promote §9 harness → standing `session_cost_probe.py` cost-regression suite [S]; (b) §10 registry → rendered ARMING_READINESS-style live/gated/killed status surface [M, only after registry earns its keep]; (c) wire §8 revisit-triggers into the daily `idea_digest`/`git_hygiene` automat so deferrals can't rot [S–M]; (d) **post-PAPER-WEEK:** adapt the autoresearch ratchet + Vibe-Trading purity-gate into the TsignalLAB candidate-store seam as a strategy-discovery engine — the one thread with a real line to income [L]; (e) tighten kernel budget in sync_agent_rules.py (= amendment #3).
+
+**go_decision:** GO-WITH-AMENDMENTS — execute Slice 0 now (with amendments #3/#4 folded), defer §6b/§7/§8 behind the §0 gate, defer §10 live registry until ≥3 tools pass §9, route through `/plan-eng-review` before implement GO. Next gate per operator sequence: **matrix (`/fusion matrix` or auditF/P) → `/plan-eng-review`**.
