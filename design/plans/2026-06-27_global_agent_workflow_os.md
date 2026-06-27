@@ -228,3 +228,37 @@ ARTIFACT BUS   (packets · audits · handoffs)  ──►  OBSIDIAN FLOW (memory
 2. **§8 revisit-triggers → daily `idea_digest`/`git_hygiene` automat** — add a `trigger-predicate` field per deferred slice; a daily eval pass resurfaces items on their trigger ("after PR #141", "real GUI build", "non-Python pivot") instead of rotting in a static table. [S–M]
 3. **Registry status surface (ARMING_READINESS-style)** — rendered live/gated/killed + last health_check. **FUTURE-SHAPE ONLY:** build the renderer **only after ≥3 gated tools pass their §9 gate** (per CEO defer #2); reuses the operator's arming-readiness pattern. [M]
 4. **Post-PAPER-WEEK LAB candidate engine** — **SEPARATE future plan** (not this plan's scope): adapt the autoresearch 3-file ratchet + Vibe-Trading Alpha-Zoo purity-gate + Shadow-Account into the existing TsignalLAB candidate-store → validation-gate → shadow → signed-GO seam (R2 at the seam). The one thread with a real line to income; register as a stub after PAPER WEEK ships. [L]
+
+---
+
+## FUSION MATRIX REVIEW (L4 judge)
+
+**Run:** `2026-06-27_155603` (preset `matrix` tournament, 9/14 lanes — CDP fleet down; paid floor DeepSeek V4 Pro / Grok 4.3 / MiniMax M3 + 6 OR-free returned + L2 cross-check + L3 merge). **Confidence: MEDIUM-HIGH** (quorum met; CDP subscription lanes absent). Verdicts: **P1 FLAG · P2 FLAG · P3 BLOCK (scoped).**
+
+**Consensus**
+- The spine's *intent* (thin kernel + lazy skills) is correctly right-sized for a solo dev; token-burn attack is sound.
+- Two organs are over-architected for a single-human context: the **Artifact Bus** and the **Capability Registry**. The plan already defers the registry, so the **Bus is the more immediate bite**.
+- Cross-platform `AGENTS.md` propagation rests on a false universality assumption; failure mode is **silent per-platform drift / runtime-absent kernel with no telemetry**.
+- The advisory-only boundary is **asserted, not mechanically enforced**.
+
+**Contradictions resolved**
+- *Bus vs Registry as the P1 flaw* → both real; Bus first (registry already gated by "≥3 tools"). Fix both.
+- *P3 BLOCK vs FLAG* → **BLOCK for any slice that writes into shared config the live system reads, or grants a coding agent write to trading-adjacent config; N/A for Slice 0** (kernel-slim edits agent config only, never trading state — so Slice 0 still ships now).
+- Rejected (contradict the stated design): GPT's "live system polls the bus" and Cohere's "intent-router routes a command to the broker" — nothing wires the router to the order path; the authority is never-read by the live path. Poolside's MAC/zero-shared-memory = over-engineered vs a plain OS write-deny.
+
+**Unique insights kept**
+- (Gemma) The Bus's real failure isn't disuse — it's the dev **routing around it** with direct file writes, collapsing the provenance/isolation it existed to enforce.
+- (DeepSeek/Grok) The leak is through **shared config storage**, not the broker API — physical, not hypothetical.
+- (L3) "always-loaded kernel **absent at runtime with no signal**" — the plan writes the managed block but never *verifies* it's loaded per platform.
+- (L2-3) enforce the registry's `plane`/`risk_class` **at load time** so an advisory artifact can never enter a write-capable context — makes `risk_class` a safety control, not metadata.
+
+**Blind spots (my own addition as judge)**
+- The panel assumed "the live trading system reads its config from the shared monorepo." **Correction:** `dotclaude-ecosystem` syncs *agent-instruction text* into repos; the live brain reads its *order/strategy* config from the separate TSU/Tsignal repos. So the leak is **not** monorepo config-sync — it's the standing risk that **a coding agent with general filesystem write edits a file under `D:/APPS/TSU` (trading repo) directly**. That risk exists for *every* coding-agent session, not just this plan — which means the closing guardrail (OS-level write-deny on live config/runtime/order-path) is an **ecosystem-wide safety control**, more valuable than this plan and arguably its own R2/R3 work.
+
+**Accepted amendments (fold at consolidation, before implementation)**
+1. **(P1) Downscope the Artifact Bus** to append-only artifact *files* + a read-only cross-session naming convention. Drop live envelope/router/"handoff" semantics until a real multi-agent flow exists.
+2. **(P1) Capability Registry is GENERATED** (derived from the skill directories), never a hand-edited source of truth — extends the CEO "defer until ≥3 tools" into "and when built, generate it."
+3. **(P2) Runtime kernel-presence + drift check:** extend the accepted `session_cost_probe.py` (expansion #1) to also dump *effective* per-platform context and assert the managed kernel is actually present — write-and-verify, not write-and-assume. Don't assume all 5 platforms honor `AGENTS.md`.
+4. **(P3, ship-blocker for the boundary) Add §3.7 "Mechanical write-segregation":** advisory/coding-agent processes must have **no write capability** to live trading config/runtime/order-path (OS-level read-only/write-deny); the live path never reads the advisory store; any advisory→live promotion traverses only the existing gated seam (validation gate + shadow + signed operator GO); enforce `plane`/`risk_class` at load time. **Scope:** this is a precondition for §6b push-wiring (R2) and any trading-repo-adjacent agent write — **NOT** for Slice 0. Likely warrants its own ecosystem-safety plan (R2/R3, operator GO).
+
+**Net:** GO on the spine and Slice 0; the matrix hardens (not blocks) the plan. P3 mechanical write-segregation is the one finding that rises to a separate operator decision.
