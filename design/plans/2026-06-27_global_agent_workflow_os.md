@@ -263,3 +263,22 @@ ARTIFACT BUS   (packets · audits · handoffs)  ──►  OBSIDIAN FLOW (memory
 4. **(P3, ship-blocker for the boundary) Add §3.7 "Mechanical write-segregation":** advisory/coding-agent processes must have **no write capability** to live trading config/runtime/order-path (OS-level read-only/write-deny); the live path never reads the advisory store; any advisory→live promotion traverses only the existing gated seam (validation gate + shadow + signed operator GO); enforce `plane`/`risk_class` at load time. **Scope:** this is a precondition for §6b push-wiring (R2) and any trading-repo-adjacent agent write — **NOT** for Slice 0. Likely warrants its own ecosystem-safety plan (R2/R3, operator GO).
 
 **Net:** GO on the spine and Slice 0; the matrix hardens (not blocks) the plan. P3 mechanical write-segregation is the one finding that rises to a separate operator decision.
+
+---
+
+## AUTOPLAN REVIEW (ENG)
+
+**Workflow:** `wfu402xzm` (AUTOPLAN, engineering-manager lens — every quantitative claim + edit-target verified against the live filesystem). **Verdict: GO-WITH-AMENDMENTS (Slice 0 only).** Dimensions: Architecture GO · Data-flow **FLAG** · Sequencing/blast-radius **FLAG** · Guard-constant **FLAG** · Idempotency/concurrency GO · Edge-cases GO · Boundary GO (Slice 0).
+
+**Critical issues — all 3 FLAGs are mechanical (one right answer) and have been FOLDED into §6a above:**
+1. **[HIGH] Edit-target clobber:** move #2 audit aliases are INSIDE the managed block (sourced from `overlays/claude-global.md:14–16`); editing the rendered file = silently overwritten by the next `sync --write`. → §6a now names source-vs-rendered + pre-create steps per move.
+2. **[MED] Fail-OPEN guard:** the CLAUDE.md kernel is line-bounded only (no byte_limit); the cited 32 KB constants guard codex AGENTS.md. → §6a move #5 now tightens `line_limit` AND adds a `byte_limit` on the claude-global spec.
+3. **[MED] Under-scoped blast radius:** the core.md surgery re-syncs **~28** generated managed-block files. → §6a move #3 now states the fan-out; `agent-rules/refs/` is created first.
+
+**Positive confirmations (filesystem-verified):** spine reuses the concurrency-safe `sync_agent_rules.py` machinery (O_EXCL lock + atomic `os.replace` + fail-closed marker detection); re-running `--write` is idempotent; ARCHIVE.md missing / MEMORY ARCHIVE.md present / mattpocock old-slash callers present — existence map honest; Slice 0 ≤8 hand-edited files, git-revertible.
+
+**Boundary (matrix P3):** clean GO for Slice 0 (agent-instruction text only, never trading state). The OS-level write-deny on `D:/APPS/TSU` + `D:/APPS/Tsignal 5.0` order/runtime/strategy paths is correctly OUT of Slice 0 and belongs in its own R2/R3 ecosystem-safety plan.
+
+**User Challenges (operator-only — never auto-decided):** §0 sequencing vs TSU PR #141 · adopting the tokencost proxy · any research-plane→live wiring · **whether to spin §3.7 write-segregation into its own R2/R3 safety plan now** (protects the live income path regardless of whether the Workflow OS ever ships).
+
+**go_decision:** GO-WITH-AMENDMENTS on Slice 0 only; the 3 mechanical corrections are folded; defer §6b/§7/§8/§10 behind the §0 gate; §3.7 → separate safety plan. **DESIGN-GATE SEQUENCE COMPLETE** (`/plan-ceo-review` + `/fusion matrix` + `/plan-eng-review` — all GO-WITH-AMENDMENTS, all amendments folded). Implement GO is the operator's, freely given.
