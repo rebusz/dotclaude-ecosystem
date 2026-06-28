@@ -212,7 +212,12 @@ def target_specs(source_root: Path, repo: Path | None) -> list[TargetSpec]:
             name="claude-global",
             path=home / ".claude" / "CLAUDE.md",
             sources=(Path("core.md"), Path("overlays/claude-global.md")),
-            line_limit=200,
+            # Slice 0 kernel-slim guard (2026-06-27): fail-closed on regrowth.
+            # Rendered CLAUDE.md = 15,005 B / 153 lines after the slim; these bound
+            # the WHOLE file (managed block + manual tail). Re-adding a stale ~1KB/
+            # ~16-line section trips the sync -> forces a kernel-vs-ref decision.
+            line_limit=162,
+            byte_limit=16000,
         ),
         TargetSpec(
             name="codex-global",
