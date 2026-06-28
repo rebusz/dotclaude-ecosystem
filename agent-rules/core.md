@@ -4,7 +4,7 @@
 
 - Work primarily under `D:/APPS/<repo>`.
 - Tsignal is the execution authority, WatchF is advisory/discovery, TsignalLAB is research, and Obsidian Flow is memory.
-- Trading data flow defaults one-way (Tsignal -> TsignalLAB -> Obsidian Flow). Reverse contribution of DATA/insight is allowed ONLY through a validated, async, gated seam (candidate store + validation gate + shadow + signed operator GO); the live path owns its own state, never synchronously depends on research/cloud, and nothing writes live decision/order state except the live brain. Forbidden control-coupling: a research/LAB process writing the live store directly, the live path blocking on a research call, or a shared mutable store on the live path. (Distinct from, and additional to, the absolute LLM order-path boundary in Risk Classes below.)
+- Trading data flow is one-way (Tsignal -> TsignalLAB -> Obsidian Flow); reverse DATA/insight ONLY via the validated, async, gated seam (candidate store + validation gate + shadow + signed operator GO); the live path owns its own state and **nothing writes live decision/order state except the live brain**. Forbidden control-couplings + full seam contract -> `agent-rules/refs/data-flow-seam.md` (distinct from, and additional to, the absolute LLM order-path boundary in Risk Classes below).
 - Read `D:/APPS/_shared/PORTS.md` before changing or starting local servers.
 
 ## Repo Truth
@@ -35,15 +35,7 @@
 
 ### Token Budget Protocol
 
-- Context floor beats token savings: read root agent files, selected plan context, and task-specific safety contracts before pruning context. For Tsignal runtime/server work, `D:/APPS/_shared/PORTS.md` and repo `AGENTS.md` remain mandatory.
-- Budget before breadth: for broad audits or investigations, name the evidence path, likely expensive reads/tools, stop condition, and no-go boundaries before loading large context.
-- Prefer bounded reads: use indexes, `rg` hit lists, manifests, summaries, and line-window reads before full-file loads or transcript-sized dumps.
-- Fail closed on summaries: noisy command summaries must preserve nonzero exit codes, timeouts, skipped critical tests, stderr error groups, first failing assertion or node, and the raw artifact path. Say "passed" only when exit code is zero and the expected target actually ran.
-- Budget external surfaces: use browser, connector, graph refresh, or broad MCP calls only when they answer a specific question cheaper local truth cannot.
-- Do not prune connectors, skills, MCP servers, or account-level surfaces without audit evidence and explicit GO; record owner, affected projects, rollback path, and whether the action is manual/account-level.
-- Token-budget rules are subordinate to risk classes, repo boundaries, live-money boundaries, and the rule that LLM agents never touch broker API or order path.
-- Scope handoff tokens: any next GO token must include scope, risk class, no-go boundaries, and a requirement to refresh repo truth before execution.
-- Use compact handoffs when pausing or compacting: include repo/cwd, branch/HEAD, dirty-tree boundary, files changed, validation, blockers, exact next command or GO token, and explicit no-go boundaries.
+- Context floor beats token savings (read root agent files + task-specific safety contracts before pruning); budget before breadth; prefer bounded reads (indexes/`rg`/line-windows before full-file loads); **fail closed on summaries** (preserve nonzero exit codes, timeouts, skipped critical tests, first failing assertion + raw artifact path — say "passed" only when exit code is 0 AND the expected target actually ran). Token-budget rules are subordinate to risk classes, repo/live-money boundaries, and the rule that **LLM agents never touch broker API or order path**. Full procedure (external-surface budgeting, no-prune-without-GO, GO-token scope, compact-handoff fields) -> `agent-rules/refs/token-budget-protocol.md`.
 
 ## Execution Defaults
 
