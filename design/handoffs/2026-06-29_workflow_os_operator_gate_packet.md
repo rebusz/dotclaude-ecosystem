@@ -8,9 +8,9 @@ Parent audit: `design/audits/2026-06-29_workflow_os_completion_audit.md`
 
 The shipped Workflow OS scope is landed and validated, but the full plan cannot complete without external operator inputs. This packet condenses the remaining gates into exact actions and commands. It does not apply ACLs, does not create a B0 baseline, and does not touch TSU/Tsignal runtime or order paths.
 
-## Gate 1: B0 Mixed-Session Cost Collection
+## Gate 1: B0 Mixed-Session Baseline
 
-Blocked artifact:
+Generated artifact:
 
 ```text
 design/baselines/workflow_os_b0_mixed_sessions.json
@@ -23,9 +23,11 @@ Completed inputs:
 - Chosen session for `research_plan`: `e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl`.
 - Exact Claude Stop hook `$... sess` cost readbacks recovered locally: `$36.78`, `$69.18`, `$154.78`.
 
-Remaining operator input:
+Completed startup-context input:
 
-- Provide or confirm `startup_context_tokens` for the fresh-context probe used with those sessions.
+- `read_heavy_audit`: `48871`
+- `multi_file_edit`: `45615`
+- `research_plan`: `44565`
 
 Candidate inventory:
 
@@ -45,7 +47,7 @@ Cost readback artifact:
 design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json
 ```
 
-Generate one measured session JSON after `startup_context_tokens` is known:
+Measured session JSON commands used:
 
 ```powershell
 python scripts/session_cost_probe.py jsonl-session `
@@ -53,7 +55,7 @@ python scripts/session_cost_probe.py jsonl-session `
   --output design/baselines/b0_sessions/<session-class>.json `
   --session-id <read_heavy_audit|multi_file_edit|research_plan> `
   --cost-usd <exact-cost-readback> `
-  --startup-context-tokens <fresh-context-token-count> `
+  --startup-context-tokens <operator-confirmed-first-assistant-context-footprint> `
   --quality-summary "<artifact equivalence summary>" `
   --validation-command "<command that proves artifact quality>"
 ```
@@ -83,7 +85,7 @@ python scripts/session_cost_probe.py b0-status `
   --baseline design/baselines/workflow_os_b0_mixed_sessions.json
 ```
 
-Expected current result: non-zero exit with `ready=false` until the measured B0 baseline exists and contains exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`.
+Expected current result: zero exit with `ready=true` because the measured B0 baseline exists and contains exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`.
 
 ## Gate 2: Section 3.7 Write-Segregation Identity
 

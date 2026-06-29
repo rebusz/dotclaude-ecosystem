@@ -1,9 +1,10 @@
 {
   "kind": "workflow_os_b0_selected_session_cost_readbacks",
   "schema_version": 1,
-  "status": "startup_context_required",
+  "status": "mixed_baseline_generated",
   "source_note": "Recovered from local Claude JSONL Stop hook footer lines containing cumulative `$... sess` readbacks. Prompt content was not exported. The max and last values match for each selected session.",
-  "remaining_blocker": "startup_context_tokens is still not known or confirmed, so workflow_os_b0_mixed_sessions.json must remain absent/fail-closed.",
+  "startup_context_note": "startup_context_tokens uses operator-confirmed first assistant context footprint values: read_heavy_audit=48871, multi_file_edit=45615, research_plan=44565.",
+  "mixed_baseline": "design/baselines/workflow_os_b0_mixed_sessions.json",
   "sessions": [
     {
       "cost_readbacks_count": 20,
@@ -15,7 +16,8 @@
       "last_cost_line": 514,
       "last_cost_timestamp": "2026-06-18T22:49:51.968Z",
       "max_cost_line": 513,
-      "max_cost_timestamp": "2026-06-18T22:49:51.968Z"
+      "max_cost_timestamp": "2026-06-18T22:49:51.968Z",
+      "startup_context_tokens": 48871
     },
     {
       "cost_readbacks_count": 32,
@@ -27,7 +29,8 @@
       "last_cost_line": 890,
       "last_cost_timestamp": "2026-06-20T03:04:31.594Z",
       "max_cost_line": 889,
-      "max_cost_timestamp": "2026-06-20T03:04:31.594Z"
+      "max_cost_timestamp": "2026-06-20T03:04:31.594Z",
+      "startup_context_tokens": 45615
     },
     {
       "cost_readbacks_count": 62,
@@ -39,11 +42,13 @@
       "last_cost_line": 1055,
       "last_cost_timestamp": "2026-06-20T19:56:32.103Z",
       "max_cost_line": 1054,
-      "max_cost_timestamp": "2026-06-20T19:56:32.102Z"
+      "max_cost_timestamp": "2026-06-20T19:56:32.102Z",
+      "startup_context_tokens": 44565
     }
   ],
   "totals": {
     "cost_usd": 260.74,
+    "startup_context_tokens": 139051,
     "session_count": 3
   }
 }

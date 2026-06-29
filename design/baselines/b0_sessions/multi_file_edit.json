@@ -1,0 +1,33 @@
+{
+  "id": "multi_file_edit",
+  "label": "multi file edit",
+  "models": [
+    "<synthetic>",
+    "claude-opus-4-8"
+  ],
+  "quality_baseline": {
+    "expected_artifacts": [
+      "design/baselines/b0_sessions/2026-06-29_selected_candidates.json",
+      "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json"
+    ],
+    "summary": "Multi-file edit artifact shape preserved; startup_context_tokens uses operator-confirmed first assistant context footprint",
+    "validation_commands": [
+      "python -m pytest scripts/tests"
+    ]
+  },
+  "source_jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl",
+  "time_range": {
+    "first_timestamp": "2026-06-16T18:56:07.866Z",
+    "last_timestamp": "2026-06-20T03:04:27.766Z"
+  },
+  "usage": {
+    "cache_creation_input_tokens": 8450745,
+    "cache_read_input_tokens": 75841719,
+    "cost_usd": 69.18,
+    "input_tokens": 100658,
+    "output_tokens": 962177,
+    "startup_context_tokens": 45615
+  },
+  "usage_record_count": 340,
+  "usage_source": "claude-jsonl-plus-explicit-cost"
+}

@@ -2,7 +2,7 @@
   "kind": "workflow_os_b0_selected_session_candidates",
   "schema_version": 1,
   "cost_readback_artifact": "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json",
-  "selection_note": "Selected from local Claude JSONL metadata without prompt-content export. cost_usd was recovered from local Claude Stop hook footer `$... sess` readbacks; startup_context_tokens remains required before a mixed B0 baseline can be generated.",
+  "selection_note": "Selected from local Claude JSONL metadata without prompt-content export. cost_usd was recovered from local Claude Stop hook footer `$... sess` readbacks. startup_context_tokens uses operator-confirmed first assistant context footprint values.",
   "sessions": [
     {
       "filename": "f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
@@ -126,6 +126,7 @@
         "cost_usd": 36.78,
         "input_tokens": 86482,
         "output_tokens": 874505,
+        "startup_context_tokens": 48871,
         "total_tokens": 41133280
       }
     },
@@ -271,6 +272,7 @@
         "cost_usd": 69.18,
         "input_tokens": 100658,
         "output_tokens": 962177,
+        "startup_context_tokens": 45615,
         "total_tokens": 85355299
       }
     },
@@ -412,9 +414,10 @@
         "cost_usd": 154.78,
         "input_tokens": 147295,
         "output_tokens": 1377761,
+        "startup_context_tokens": 44565,
         "total_tokens": 166214157
       }
     }
   ],
-  "status": "startup_context_required"
+  "status": "mixed_baseline_generated"
 }
