@@ -21,8 +21,8 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `sync_check.ok=true`
   - zero drift against A1 baseline
 - `python scripts/session_cost_probe.py b0-status --baseline design/baselines/workflow_os_b0_mixed_sessions.json`
-  - expected standalone status: `ready=false`
-  - B0 is closed only through `design/decisions/2026-06-29_workflow_os_shipped_scope_close.json` as future gated work
+  - expected standalone status: `ready=true`
+  - B0 now has three selected measured sessions with cost readbacks and operator-confirmed startup-context values
 - `python scripts/workflow_os_completion.py`
   - expected current status: `ready=true`
   - fail-closed unless B0, Section 3.7, and revisit/manual gates are all proven complete or explicitly closed
@@ -57,8 +57,8 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 | Cursor platform wiring | Complete | trigger board marks `cursor-platform-wiring` completed | None for current verified-high surface |
 | Cline global sync | Complete | `design/handoffs/2026-06-29_cline_global_sync.md`; A1 check shows `cline_global.kernel_ok=true` | Repo-local Cline propagation is a later explicit per-repo sync slice |
 | Antigravity global sync | Complete | `design/handoffs/2026-06-29_antigravity_global_sync.md`; A1 check shows `antigravity_global.kernel_ok=true` | MCP/hooks remain unwritten later slice |
-| B0 mixed-session baseline | Closed out of shipped scope | `design/decisions/2026-06-29_workflow_os_shipped_scope_close.json`; `design/handoffs/2026-06-29_workflow_os_b0_capture_contract.md`; `design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md`; `design/handoffs/2026-06-29_workflow_os_b0_selected_sessions.md`; `design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json` | Future gated work: provide or confirm `startup_context_tokens` before any Headroom/RTK benchmark |
-| Headroom/RTK benchmark | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope; `scripts/session_cost_probe.py b0-status` remains fail-closed without B0 | Future gated work after B0 startup-context collection and mixed baseline generation |
+| B0 mixed-session baseline | Complete after shipped-scope close | `design/baselines/workflow_os_b0_mixed_sessions.json`; `design/baselines/b0_sessions/read_heavy_audit.json`; `design/baselines/b0_sessions/multi_file_edit.json`; `design/baselines/b0_sessions/research_plan.json`; `design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json` | None for baseline artifact; Headroom/RTK remains separate future gated work |
+| Headroom/RTK benchmark | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after explicit Headroom/RTK GO |
 | Capability registry live file/status surface | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after >=3 gated tools pass section 9, generated only |
 | Impeccable layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work when a real GUI/web build starts |
 | deer-flow research layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after PAPER WEEK and LAB research trigger |
@@ -68,7 +68,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 
 ## Future Gated Work
 
-1. **B0 startup-context collection:** three representative TSU JSONL sessions and exact local `$... sess` cost readbacks are recorded; provide or confirm `startup_context_tokens` so the measured mixed baseline can be generated without placeholders.
+1. **Headroom/RTK benchmark:** B0 is now measured, but the benchmark remains separate future gated work after explicit Headroom/RTK GO.
 2. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
 3. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
 

@@ -1,0 +1,181 @@
+{
+  "files": {
+    "antigravity_global": {
+      "bytes": 13153,
+      "exists": true,
+      "lines": 132,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.gemini\\GEMINI.md",
+      "sha256": "180aa4b43a174fd175fd01514149c20d3e2473df4f83d6a3c1093e5d3fca9e9b"
+    },
+    "claude_global": {
+      "bytes": 15005,
+      "exists": true,
+      "lines": 153,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.claude\\CLAUDE.md",
+      "sha256": "849e62d54169bd47b77a12aff957e9ef2d1a2d3b8e85c147ac7e9c6068872cb4"
+    },
+    "cline_global": {
+      "bytes": 13268,
+      "exists": true,
+      "lines": 132,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.clinerules\\agent-rules.md",
+      "sha256": "4dfd41fc22608f3c11f62cec8205c447a163df5f164f118aa31f6595a84a8cf4"
+    },
+    "codex_global": {
+      "bytes": 17122,
+      "exists": true,
+      "lines": 161,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.codex\\AGENTS.md",
+      "sha256": "6bb56c5a5eb328306a718d25228a48ec44379f0454f941b5725da33fd79fb226"
+    }
+  },
+  "generated_at": "2026-06-29T17:02:38+00:00",
+  "method": "B0",
+  "mixed_session_baseline": {
+    "quality_gate": "A proxy can only pass if these same session classes produce functionally equivalent artifacts and validation gates still pass.",
+    "required_session_ids": [
+      "read_heavy_audit",
+      "multi_file_edit",
+      "research_plan"
+    ],
+    "sessions": [
+      {
+        "id": "read_heavy_audit",
+        "label": "read heavy audit",
+        "quality_baseline": {
+          "expected_artifacts": [
+            "design/baselines/b0_sessions/2026-06-29_selected_candidates.json",
+            "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json"
+          ],
+          "summary": "Read-heavy audit artifact shape preserved; startup_context_tokens uses operator-confirmed first assistant context footprint",
+          "validation_commands": [
+            "python -m pytest scripts/tests"
+          ]
+        },
+        "source": "design\\baselines\\b0_sessions\\read_heavy_audit.json",
+        "usage": {
+          "cache_creation_input_tokens": 3290497,
+          "cache_read_input_tokens": 36881796,
+          "cost_usd": 36.78,
+          "input_tokens": 86482,
+          "output_tokens": 874505,
+          "startup_context_tokens": 48871,
+          "total_tokens": 41133280
+        }
+      },
+      {
+        "id": "multi_file_edit",
+        "label": "multi file edit",
+        "quality_baseline": {
+          "expected_artifacts": [
+            "design/baselines/b0_sessions/2026-06-29_selected_candidates.json",
+            "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json"
+          ],
+          "summary": "Multi-file edit artifact shape preserved; startup_context_tokens uses operator-confirmed first assistant context footprint",
+          "validation_commands": [
+            "python -m pytest scripts/tests"
+          ]
+        },
+        "source": "design\\baselines\\b0_sessions\\multi_file_edit.json",
+        "usage": {
+          "cache_creation_input_tokens": 8450745,
+          "cache_read_input_tokens": 75841719,
+          "cost_usd": 69.18,
+          "input_tokens": 100658,
+          "output_tokens": 962177,
+          "startup_context_tokens": 45615,
+          "total_tokens": 85355299
+        }
+      },
+      {
+        "id": "research_plan",
+        "label": "research plan",
+        "quality_baseline": {
+          "expected_artifacts": [
+            "design/baselines/b0_sessions/2026-06-29_selected_candidates.json",
+            "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json"
+          ],
+          "summary": "Research-plan artifact shape preserved; startup_context_tokens uses operator-confirmed first assistant context footprint",
+          "validation_commands": [
+            "python -m pytest scripts/tests"
+          ]
+        },
+        "source": "design\\baselines\\b0_sessions\\research_plan.json",
+        "usage": {
+          "cache_creation_input_tokens": 24423317,
+          "cache_read_input_tokens": 140265784,
+          "cost_usd": 154.78,
+          "input_tokens": 147295,
+          "output_tokens": 1377761,
+          "startup_context_tokens": 44565,
+          "total_tokens": 166214157
+        }
+      }
+    ],
+    "summary": {
+      "averages": {
+        "cache_creation_input_tokens": 12054853.0,
+        "cache_read_input_tokens": 84329766.33333333,
+        "cost_usd": 86.91333333333334,
+        "input_tokens": 111478.33333333333,
+        "output_tokens": 1071481.0,
+        "startup_context_tokens": 46350.333333333336,
+        "total_tokens": 97567578.66666667
+      },
+      "session_count": 3,
+      "totals": {
+        "cache_creation_input_tokens": 36164559,
+        "cache_read_input_tokens": 252989299,
+        "cost_usd": 260.74,
+        "input_tokens": 334435,
+        "output_tokens": 3214443,
+        "startup_context_tokens": 139051,
+        "total_tokens": 292702736
+      }
+    }
+  },
+  "notes": "",
+  "repo_root": "D:\\dotclaude\\dotclaude-ecosystem",
+  "schema_version": 1,
+  "sync_check": {
+    "command": [
+      "C:\\Python314\\python.exe",
+      "D:\\dotclaude\\dotclaude-ecosystem\\scripts\\sync_agent_rules.py",
+      "--check",
+      "--quiet"
+    ],
+    "ok": true,
+    "returncode": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "usage": null
+}

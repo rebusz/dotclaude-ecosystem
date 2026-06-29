@@ -1,0 +1,33 @@
+{
+  "id": "research_plan",
+  "label": "research plan",
+  "models": [
+    "<synthetic>",
+    "claude-opus-4-8"
+  ],
+  "quality_baseline": {
+    "expected_artifacts": [
+      "design/baselines/b0_sessions/2026-06-29_selected_candidates.json",
+      "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json"
+    ],
+    "summary": "Research-plan artifact shape preserved; startup_context_tokens uses operator-confirmed first assistant context footprint",
+    "validation_commands": [
+      "python -m pytest scripts/tests"
+    ]
+  },
+  "source_jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl",
+  "time_range": {
+    "first_timestamp": "2026-06-16T14:35:03.071Z",
+    "last_timestamp": "2026-06-20T19:56:29.508Z"
+  },
+  "usage": {
+    "cache_creation_input_tokens": 24423317,
+    "cache_read_input_tokens": 140265784,
+    "cost_usd": 154.78,
+    "input_tokens": 147295,
+    "output_tokens": 1377761,
+    "startup_context_tokens": 44565
+  },
+  "usage_record_count": 370,
+  "usage_source": "claude-jsonl-plus-explicit-cost"
+}
