@@ -178,6 +178,90 @@ class TestSessionCostProbe(unittest.TestCase):
         self.assertEqual(metric["bytes_delta"], 10)
         self.assertTrue(metric["sha_changed"])
 
+    def test_parse_claude_jsonl_usage_aggregates_usage_without_prompt_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": "2026-06-29T00:00:00Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "cache_creation_input_tokens": 3,
+                            "cache_read_input_tokens": 7,
+                        },
+                    },
+                },
+                {
+                    "timestamp": "2026-06-29T00:01:00Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "usage": {
+                            "input_tokens": 2,
+                            "output_tokens": 4,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 1,
+                        },
+                    },
+                },
+                {"message": {"role": "user", "content": "do not include me"}},
+            ]
+            path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+            summary = probe.parse_claude_jsonl_usage(path)
+            self.assertEqual(summary["usage_messages"], 2)
+            self.assertEqual(summary["usage"]["input_tokens"], 12)
+            self.assertEqual(summary["usage"]["output_tokens"], 9)
+            self.assertEqual(summary["usage"]["cache_creation_input_tokens"], 3)
+            self.assertEqual(summary["usage"]["cache_read_input_tokens"], 8)
+            self.assertEqual(summary["usage"]["total_tokens"], 32)
+            self.assertEqual(summary["models"], ["claude-test"])
+            self.assertEqual(summary["first_timestamp"], "2026-06-29T00:00:00Z")
+            self.assertEqual(summary["last_timestamp"], "2026-06-29T00:01:00Z")
+
+    def test_build_b0_session_from_jsonl_requires_explicit_cost(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "usage": {
+                                "input_tokens": 10,
+                                "output_tokens": 5,
+                                "cache_creation_input_tokens": 0,
+                                "cache_read_input_tokens": 7,
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "jsonl": path,
+                    "session_id": "read_heavy_audit",
+                    "label": "",
+                    "cost_usd": 0.12,
+                    "startup_context_tokens": 1000,
+                    "quality_summary": "baseline artifact shape held",
+                    "validation_command": ["python -m pytest scripts/tests"],
+                    "expected_artifact": [],
+                },
+            )()
+
+            session = probe.build_b0_session_from_jsonl(args)
+            self.assertEqual(session["usage_source"], "claude-jsonl-plus-explicit-cost")
+            self.assertEqual(session["usage"]["cost_usd"], 0.12)
+            self.assertEqual(session["usage"]["cache_read_input_tokens"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()
