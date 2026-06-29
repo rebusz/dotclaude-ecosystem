@@ -1,5 +1,19 @@
 {
   "files": {
+    "antigravity_global": {
+      "bytes": 13153,
+      "exists": true,
+      "lines": 132,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.gemini\\GEMINI.md",
+      "sha256": "180aa4b43a174fd175fd01514149c20d3e2473df4f83d6a3c1093e5d3fca9e9b"
+    },
     "claude_global": {
       "bytes": 15005,
       "exists": true,
@@ -43,9 +57,9 @@
       "sha256": "6bb56c5a5eb328306a718d25228a48ec44379f0454f941b5725da33fd79fb226"
     }
   },
-  "generated_at": "2026-06-29T04:44:52+00:00",
+  "generated_at": "2026-06-29T04:50:23+00:00",
   "method": "A1",
-  "notes": "A1 baseline refreshed after adding the managed Cline global .clinerules target.",
+  "notes": "A1 baseline refreshed after adding managed Cline and Antigravity global text-rule targets.",
   "repo_root": "D:\\dotclaude\\dotclaude-ecosystem",
   "schema_version": 1,
   "sync_check": {

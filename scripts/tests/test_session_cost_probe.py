@@ -120,10 +120,10 @@ class TestSessionCostProbe(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "startup_context_tokens"):
                 probe.load_b0_session(path)
 
-    def test_probe_records_cline_kernel_presence(self):
+    def test_probe_records_extra_kernel_presence_targets(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            for name in ("CLAUDE.md", "AGENTS.md", "cline.md"):
+            for name in ("CLAUDE.md", "AGENTS.md", "cline.md", "GEMINI.md"):
                 (root / name).write_text(
                     "\n".join(
                         [
@@ -146,6 +146,7 @@ class TestSessionCostProbe(unittest.TestCase):
                     "claude_file": root / "CLAUDE.md",
                     "codex_file": root / "AGENTS.md",
                     "cline_file": root / "cline.md",
+                    "antigravity_file": root / "GEMINI.md",
                     "method": "A1",
                     "note": "",
                     "usage_json": None,
@@ -155,12 +156,13 @@ class TestSessionCostProbe(unittest.TestCase):
 
             data = probe.build_probe(args)
             self.assertTrue(data["files"]["cline_global"]["ok"])
+            self.assertTrue(data["files"]["antigravity_global"]["ok"])
 
-    def test_compare_metric_reports_new_cline_file_missing_from_old_baseline(self):
+    def test_compare_metric_reports_new_global_file_missing_from_old_baseline(self):
         baseline = {"files": {}}
         current = {
             "files": {
-                "cline_global": {
+                "antigravity_global": {
                     "exists": True,
                     "ok": True,
                     "bytes": 10,
@@ -170,7 +172,7 @@ class TestSessionCostProbe(unittest.TestCase):
             }
         }
 
-        metric = probe._compare_metric("cline_global", baseline, current)
+        metric = probe._compare_metric("antigravity_global", baseline, current)
         self.assertTrue(metric["exists"])
         self.assertTrue(metric["kernel_ok"])
         self.assertEqual(metric["bytes_delta"], 10)

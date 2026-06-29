@@ -234,6 +234,14 @@ def target_specs(source_root: Path, repo: Path | None) -> list[TargetSpec]:
             byte_limit=20000,
             default_title="# Cline global agent rules",
         ),
+        TargetSpec(
+            name="antigravity-global",
+            path=home / ".gemini" / "GEMINI.md",
+            sources=(Path("core.md"), Path("overlays/antigravity-global.md")),
+            line_limit=190,
+            byte_limit=20000,
+            default_title="# Antigravity global agent rules",
+        ),
     ]
 
     if repo is not None:
