@@ -32,16 +32,29 @@
       "action": "Plan and implement the verified-high Cursor sync target only; keep Cline and Antigravity gated."
     },
     {
-      "id": "cline-antigravity-live-verify",
-      "title": "Cline and Antigravity live-install verification",
+      "id": "cline-live-verify",
+      "title": "Cline live-install verification",
+      "plane": "cross-platform",
+      "risk_class": "R1",
+      "status": "completed",
+      "completion_note": "Verified against local Cline 4.0.0 extension bundle: .clinerules, .cline/skills, .clinerules/skills, .agents/skills, and AGENTS.md are referenced. No sync target was written.",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Completed by local extension-code readback on 2026-06-29."
+      },
+      "action": "Use the verified Cline surfaces only in a later explicit sync-target slice."
+    },
+    {
+      "id": "antigravity-live-verify",
+      "title": "Antigravity live-install verification",
       "plane": "cross-platform",
       "risk_class": "R1",
       "status": "deferred",
       "trigger_predicate": {
         "type": "manual",
-        "reason": "Requires a live installed platform surface; third-party path docs are not enough."
+        "reason": "Antigravity is installed, but local resources did not prove GEMINI.md, AGENTS.md, .agents/hooks.json, mcp_config.json, or serverUrl path/schema."
       },
-      "action": "Verify paths against live installs before writing any sync target."
+      "action": "Verify exact Antigravity project rules, skills, hooks, and MCP paths against the running app or official local docs before writing any sync target."
     },
     {
       "id": "impeccable-layer",

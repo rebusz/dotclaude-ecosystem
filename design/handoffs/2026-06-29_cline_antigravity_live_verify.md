@@ -6,9 +6,9 @@ Scope: local platform surface discovery only. No sync target was written.
 
 ## Result
 
-Do not implement Cline or Antigravity sync targets yet.
+Do not implement Antigravity sync targets yet.
 
-Both platforms have local installation evidence, but the local filesystem did not prove the exact project sync surfaces from the Workflow OS plan strongly enough to write managed files.
+Cline has enough local extension-code evidence to mark its live-install verification complete, but no Cline sync target was written in this pass. Antigravity has local installation evidence, but the local filesystem did not prove the exact project sync surfaces from the Workflow OS plan strongly enough to write managed files.
 
 ## Evidence
 
@@ -20,10 +20,19 @@ Cline:
 - VS Code global storage contains:
   - `C:\Users\dszub\AppData\Roaming\Code\User\globalStorage\saoudrizwan.claude-dev`
   - `C:\Users\dszub\AppData\Roaming\Code\User\globalStorage\rooveterinaryinc.roo-cline`
-- No local proof was found for:
-  - `C:\Users\dszub\.cline\skills`
-  - `C:\Users\dszub\.clinerules`
-  - repo-local `.clinerules`
+- Local Cline extension code exists at `C:\Users\dszub\.vscode\extensions\saoudrizwan.claude-dev-4.0.0`.
+- Bounded grep of the local Cline bundle found references to:
+  - `.clinerules`
+  - `.cline/skills`
+  - `.clinerules/skills`
+  - `.clinerules/hooks`
+  - `.agents/skills`
+  - `AGENTS.md`
+- `skills-lock.json` in that Cline extension contains the bundled `cline-sdk` skill.
+- Roo-Cline 3.54.0 also has local package evidence for `AGENTS.md` loading:
+  - `roo-cline.useAgentRules`
+  - default `true`
+  - description: enables loading `AGENTS.md` files for agent-specific rules.
 
 Antigravity:
 
@@ -40,18 +49,18 @@ Antigravity:
 
 ## Decision
 
-Keep `cline-antigravity-live-verify` deferred/manual. The plan's warning remains correct: third-party path conventions are not enough, and a silent wrong path would create drift without runtime signal.
+Mark Cline live-install verification complete, but keep Antigravity deferred/manual. The plan's warning remains correct for Antigravity: third-party path conventions are not enough, and a silent wrong path would create drift without runtime signal.
 
 ## Next Gate
 
-To promote either platform, verify one of these with the running application or official local docs:
+To promote Antigravity, verify one of these with the running application or official local docs:
 
 1. the exact project-level rules file path the app reads,
 2. the exact user-level skills path the app reads,
 3. the exact MCP config path and schema,
 4. a runtime readback showing the managed kernel was loaded.
 
-Only then write a sync target.
+Only then write an Antigravity sync target. For Cline, the next slice can design the exact sync target from the verified local surfaces, with a runtime readback before declaring it effective.
 
 ## Boundaries
 
