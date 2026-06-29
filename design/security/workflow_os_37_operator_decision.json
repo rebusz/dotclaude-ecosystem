@@ -1,0 +1,11 @@
+{
+  "evidence": [
+    "Operator decision on 2026-06-29 moved Section 3.7 apply to future gated work.",
+    "design/security/2026-06-29_observed_codex_identity_acl_dry_run.json exists as review-only evidence with applies_acl=false.",
+    "No icacls apply command was executed for the current Workflow OS shipped scope."
+  ],
+  "kind": "workflow_os_37_operator_decision",
+  "operator_go": true,
+  "schema_version": 1,
+  "status": "closed_plan_only"
+}

@@ -62,7 +62,8 @@
       "title": "Impeccable layer",
       "plane": "design",
       "risk_class": "R1",
-      "status": "deferred",
+      "status": "killed",
+      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work for a real GUI/web build.",
       "trigger_predicate": {
         "type": "manual",
         "reason": "Trigger when a real GUI or web build starts."
@@ -74,7 +75,8 @@
       "title": "Headroom and RTK benchmark",
       "plane": "token",
       "risk_class": "R1",
-      "status": "deferred",
+      "status": "killed",
+      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work after explicit B0 /cost collection.",
       "trigger_predicate": {
         "type": "command_exit_zero",
         "command": [
@@ -92,7 +94,8 @@
       "title": "deer-flow research layer",
       "plane": "research",
       "risk_class": "R2",
-      "status": "deferred",
+      "status": "killed",
+      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work after PAPER WEEK and LAB research trigger.",
       "trigger_predicate": {
         "type": "manual",
         "reason": "Trigger only when LAB research outgrows existing deep-research/fusion and PAPER WEEK has shipped."
@@ -104,7 +107,8 @@
       "title": "autoresearch overnight GPU ratchet",
       "plane": "research",
       "risk_class": "R2",
-      "status": "deferred",
+      "status": "killed",
+      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work after PAPER WEEK and overnight GPU host availability.",
       "trigger_predicate": {
         "type": "manual",
         "reason": "Trigger when an overnight GPU host exists and PAPER WEEK has shipped."
@@ -116,7 +120,8 @@
       "title": "Generated capability registry and status surface",
       "plane": "memory",
       "risk_class": "R1",
-      "status": "deferred",
+      "status": "killed",
+      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work after at least three gated tools pass section 9.",
       "trigger_predicate": {
         "type": "manual",
         "reason": "Build only after at least three gated tools pass their section 9 gates."
