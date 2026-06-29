@@ -1,0 +1,419 @@
+{
+  "kind": "workflow_os_b0_selected_session_candidates",
+  "schema_version": 1,
+  "selection_note": "Selected from local Claude JSONL metadata without prompt-content export. cost_usd remains null until exact Claude /cost readback is supplied.",
+  "sessions": [
+    {
+      "filename": "f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
+      "first_timestamp": "2026-06-18T17:41:27.451Z",
+      "id": "read_heavy_audit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
+      "last_timestamp": "2026-06-20T00:35:15.202Z",
+      "roles": {
+        "assistant": 192,
+        "user": 91
+      },
+      "rows": 526,
+      "selection_rationale": "Read/Grep/Glob/PowerShell-heavy TSU/EcosystemControl audit shape with minimal edits.",
+      "top_branches": [
+        [
+          "claude/jolly-wiles-5e0193",
+          347
+        ],
+        [
+          "feat/mvp-gate-report",
+          73
+        ]
+      ],
+      "top_cwd": [
+        [
+          "D:\\APPS\\TSU\\.claude\\worktrees\\jolly-wiles-5e0193",
+          347
+        ],
+        [
+          "D:\\APPS\\TSU",
+          73
+        ]
+      ],
+      "top_paths": [
+        [
+          "D:\\APPS\\TSU\\src",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\EcosystemControl",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\MEMORY.md",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\EcosystemControl\\logs\\tsu_supervisor.log",
+          2
+        ],
+        [
+          "D:\\APPS\\_shared",
+          2
+        ],
+        [
+          "D:\\APPS",
+          2
+        ],
+        [
+          "D:\\APPS\\EcosystemControl\\services_extra.yaml",
+          2
+        ],
+        [
+          "D:\\APPS\\EcosystemControl\\src",
+          2
+        ],
+        [
+          "D:\\APPS\\EcosystemControl\\src\\ecosystem_control\\config.py",
+          2
+        ],
+        [
+          "D:\\APPS\\EcosystemControl\\src\\ecosystem_control",
+          2
+        ],
+        [
+          "D:\\APPS\\EcosystemControl\\src\\ecosystem_control\\worker.py",
+          2
+        ],
+        [
+          "D:\\APPS\\TSU\\.claude\\worktrees\\jolly-wiles-5e0193\\src\\tsu\\supervisor\\lockfile.py",
+          1
+        ]
+      ],
+      "top_tools": [
+        [
+          "PowerShell",
+          27
+        ],
+        [
+          "Read",
+          23
+        ],
+        [
+          "Grep",
+          14
+        ],
+        [
+          "Glob",
+          7
+        ],
+        [
+          "Edit",
+          3
+        ],
+        [
+          "Agent",
+          3
+        ],
+        [
+          "Write",
+          2
+        ],
+        [
+          "AskUserQuestion",
+          1
+        ]
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 3290497,
+        "cache_read_input_tokens": 36881796,
+        "cost_usd": null,
+        "input_tokens": 86482,
+        "output_tokens": 874505,
+        "total_tokens": 41133280
+      }
+    },
+    {
+      "filename": "5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl",
+      "first_timestamp": "2026-06-16T18:55:53.923Z",
+      "id": "multi_file_edit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl",
+      "last_timestamp": "2026-06-20T03:04:31.980Z",
+      "roles": {
+        "assistant": 340,
+        "user": 163
+      },
+      "rows": 895,
+      "selection_rationale": "Edit-heavy workflow touching shared fusion/audit plan/tooling files.",
+      "top_branches": [
+        [
+          "claude/brave-mirzakhani-3caa4e",
+          530
+        ],
+        [
+          "master",
+          218
+        ]
+      ],
+      "top_cwd": [
+        [
+          "D:\\APPS\\TSU\\.claude\\worktrees\\brave-mirzakhani-3caa4e",
+          522
+        ],
+        [
+          "D:\\APPS\\TSU",
+          218
+        ],
+        [
+          "C:\\Users\\dszub\\.claude",
+          8
+        ]
+      ],
+      "top_paths": [
+        [
+          "D:/APPS/_shared/design/plans/2026-06-16_subscription_fusion_engine.md",
+          25
+        ],
+        [
+          "D:/APPS/_shared/audit/fuse.py",
+          18
+        ],
+        [
+          "D:/APPS/TSU/design/plans/2026-06-19_fusion_matrix_tournament.md",
+          6
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\commands\\fusion.md",
+          5
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\tsu-brain-design-canon-in-tsignal.md",
+          4
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\MEMORY.md",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\watchf-autobackup-hook.md",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\scripts\\plan_context_loader.py",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\ECOSYSTEM_IDEA_BOX.md",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\docs-into-session-repo.md",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\AUDIT_F.md",
+          1
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\AUDIT_P.md",
+          1
+        ]
+      ],
+      "top_tools": [
+        [
+          "Edit",
+          47
+        ],
+        [
+          "Bash",
+          38
+        ],
+        [
+          "Read",
+          26
+        ],
+        [
+          "WebSearch",
+          6
+        ],
+        [
+          "Write",
+          6
+        ],
+        [
+          "Grep",
+          4
+        ],
+        [
+          "WebFetch",
+          2
+        ],
+        [
+          "AskUserQuestion",
+          2
+        ],
+        [
+          "Glob",
+          2
+        ],
+        [
+          "Skill",
+          1
+        ],
+        [
+          "ToolSearch",
+          1
+        ],
+        [
+          "mcp__ccd_session__mark_chapter",
+          1
+        ]
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 8450745,
+        "cache_read_input_tokens": 75841719,
+        "cost_usd": null,
+        "input_tokens": 100658,
+        "output_tokens": 962177,
+        "total_tokens": 85355299
+      }
+    },
+    {
+      "filename": "e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl",
+      "first_timestamp": "2026-06-16T14:34:52.902Z",
+      "id": "research_plan",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl",
+      "last_timestamp": "2026-06-20T21:23:39.525Z",
+      "roles": {
+        "assistant": 370,
+        "user": 164
+      },
+      "rows": 1063,
+      "selection_rationale": "Architecture/research planning session with Workflow/Agent use and TSU/Tsignal plan artifacts.",
+      "top_branches": [
+        [
+          "claude/compassionate-babbage-12dd5e",
+          665
+        ],
+        [
+          "master",
+          158
+        ]
+      ],
+      "top_cwd": [
+        [
+          "D:\\APPS\\TSU\\.claude\\worktrees\\compassionate-babbage-12dd5e",
+          665
+        ],
+        [
+          "D:\\APPS\\TSU",
+          158
+        ]
+      ],
+      "top_paths": [
+        [
+          "D:\\APPS\\TSU\\.claude\\worktrees\\compassionate-babbage-12dd5e\\design\\tsu\\plans\\2026-06-16_tsignal_strategy_fix_composer_handoff.md",
+          5
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\Temp\\claude\\D--APPS-TSU--claude-worktrees-compassionate-babbage-12dd5e\\e3c378d6-d4fd-4397-834a-9ca6ed35378f\\tasks\\wa0iatn4x.output",
+          4
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\Temp\\claude\\D--APPS-TSU--claude-worktrees-compassionate-babbage-12dd5e\\e3c378d6-d4fd-4397-834a-9ca6ed35378f\\tasks\\wff5aco10.output",
+          3
+        ],
+        [
+          "D:\\APPS\\Tsignal 5.0\\design\\tsu\\plans\\2026-06-16_tsu_brain_fusion_architecture.md",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\tsu-brain-design-canon-in-tsignal.md",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\Temp\\claude\\D--APPS-TSU--claude-worktrees-compassionate-babbage-12dd5e\\e3c378d6-d4fd-4397-834a-9ca6ed35378f\\tasks\\wx2zn2w2p.output",
+          3
+        ],
+        [
+          "D:/APPS/Tsignal 5.0/design/tsu/AI_COGNITION_LAYER_PLAN.md",
+          3
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\MEMORY.md",
+          2
+        ],
+        [
+          "D:\\APPS\\Tsignal 5.0\\design\\tsu\\ROADMAP.md",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\AppData\\Local\\Temp\\claude\\D--APPS-TSU--claude-worktrees-compassionate-babbage-12dd5e\\e3c378d6-d4fd-4397-834a-9ca6ed35378f\\tasks\\wjismcx65.output",
+          2
+        ],
+        [
+          "D:/APPS/_wt_op_decisions2/design/tsu/plans/2026-06-20_operator_decisions_record.md",
+          2
+        ],
+        [
+          "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\memory\\check-parallel-branches-before-building.md",
+          2
+        ]
+      ],
+      "top_tools": [
+        [
+          "Bash",
+          48
+        ],
+        [
+          "Read",
+          24
+        ],
+        [
+          "Edit",
+          10
+        ],
+        [
+          "Write",
+          9
+        ],
+        [
+          "Grep",
+          7
+        ],
+        [
+          "Agent",
+          6
+        ],
+        [
+          "Workflow",
+          4
+        ],
+        [
+          "Glob",
+          3
+        ],
+        [
+          "mcp__ccd_session__mark_chapter",
+          3
+        ],
+        [
+          "ToolSearch",
+          2
+        ],
+        [
+          "mcp__plugin_claude-mem_mcp-search__search",
+          2
+        ],
+        [
+          "Skill",
+          2
+        ]
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 24423317,
+        "cache_read_input_tokens": 140265784,
+        "cost_usd": null,
+        "input_tokens": 147295,
+        "output_tokens": 1377761,
+        "total_tokens": 166214157
+      }
+    }
+  ],
+  "status": "cost_required"
+}

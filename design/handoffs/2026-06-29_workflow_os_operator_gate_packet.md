@@ -30,6 +30,12 @@ Candidate inventory:
 design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md
 ```
 
+Selected candidate packet:
+
+```text
+design/handoffs/2026-06-29_workflow_os_b0_selected_sessions.md
+```
+
 Generate one measured session JSON after a `/cost` value is known:
 
 ```powershell
