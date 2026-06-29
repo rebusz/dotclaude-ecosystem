@@ -1,0 +1,49 @@
+{
+  "files": [
+    {
+      "fidelity_check": {
+        "contains_source_stem": false,
+        "expected_terms": {
+          "Workflow": true,
+          "measurement": false
+        },
+        "expected_terms_ok": false,
+        "markdown_non_empty": true
+      },
+      "markdown_bytes": 91,
+      "markdown_preview": "Workflow OS MarkItDown fixture PDF\n\nFields: gate=Slice0b, risk=R1, boundary=advisory-only\n\n",
+      "markdown_tokens": 29,
+      "path": "design\\measurements\\fixtures\\workflow_os_fixture.pdf",
+      "raw_bytes": 678,
+      "raw_tokens": 262,
+      "suffix": ".pdf",
+      "token_delta": -233,
+      "token_delta_pct": -88.93,
+      "tokenizer": "@anthropic-ai/tokenizer@0.0.4"
+    },
+    {
+      "fidelity_check": {
+        "contains_source_stem": false,
+        "expected_terms": {
+          "Workflow": true,
+          "measurement": true
+        },
+        "expected_terms_ok": true,
+        "markdown_non_empty": true
+      },
+      "markdown_bytes": 88,
+      "markdown_preview": "## WorkflowOS\n| item | status |\n| --- | --- |\n| markitdown\\_measure | measurement-only |",
+      "markdown_tokens": 30,
+      "path": "design\\measurements\\fixtures\\workflow_os_fixture.xlsx",
+      "raw_bytes": 1623,
+      "raw_tokens": 1130,
+      "suffix": ".xlsx",
+      "token_delta": -1100,
+      "token_delta_pct": -97.35,
+      "tokenizer": "@anthropic-ai/tokenizer@0.0.4"
+    }
+  ],
+  "generated_at": "2026-06-29T04:13:37+00:00",
+  "note": "A2 tool-path check on generated fixtures because no existing PDF/XLSX were found under D:/APPS or D:/dotclaude by rg --files.",
+  "schema_version": 1
+}

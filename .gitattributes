@@ -1,0 +1,7 @@
+/.gitattributes text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
+*.pdf binary
+*.xlsx binary

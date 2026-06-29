@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "updated": "2026-06-29",
+  "items": [
+    {
+      "id": "slice-0b-after-tsu-pr-141",
+      "title": "Slice 0b advisory tooling",
+      "plane": "token",
+      "risk_class": "R1",
+      "status": "completed",
+      "completion_note": "Completed in Slice 0b readback: MarkItDown harness/report, last30days plugin, mattpocock reinstall, Cursor copy, native logger decision.",
+      "trigger_predicate": {
+        "type": "github_pr_state",
+        "repo": "D:/APPS/TSU",
+        "pr": 141,
+        "state": "MERGED"
+      },
+      "action": "Run markitdown measurement, last30days additivity check, mattpocock reinstall, and tokencost native-logger decision."
+    },
+    {
+      "id": "cursor-platform-wiring",
+      "title": "Cursor platform wiring",
+      "plane": "cross-platform",
+      "risk_class": "R1",
+      "status": "completed",
+      "completion_note": "Completed by copying the mattpocock v1.0.0 taxonomy into Cursor skills. Cline and Antigravity remain gated.",
+      "trigger_predicate": {
+        "type": "file_contains",
+        "path": "design/handoffs/2026-06-28_workflow_os_slice0_handoff.md",
+        "needle": "Slice 0 (kernel-slim) SHIPPED"
+      },
+      "action": "Plan and implement the verified-high Cursor sync target only; keep Cline and Antigravity gated."
+    },
+    {
+      "id": "cline-antigravity-live-verify",
+      "title": "Cline and Antigravity live-install verification",
+      "plane": "cross-platform",
+      "risk_class": "R1",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Requires a live installed platform surface; third-party path docs are not enough."
+      },
+      "action": "Verify paths against live installs before writing any sync target."
+    },
+    {
+      "id": "impeccable-layer",
+      "title": "Impeccable layer",
+      "plane": "design",
+      "risk_class": "R1",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Trigger when a real GUI or web build starts."
+      },
+      "action": "Evaluate as a gated product-UI layer without firing on TSU cockpit live-data files."
+    },
+    {
+      "id": "headroom-rtk-benchmark",
+      "title": "Headroom and RTK benchmark",
+      "plane": "token",
+      "risk_class": "R1",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "file_exists",
+        "path": "design/baselines/workflow_os_b0_mixed_sessions.json"
+      },
+      "action": "Benchmark only after the section 9 B0 mixed-session baseline exists. The A1 kernel baseline alone is not enough."
+    },
+    {
+      "id": "deer-flow-after-paper-week",
+      "title": "deer-flow research layer",
+      "plane": "research",
+      "risk_class": "R2",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Trigger only when LAB research outgrows existing deep-research/fusion and PAPER WEEK has shipped."
+      },
+      "action": "Create a separate TsignalLAB advisory-only plan."
+    },
+    {
+      "id": "autoresearch-gpu-host",
+      "title": "autoresearch overnight GPU ratchet",
+      "plane": "research",
+      "risk_class": "R2",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Trigger when an overnight GPU host exists and PAPER WEEK has shipped."
+      },
+      "action": "Create a separate TsignalLAB candidate-store plan."
+    },
+    {
+      "id": "capability-registry-generated",
+      "title": "Generated capability registry and status surface",
+      "plane": "memory",
+      "risk_class": "R1",
+      "status": "deferred",
+      "trigger_predicate": {
+        "type": "manual",
+        "reason": "Build only after at least three gated tools pass their section 9 gates."
+      },
+      "action": "Generate registry from skill directories; do not hand-edit it as source of truth."
+    }
+  ]
+}

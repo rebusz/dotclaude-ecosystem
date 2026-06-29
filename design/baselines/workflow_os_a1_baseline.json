@@ -1,0 +1,50 @@
+{
+  "files": {
+    "claude_global": {
+      "bytes": 15005,
+      "exists": true,
+      "lines": 153,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.claude\\CLAUDE.md",
+      "sha256": "849e62d54169bd47b77a12aff957e9ef2d1a2d3b8e85c147ac7e9c6068872cb4"
+    },
+    "codex_global": {
+      "bytes": 17122,
+      "exists": true,
+      "lines": 161,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.codex\\AGENTS.md",
+      "sha256": "6bb56c5a5eb328306a718d25228a48ec44379f0454f941b5725da33fd79fb226"
+    }
+  },
+  "generated_at": "2026-06-29T04:06:49+00:00",
+  "method": "A1",
+  "notes": "A1 baseline after Slice 0 kernel-slim; PR #141 gate is merged",
+  "repo_root": "D:\\dotclaude\\dotclaude-ecosystem",
+  "schema_version": 1,
+  "sync_check": {
+    "command": [
+      "C:\\Python314\\python.exe",
+      "D:\\dotclaude\\dotclaude-ecosystem\\scripts\\sync_agent_rules.py",
+      "--check",
+      "--quiet"
+    ],
+    "ok": true,
+    "returncode": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "usage": null
+}
