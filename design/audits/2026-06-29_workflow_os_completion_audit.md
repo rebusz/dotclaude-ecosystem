@@ -20,6 +20,9 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `claude_global`, `codex_global`, `cline_global`, `antigravity_global`: `kernel_ok=true`
   - `sync_check.ok=true`
   - zero drift against A1 baseline
+- `python scripts/session_cost_probe.py b0-status --baseline design/baselines/workflow_os_b0_mixed_sessions.json`
+  - expected current status: `ready=false`
+  - fail-closed until the measured B0 baseline exists with exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`
 - `python scripts/write_segregation_manifest.py validate design/security/write_segregation_path_manifest.json`
   - `entry_count=24`
   - repos: `D:/APPS/TSU`, `D:/APPS/Tsignal 5.0`
