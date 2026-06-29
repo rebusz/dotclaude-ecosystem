@@ -86,7 +86,7 @@ The purpose is to identify candidate path classes for a later dry-run ACL plan. 
 
 1. Re-run this inventory from a quiesced state; both trading repos are currently dirty.
 2. Resolve graph drift for Tsignal 5.0 or rely on a fresh targeted file scan; the current graph warns branch mismatch.
-3. Produce a machine-readable path manifest with explicit path globs, owner, class, reason, and rollback expectation.
+3. Review the first machine-readable path manifest at `design/security/write_segregation_path_manifest.json`; refresh it from quiesced repo truth before any dry-run ACL command generation.
 4. Split `data/bridge/**` by producer ownership before denying writes; bridge directories are mixed advisory/live surfaces.
 5. Confirm the exact Windows identity or launcher profile that represents coding/advisory agents.
 6. Generate dry-run ACL apply and rollback commands only after the path manifest is reviewed.

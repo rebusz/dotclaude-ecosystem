@@ -1,0 +1,226 @@
+{
+  "applies_acl": false,
+  "generated_at": "2026-06-29",
+  "inventory_source": "design/audits/2026-06-29_mechanical_write_segregation_inventory.md",
+  "kind": "mechanical_write_segregation_path_manifest",
+  "notes": "R1 machine-readable manifest only. Do not apply permissions from this file. Refresh from quiesced TSU/Tsignal repo truth before any dry-run ACL command generation.",
+  "schema_version": 1,
+  "entries": [
+    {
+      "class": "operator-only",
+      "id": "tsu-env",
+      "owner": "TSU operator",
+      "path_glob": ".env",
+      "reason": "Credential and runtime environment material.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore the previous inherited ACL."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsu-live-state-db",
+      "owner": "TSU live brain",
+      "path_glob": "data/live_state*.db*",
+      "reason": "SQLite/WAL live state; cloud/network is never the live path.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore live-brain write access only."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsu-journals",
+      "owner": "TSU journal writer",
+      "path_glob": "data/journal*/**",
+      "reason": "Journal destinations are single-writer runtime evidence.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous journal writer permissions."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsu-interlocks",
+      "owner": "TSU live brain",
+      "path_glob": "data/interlock/**",
+      "reason": "Account and ProjectX interlock lock files.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore prior interlock ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-broker-code",
+      "owner": "TSU operator",
+      "path_glob": "src/tsu/broker/**",
+      "reason": "Broker adapters, ownership, custody, fake/live ports, ProjectX, and IBKR surfaces.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-approval-code",
+      "owner": "TSU operator",
+      "path_glob": "src/tsu/approve/**",
+      "reason": "Approval envelope, inbox, and applier authority.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-core-runtime-authority",
+      "owner": "TSU operator",
+      "path_glob": "src/tsu/core/{journal.py,live_state.py,manifest.py}",
+      "reason": "Journal writer, live state, and manifest authority.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-supervisor",
+      "owner": "TSU operator",
+      "path_glob": "src/tsu/supervisor/**",
+      "reason": "Supervisor process, lock, and health handling.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-decision-path-code",
+      "owner": "TSU operator",
+      "path_glob": "src/tsu/{interlock,lanes,risk,strategy}/**",
+      "reason": "Interlock, lane runtime, risk, and strategy modules are live-decision-path adjacent.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsu-gui-broker-config-controls",
+      "owner": "TSU operator",
+      "path_glob": "tsu-gui/src/components/*{Broker,ConfigWrite}*",
+      "reason": "GUI controls that can affect broker session or config-write routes.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous GUI source ACL."
+    },
+    {
+      "class": "write-allowed-for-agents",
+      "id": "tsu-design-docs",
+      "owner": "TSU planning workflow",
+      "path_glob": "design/**",
+      "reason": "Planning, audit, and handoff docs are allowed unless a specific plan marks them frozen.",
+      "repo": "D:/APPS/TSU",
+      "rollback_expectation": "No ACL generated in this slice; later rollback should preserve normal repo write behavior."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-env-and-account",
+      "owner": "Tsignal operator",
+      "path_glob": "{.env,active_accounts.json}",
+      "reason": "Credential, runtime environment, and active account material.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous inherited ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-config",
+      "owner": "Tsignal operator",
+      "path_glob": "config/**",
+      "reason": "Runtime and broker configuration; requires finer split before ACL generation.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous config ACL."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsignal-live-db",
+      "owner": "Tsignal live brain",
+      "path_glob": "data/*.db*",
+      "reason": "SQLite/WAL state including Tsignal, OpusF, Questrade, basket, and router stores.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore live runtime write access."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsignal-interlocks",
+      "owner": "Tsignal live brain",
+      "path_glob": "data/interlock/**",
+      "reason": "Account interlock locks.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore prior interlock ACL."
+    },
+    {
+      "class": "live-brain-only",
+      "id": "tsignal-live-bridge",
+      "owner": "Tsignal live brain",
+      "path_glob": "data/bridge/{executor,tsignal,questrade}/**",
+      "reason": "Executor diagnostics, lineage, lifecycle state, Tsignal-owned bridge outputs, and broker-adjacent bridge surfaces.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore producer write access only."
+    },
+    {
+      "class": "read-only-for-agents",
+      "id": "tsignal-watchf-bridge",
+      "owner": "WatchF producer",
+      "path_glob": "data/bridge/watchf/**",
+      "reason": "Advisory WatchF snapshots should be readable for audits, but generic coding agents should not write producer outputs.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore WatchF producer write access."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-entrypoints",
+      "owner": "Tsignal operator",
+      "path_glob": "{tsignal_bot.py,tsignal_headless.py,tsignal_webhook_handler.py,tsignal_order_panel.py,tsignal_settings.py}",
+      "reason": "Main app, headless runtime, webhook intake, order panel, and settings entrypoints.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous root-file ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-trading-code",
+      "owner": "Tsignal operator",
+      "path_glob": "tsignal/trading/**",
+      "reason": "Broker, order, risk, position, and pure-signal execution modules.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-feed-auth",
+      "owner": "Tsignal operator",
+      "path_glob": "tsignal/feed/questrade_*",
+      "reason": "Broker feed and auth paths.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-runtime-interlock-code",
+      "owner": "Tsignal operator",
+      "path_glob": "tsignal/{runtime,interlock}/**",
+      "reason": "Runtime control/state and interlock code.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous source-tree ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-order-gui",
+      "owner": "Tsignal operator",
+      "path_glob": "tsignal-gui/src/app/{components/order-entry*,panels/qt-rapid/*Order*}",
+      "reason": "Order entry, order confirmation, and order table UI.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous GUI source ACL."
+    },
+    {
+      "class": "operator-only",
+      "id": "tsignal-heavy-live-assets",
+      "owner": "Tsignal operator",
+      "path_glob": "{data/**,AI/**,scratch/bench/models/**}",
+      "reason": "Junction-backed heavy assets include live DB, llama.cpp binaries, and GGUF models.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback must restore previous asset ACL."
+    },
+    {
+      "class": "write-allowed-for-agents",
+      "id": "tsignal-design-docs",
+      "owner": "Tsignal planning workflow",
+      "path_glob": "design/**",
+      "reason": "Planning and audit docs are valid write targets unless operator WIP or a plan freezes them.",
+      "repo": "D:/APPS/Tsignal 5.0",
+      "rollback_expectation": "No ACL generated in this slice; later rollback should preserve normal repo write behavior."
+    }
+  ]
+}
