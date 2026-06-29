@@ -23,6 +23,9 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 - `python scripts/session_cost_probe.py b0-status --baseline design/baselines/workflow_os_b0_mixed_sessions.json`
   - expected current status: `ready=false`
   - fail-closed until the measured B0 baseline exists with exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`
+- `python scripts/workflow_os_completion.py`
+  - expected current status: `ready=false`
+  - fail-closed until B0, Section 3.7, and revisit/manual gates are all proven complete or explicitly closed
 - `python scripts/write_segregation_manifest.py validate design/security/write_segregation_path_manifest.json`
   - `entry_count=24`
   - repos: `D:/APPS/TSU`, `D:/APPS/Tsignal 5.0`
@@ -70,6 +73,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 
 ## Do Not Mark Complete Until
 
+- `python scripts/workflow_os_completion.py` exits 0 with `ready=true`.
 - `design/baselines/workflow_os_b0_mixed_sessions.json` exists from measured sessions with explicit `/cost`, and Headroom/RTK benchmark status has been resolved.
 - Section 3.7 is either explicitly closed as plan-only by the operator or advanced through its R2/R3 approval chain with validated dry-run/apply/rollback evidence.
 - Manual deferred slices have either fired and been handled, or the operator explicitly declares them out of scope for this plan.
