@@ -143,6 +143,16 @@ class TestRenderAndSync(unittest.TestCase):
         self.assertEqual(by_name["cline-global"].path.name, "agent-rules.md")
         self.assertIn(Path("overlays/cline-global.md"), by_name["cline-global"].sources)
 
+    def test_global_targets_include_antigravity_rules(self):
+        specs = sar.target_specs(Path("rules"), None)
+        by_name = {spec.name: spec for spec in specs}
+        self.assertIn("antigravity-global", by_name)
+        self.assertEqual(by_name["antigravity-global"].path.name, "GEMINI.md")
+        self.assertIn(
+            Path("overlays/antigravity-global.md"),
+            by_name["antigravity-global"].sources,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

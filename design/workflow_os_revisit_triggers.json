@@ -46,15 +46,16 @@
     },
     {
       "id": "antigravity-live-verify",
-      "title": "Antigravity live-install verification",
+      "title": "Antigravity live-install verification and global sync",
       "plane": "cross-platform",
       "risk_class": "R1",
-      "status": "deferred",
+      "status": "completed",
+      "completion_note": "Verified official/local Antigravity surfaces enough for global text rules, added managed antigravity-global sync target at C:/Users/dszub/.gemini/GEMINI.md, and refreshed A1 baseline so session_cost_probe reports antigravity_global.kernel_ok=true with zero drift. MCP/hooks remain unwritten.",
       "trigger_predicate": {
         "type": "manual",
-        "reason": "Antigravity is installed, but local resources did not prove GEMINI.md, AGENTS.md, .agents/hooks.json, mcp_config.json, or serverUrl path/schema."
+        "reason": "Completed by official-doc and local filesystem readback on 2026-06-29."
       },
-      "action": "Verify exact Antigravity project rules, skills, hooks, and MCP paths against the running app or official local docs before writing any sync target."
+      "action": "No further Antigravity global text sync action pending; MCP/hooks require a later explicit slice."
     },
     {
       "id": "impeccable-layer",
