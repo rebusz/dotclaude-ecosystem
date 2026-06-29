@@ -22,6 +22,18 @@ REQUIRED_KERNEL_NEEDLES = (
     "Risk Classes",
     "Plan Lifecycle Hooks",
 )
+REQUIRED_B0_SESSION_IDS = (
+    "read_heavy_audit",
+    "multi_file_edit",
+    "research_plan",
+)
+REQUIRED_B0_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cost_usd",
+    "startup_context_tokens",
+)
 
 
 def _now() -> str:
@@ -84,6 +96,120 @@ def load_usage(path: Path | None) -> dict[str, Any] | None:
     return {k: data[k] for k in sorted(allowed) if k in data}
 
 
+def _require_non_negative_number(data: dict[str, Any], key: str, source: Path) -> int | float:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{source}: missing numeric usage field `{key}`")
+    if value < 0:
+        raise ValueError(f"{source}: usage field `{key}` must be non-negative")
+    return value
+
+
+def _require_non_empty_text(data: dict[str, Any], key: str, source: Path) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{source}: missing non-empty `{key}`")
+    return value.strip()
+
+
+def load_b0_session(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: session JSON must be an object")
+    session_id = _require_non_empty_text(data, "id", path)
+    if session_id not in REQUIRED_B0_SESSION_IDS:
+        expected = ", ".join(REQUIRED_B0_SESSION_IDS)
+        raise ValueError(f"{path}: unexpected B0 session id `{session_id}`; expected one of: {expected}")
+
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        raise ValueError(f"{path}: missing object `usage`")
+    normalized_usage: dict[str, int | float] = {
+        key: _require_non_negative_number(usage, key, path) for key in REQUIRED_B0_USAGE_FIELDS
+    }
+    normalized_usage["cache_creation_input_tokens"] = _require_non_negative_number(
+        usage, "cache_creation_input_tokens", path
+    ) if "cache_creation_input_tokens" in usage else 0
+    normalized_usage["total_tokens"] = (
+        normalized_usage["input_tokens"]
+        + normalized_usage["output_tokens"]
+        + normalized_usage["cache_creation_input_tokens"]
+        + normalized_usage["cache_read_input_tokens"]
+    )
+
+    quality = data.get("quality_baseline")
+    if not isinstance(quality, dict):
+        raise ValueError(f"{path}: missing object `quality_baseline`")
+    quality_summary = _require_non_empty_text(quality, "summary", path)
+    validation_commands = quality.get("validation_commands")
+    if not isinstance(validation_commands, list) or not validation_commands:
+        raise ValueError(f"{path}: `quality_baseline.validation_commands` must be a non-empty list")
+    if not all(isinstance(item, str) and item.strip() for item in validation_commands):
+        raise ValueError(f"{path}: every validation command must be non-empty text")
+    expected_artifacts = quality.get("expected_artifacts", [])
+    if not isinstance(expected_artifacts, list):
+        raise ValueError(f"{path}: `quality_baseline.expected_artifacts` must be a list when present")
+    if not all(isinstance(item, str) and item.strip() for item in expected_artifacts):
+        raise ValueError(f"{path}: every expected artifact must be non-empty text")
+
+    return {
+        "id": session_id,
+        "label": data.get("label") or session_id.replace("_", " "),
+        "source": str(path),
+        "usage": normalized_usage,
+        "quality_baseline": {
+            "summary": quality_summary,
+            "validation_commands": validation_commands,
+            "expected_artifacts": expected_artifacts,
+        },
+    }
+
+
+def summarize_b0_sessions(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "startup_context_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+    }
+    for session in sessions:
+        usage = session["usage"]
+        for key in totals:
+            totals[key] += usage[key]
+    count = len(sessions)
+    averages = {key: totals[key] / count for key in totals}
+    return {"session_count": count, "totals": totals, "averages": averages}
+
+
+def build_b0_baseline(args: argparse.Namespace) -> dict[str, Any]:
+    sessions = [load_b0_session(path) for path in args.session_json]
+    seen = {session["id"] for session in sessions}
+    required = set(REQUIRED_B0_SESSION_IDS)
+    if len(sessions) != len(seen):
+        raise ValueError("B0 baseline requires unique session ids")
+    if seen != required:
+        missing = ", ".join(sorted(required - seen)) or "none"
+        extra = ", ".join(sorted(seen - required)) or "none"
+        raise ValueError(f"B0 baseline requires exactly {', '.join(REQUIRED_B0_SESSION_IDS)}; missing={missing}; extra={extra}")
+
+    sessions = sorted(sessions, key=lambda item: REQUIRED_B0_SESSION_IDS.index(item["id"]))
+    data = build_probe(args)
+    data["method"] = "B0"
+    data["mixed_session_baseline"] = {
+        "required_session_ids": list(REQUIRED_B0_SESSION_IDS),
+        "summary": summarize_b0_sessions(sessions),
+        "sessions": sessions,
+        "quality_gate": (
+            "A proxy can only pass if these same session classes produce functionally "
+            "equivalent artifacts and validation gates still pass."
+        ),
+    }
+    return data
+
+
 def build_probe(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = args.repo_root.resolve()
     claude_file = args.claude_file or (Path.home() / ".claude" / "CLAUDE.md")
@@ -111,6 +237,17 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 def cmd_baseline(args: argparse.Namespace) -> int:
     data = build_probe(args)
+    write_json(args.output, data)
+    print(f"wrote {args.output}")
+    return 0
+
+
+def cmd_mixed_baseline(args: argparse.Namespace) -> int:
+    try:
+        data = build_b0_baseline(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     write_json(args.output, data)
     print(f"wrote {args.output}")
     return 0
@@ -176,6 +313,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common(b)
     b.add_argument("--output", type=Path, required=True)
 
+    mb = sub.add_parser("mixed-baseline", help="Write a B0 mixed-session baseline from three measured session JSON files")
+    add_common(mb)
+    mb.set_defaults(method="B0")
+    mb.add_argument("--output", type=Path, required=True)
+    mb.add_argument(
+        "--session-json",
+        type=Path,
+        action="append",
+        required=True,
+        help="Measured B0 session JSON. Provide exactly one for each required session id.",
+    )
+
     c = sub.add_parser("check", help="Compare current probe to a baseline")
     add_common(c)
     c.add_argument("--baseline", type=Path, required=True)
@@ -188,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     if args.cmd == "baseline":
         return cmd_baseline(args)
+    if args.cmd == "mixed-baseline":
+        return cmd_mixed_baseline(args)
     if args.cmd == "check":
         return cmd_check(args)
     raise AssertionError(args.cmd)
