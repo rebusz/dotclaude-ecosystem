@@ -10,6 +10,8 @@ The full Workflow OS plan is not complete.
 
 The implemented scope is landed through `main` and validated, but several plan requirements are intentionally gated by external data or operator approval. This audit prevents accidental scope shrinkage: completed slices stay closed, and the remaining gates stay explicit.
 
+Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_gate_packet.md`.
+
 ## Current Repo Readback
 
 - `dotclaude-ecosystem`: pre-audit baseline was `main == origin/main` at `ec239d5`.
