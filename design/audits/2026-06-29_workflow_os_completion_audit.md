@@ -6,9 +6,9 @@ Parent plan: `design/plans/2026-06-27_global_agent_workflow_os.md`
 
 ## Verdict
 
-The full Workflow OS plan is not complete.
+The current Workflow OS shipped scope is complete.
 
-The implemented scope is landed through `main` and validated, but several plan requirements are intentionally gated by external data or operator approval. This audit prevents accidental scope shrinkage: completed slices stay closed, and the remaining gates stay explicit.
+The operator closed B0/Headroom, Section 3.7 apply, and manual trigger lanes as future gated work on 2026-06-29. This is a scope-close decision, not evidence that `/cost` values, ACL application, or future GUI/research/capability-registry work were performed.
 
 Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_gate_packet.md`.
 
@@ -21,11 +21,11 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `sync_check.ok=true`
   - zero drift against A1 baseline
 - `python scripts/session_cost_probe.py b0-status --baseline design/baselines/workflow_os_b0_mixed_sessions.json`
-  - expected current status: `ready=false`
-  - fail-closed until the measured B0 baseline exists with exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`
+  - expected standalone status: `ready=false`
+  - B0 is closed only through `design/decisions/2026-06-29_workflow_os_shipped_scope_close.json` as future gated work
 - `python scripts/workflow_os_completion.py`
-  - expected current status: `ready=false`
-  - fail-closed until B0, Section 3.7, and revisit/manual gates are all proven complete or explicitly closed
+  - expected current status: `ready=true`
+  - fail-closed unless B0, Section 3.7, and revisit/manual gates are all proven complete or explicitly closed
 - `python scripts/write_segregation_manifest.py validate design/security/write_segregation_path_manifest.json`
   - `entry_count=24`
   - repos: `D:/APPS/TSU`, `D:/APPS/Tsignal 5.0`
@@ -37,8 +37,9 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - review-only candidate, not an operator-approved apply plan
 - `python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json`
   - `completed=4`
-  - `deferred=1`
-  - `manual=4`
+  - `killed=5`
+  - `deferred=0`
+  - `manual=0`
   - `triggered=0`
   - `blocked=0`
 
@@ -56,24 +57,23 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 | Cursor platform wiring | Complete | trigger board marks `cursor-platform-wiring` completed | None for current verified-high surface |
 | Cline global sync | Complete | `design/handoffs/2026-06-29_cline_global_sync.md`; A1 check shows `cline_global.kernel_ok=true` | Repo-local Cline propagation is a later explicit per-repo sync slice |
 | Antigravity global sync | Complete | `design/handoffs/2026-06-29_antigravity_global_sync.md`; A1 check shows `antigravity_global.kernel_ok=true` | MCP/hooks remain unwritten later slice |
-| B0 mixed-session baseline | Incomplete / external data gate | `design/handoffs/2026-06-29_workflow_os_b0_capture_contract.md`; `design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md`; trigger board keeps Headroom/RTK deferred | Pick 3 sessions and provide exact `/cost` for `read_heavy_audit`, `multi_file_edit`, `research_plan`; then generate `design/baselines/workflow_os_b0_mixed_sessions.json` |
-| Headroom/RTK benchmark | Deferred | trigger board reason: missing `design/baselines/workflow_os_b0_mixed_sessions.json` | B0 mixed-session baseline must exist and pass review |
-| Capability registry live file/status surface | Deferred by design | Plan section 10 and CEO amendment: do not build live registry until at least 3 gated tools pass section 9 | Needs >=3 gated tools to pass section 9, then generated registry only |
-| Impeccable layer | Manual trigger | trigger board marks `impeccable-layer` manual | Start a real GUI/web build; evaluate against `tsu-dashboard-taste` boundary |
-| deer-flow research layer | Manual/R2 trigger | trigger board marks `deer-flow-after-paper-week` manual | PAPER WEEK shipped and LAB research outgrows `/deep-research` + `/fusion`; create separate TsignalLAB advisory-only plan |
-| autoresearch GPU host | Manual/R2 trigger | trigger board marks `autoresearch-gpu-host` manual | PAPER WEEK shipped and overnight GPU host exists; create separate TsignalLAB candidate-store plan |
-| Section 3.7 write-segregation plan | Advanced, not applied | `design/plans/2026-06-29_mechanical_write_segregation_safety.md`; `design/audits/2026-06-29_mechanical_write_segregation_inventory.md`; `design/security/write_segregation_path_manifest.json`; `design/security/2026-06-29_observed_codex_identity_acl_dry_run.json`; `scripts/write_segregation_manifest.py` | Real write-deny still needs operator confirmation that `pc-tsignal-flow\dszub` is the intended agent identity, quiesced TSU/Tsignal repo truth, dry-run review, then explicit R2/R3 operator GO before any apply |
+| B0 mixed-session baseline | Closed out of shipped scope | `design/decisions/2026-06-29_workflow_os_shipped_scope_close.json`; `design/handoffs/2026-06-29_workflow_os_b0_capture_contract.md`; `design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md` | Future gated work: pick 3 sessions and provide exact `/cost` for `read_heavy_audit`, `multi_file_edit`, `research_plan` before any Headroom/RTK benchmark |
+| Headroom/RTK benchmark | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope; `scripts/session_cost_probe.py b0-status` remains fail-closed without B0 | Future gated work after explicit B0 `/cost` collection |
+| Capability registry live file/status surface | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after >=3 gated tools pass section 9, generated only |
+| Impeccable layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work when a real GUI/web build starts |
+| deer-flow research layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after PAPER WEEK and LAB research trigger |
+| autoresearch GPU host | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after PAPER WEEK and overnight GPU host availability |
+| Section 3.7 write-segregation plan | Closed plan-only for shipped scope | `design/security/workflow_os_37_operator_decision.json`; `design/plans/2026-06-29_mechanical_write_segregation_safety.md`; `design/audits/2026-06-29_mechanical_write_segregation_inventory.md`; `design/security/write_segregation_path_manifest.json`; `design/security/2026-06-29_observed_codex_identity_acl_dry_run.json`; `scripts/write_segregation_manifest.py` | Future R2/R3 apply requires quiesced TSU/Tsignal repo truth, dry-run review, rollback review, and explicit apply GO |
 | No trading repo/order-path writes from Workflow OS | Preserved | Work landed only in `dotclaude-ecosystem`; TSU/Tsignal dirty states are pre-existing operator/other-agent work | Continue preserving boundary |
 
-## Remaining Gates In Order
+## Future Gated Work
 
 1. **B0 external cost collection:** choose three representative TSU JSONL sessions and provide exact `/cost` values. This is the only way to unblock Headroom/RTK without inventing prices.
-2. **Section 3.7 identity decision:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
+2. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
 3. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
 
-## Do Not Mark Complete Until
+## Completion Gate
 
 - `python scripts/workflow_os_completion.py` exits 0 with `ready=true`.
-- `design/baselines/workflow_os_b0_mixed_sessions.json` exists from measured sessions with explicit `/cost`, and Headroom/RTK benchmark status has been resolved.
-- Section 3.7 is either explicitly closed as plan-only by the operator or advanced through its R2/R3 approval chain with validated dry-run/apply/rollback evidence.
-- Manual deferred slices have either fired and been handled, or the operator explicitly declares them out of scope for this plan.
+- Current proof is by scope-close decision, not by B0 `/cost`, ACL apply, or manual trigger execution.
+- Future gated work remains separately recoverable from the decision, trigger board, and operator gate packet.

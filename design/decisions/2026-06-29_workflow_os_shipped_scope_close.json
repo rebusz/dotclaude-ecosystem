@@ -1,0 +1,16 @@
+{
+  "evidence": [
+    "Operator decision on 2026-06-29: close current Workflow OS as shipped scope; B0/Headroom, Section 3.7 apply, and manual triggers become future gated work.",
+    "Completion audit preserves future gates instead of treating absent /cost values or unapplied ACLs as complete.",
+    "scripts/workflow_os_completion.py verifies this scope-close artifact before allowing ready=true without a B0 baseline."
+  ],
+  "future_gated_work": [
+    "b0_headroom_rtk",
+    "section37_apply",
+    "manual_triggers"
+  ],
+  "kind": "workflow_os_shipped_scope_close",
+  "operator_decision": true,
+  "schema_version": 1,
+  "status": "closed_as_future_gated_work"
+}

@@ -53,6 +53,26 @@ def _complete_b0(path: Path) -> None:
     )
 
 
+def _scope_close(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "workflow_os_shipped_scope_close",
+                "status": "closed_as_future_gated_work",
+                "operator_decision": True,
+                "future_gated_work": [
+                    "b0_headroom_rtk",
+                    "section37_apply",
+                    "manual_triggers",
+                ],
+                "evidence": ["operator chose to close the current Workflow OS as shipped scope"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class TestWorkflowOSCompletion(unittest.TestCase):
     def test_completion_fails_closed_when_required_artifacts_are_missing(self):
         with tempfile.TemporaryDirectory() as d:
@@ -80,6 +100,7 @@ class TestWorkflowOSCompletion(unittest.TestCase):
             status = completion.build_completion_status(
                 argparse.Namespace(
                     b0_baseline=root / "missing-b0.json",
+                    scope_decision=root / "missing-scope.json",
                     trigger_file=triggers,
                     section37_decision=root / "missing-section37.json",
                 )
@@ -87,6 +108,7 @@ class TestWorkflowOSCompletion(unittest.TestCase):
 
             self.assertFalse(status["ready"])
             self.assertFalse(status["b0"]["ready"])
+            self.assertFalse(status["scope_decision"]["ready"])
             self.assertFalse(status["section37"]["ready"])
             self.assertFalse(status["triggers"]["ready"])
 
@@ -95,6 +117,8 @@ class TestWorkflowOSCompletion(unittest.TestCase):
             root = Path(d)
             b0 = root / "b0.json"
             _complete_b0(b0)
+            scope = root / "scope.json"
+            _scope_close(scope)
             section37 = root / "section37.json"
             section37.write_text(
                 json.dumps(
@@ -132,6 +156,7 @@ class TestWorkflowOSCompletion(unittest.TestCase):
             status = completion.build_completion_status(
                 argparse.Namespace(
                     b0_baseline=b0,
+                    scope_decision=scope,
                     trigger_file=triggers,
                     section37_decision=section37,
                 )
@@ -139,8 +164,23 @@ class TestWorkflowOSCompletion(unittest.TestCase):
 
             self.assertTrue(status["ready"])
             self.assertTrue(status["b0"]["ready"])
+            self.assertTrue(status["scope_decision"]["ready"])
             self.assertTrue(status["section37"]["ready"])
             self.assertTrue(status["triggers"]["ready"])
+
+    def test_b0_can_be_closed_as_future_gated_work_by_operator_decision(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            scope = root / "scope.json"
+            _scope_close(scope)
+
+            scope_status = completion.check_scope_decision(scope)
+            b0_status = completion.check_b0(root / "missing-b0.json", scope_status)
+
+            self.assertTrue(b0_status["ready"])
+            self.assertTrue(b0_status["closed_as_future_gated_work"])
+            self.assertEqual(b0_status["errors"], [])
+            self.assertIn("missing baseline artifact", b0_status["deferred_errors"][0])
 
     def test_triggered_but_unhandled_items_are_not_complete(self):
         with tempfile.TemporaryDirectory() as d:
