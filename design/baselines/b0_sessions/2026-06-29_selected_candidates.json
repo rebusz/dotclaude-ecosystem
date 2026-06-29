@@ -1,7 +1,8 @@
 {
   "kind": "workflow_os_b0_selected_session_candidates",
   "schema_version": 1,
-  "selection_note": "Selected from local Claude JSONL metadata without prompt-content export. cost_usd remains null until exact Claude /cost readback is supplied.",
+  "cost_readback_artifact": "design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json",
+  "selection_note": "Selected from local Claude JSONL metadata without prompt-content export. cost_usd was recovered from local Claude Stop hook footer `$... sess` readbacks; startup_context_tokens remains required before a mixed B0 baseline can be generated.",
   "sessions": [
     {
       "filename": "f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
@@ -122,7 +123,7 @@
       "usage": {
         "cache_creation_input_tokens": 3290497,
         "cache_read_input_tokens": 36881796,
-        "cost_usd": null,
+        "cost_usd": 36.78,
         "input_tokens": 86482,
         "output_tokens": 874505,
         "total_tokens": 41133280
@@ -267,7 +268,7 @@
       "usage": {
         "cache_creation_input_tokens": 8450745,
         "cache_read_input_tokens": 75841719,
-        "cost_usd": null,
+        "cost_usd": 69.18,
         "input_tokens": 100658,
         "output_tokens": 962177,
         "total_tokens": 85355299
@@ -408,12 +409,12 @@
       "usage": {
         "cache_creation_input_tokens": 24423317,
         "cache_read_input_tokens": 140265784,
-        "cost_usd": null,
+        "cost_usd": 154.78,
         "input_tokens": 147295,
         "output_tokens": 1377761,
         "total_tokens": 166214157
       }
     }
   ],
-  "status": "cost_required"
+  "status": "startup_context_required"
 }

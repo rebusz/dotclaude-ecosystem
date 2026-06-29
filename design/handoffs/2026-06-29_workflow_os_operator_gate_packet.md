@@ -16,12 +16,15 @@ Blocked artifact:
 design/baselines/workflow_os_b0_mixed_sessions.json
 ```
 
-Required operator inputs:
+Completed inputs:
 
-- Choose exactly one session for `read_heavy_audit`.
-- Choose exactly one session for `multi_file_edit`.
-- Choose exactly one session for `research_plan`.
-- For each chosen session, provide exact Claude `/cost` readback.
+- Chosen session for `read_heavy_audit`: `f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl`.
+- Chosen session for `multi_file_edit`: `5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl`.
+- Chosen session for `research_plan`: `e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl`.
+- Exact Claude Stop hook `$... sess` cost readbacks recovered locally: `$36.78`, `$69.18`, `$154.78`.
+
+Remaining operator input:
+
 - Provide or confirm `startup_context_tokens` for the fresh-context probe used with those sessions.
 
 Candidate inventory:
@@ -36,7 +39,13 @@ Selected candidate packet:
 design/handoffs/2026-06-29_workflow_os_b0_selected_sessions.md
 ```
 
-Generate one measured session JSON after a `/cost` value is known:
+Cost readback artifact:
+
+```text
+design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json
+```
+
+Generate one measured session JSON after `startup_context_tokens` is known:
 
 ```powershell
 python scripts/session_cost_probe.py jsonl-session `
