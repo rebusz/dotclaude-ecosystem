@@ -12,7 +12,7 @@ import sys
 _SCRIPTS = Path(__file__).parent.parent
 sys.path.insert(0, str(_SCRIPTS))
 
-import sync_agent_rules as sar
+import sync_agent_rules as sar  # noqa: E402
 
 
 class TestManagedBlockParser(unittest.TestCase):
@@ -97,6 +97,22 @@ class TestRenderAndSync(unittest.TestCase):
             self.assertTrue(first.changed)
             self.assertFalse(second.changed)
 
+    def test_write_creates_missing_parent_before_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "rules"
+            root.mkdir()
+            (root / "core.md").write_text("# Core\n", encoding="utf-8")
+            target = Path(d) / "missing-parent" / "target.md"
+            spec = sar.TargetSpec(
+                "test",
+                target,
+                (Path("core.md"),),
+                default_title="# Target",
+            )
+            result = sar.sync_target(spec, root, init=True, write=True, show_diff=False)
+            self.assertTrue(result.changed)
+            self.assertTrue(target.exists())
+
     def test_line_limit_enforced(self):
         spec = sar.TargetSpec("limited", Path("x"), tuple(), line_limit=1)
         with self.assertRaises(sar.SyncError):
@@ -119,6 +135,13 @@ class TestRenderAndSync(unittest.TestCase):
         self.assertIn("garmin-flow-codex", names)
         self.assertIn("ernie-ai-claude", names)
         self.assertNotIn("betf-codex", names)
+
+    def test_global_targets_include_cline_rules(self):
+        specs = sar.target_specs(Path("rules"), None)
+        by_name = {spec.name: spec for spec in specs}
+        self.assertIn("cline-global", by_name)
+        self.assertEqual(by_name["cline-global"].path.name, "agent-rules.md")
+        self.assertIn(Path("overlays/cline-global.md"), by_name["cline-global"].sources)
 
 
 if __name__ == "__main__":

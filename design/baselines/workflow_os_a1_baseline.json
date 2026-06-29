@@ -14,6 +14,20 @@
       "path": "C:\\Users\\dszub\\.claude\\CLAUDE.md",
       "sha256": "849e62d54169bd47b77a12aff957e9ef2d1a2d3b8e85c147ac7e9c6068872cb4"
     },
+    "cline_global": {
+      "bytes": 13268,
+      "exists": true,
+      "lines": 132,
+      "managed_block": true,
+      "needles": {
+        "Plan Lifecycle Hooks": true,
+        "Risk Classes": true,
+        "Token Budget Protocol": true
+      },
+      "ok": true,
+      "path": "C:\\Users\\dszub\\.clinerules\\agent-rules.md",
+      "sha256": "4dfd41fc22608f3c11f62cec8205c447a163df5f164f118aa31f6595a84a8cf4"
+    },
     "codex_global": {
       "bytes": 17122,
       "exists": true,
@@ -29,9 +43,9 @@
       "sha256": "6bb56c5a5eb328306a718d25228a48ec44379f0454f941b5725da33fd79fb226"
     }
   },
-  "generated_at": "2026-06-29T04:06:49+00:00",
+  "generated_at": "2026-06-29T04:44:52+00:00",
   "method": "A1",
-  "notes": "A1 baseline after Slice 0 kernel-slim; PR #141 gate is merged",
+  "notes": "A1 baseline refreshed after adding the managed Cline global .clinerules target.",
   "repo_root": "D:\\dotclaude\\dotclaude-ecosystem",
   "schema_version": 1,
   "sync_check": {
