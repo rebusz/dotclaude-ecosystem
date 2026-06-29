@@ -241,6 +241,54 @@ def parse_claude_jsonl_usage(path: Path) -> dict[str, Any]:
     }
 
 
+def build_jsonl_inventory(directory: Path, *, limit: int, min_usage_messages: int) -> dict[str, Any]:
+    if limit < 1:
+        raise ValueError("--limit must be at least 1")
+    if min_usage_messages < 0:
+        raise ValueError("--min-usage-messages must be non-negative")
+    if not directory.exists():
+        raise ValueError(f"{directory}: directory does not exist")
+    if not directory.is_dir():
+        raise ValueError(f"{directory}: not a directory")
+
+    sessions: list[dict[str, Any]] = []
+    for path in directory.glob("*.jsonl"):
+        summary = parse_claude_jsonl_usage(path)
+        if summary["usage_messages"] < min_usage_messages:
+            continue
+        sessions.append(
+            {
+                "jsonl": str(path),
+                "filename": path.name,
+                "bytes": path.stat().st_size,
+                "assistant_messages": summary["assistant_messages"],
+                "usage_messages": summary["usage_messages"],
+                "first_timestamp": summary["first_timestamp"],
+                "last_timestamp": summary["last_timestamp"],
+                "models": summary["models"],
+                "usage": summary["usage"],
+            }
+        )
+
+    sessions.sort(
+        key=lambda item: (
+            item["usage"]["total_tokens"],
+            item["usage_messages"],
+            item["bytes"],
+            item["filename"],
+        ),
+        reverse=True,
+    )
+    return {
+        "source_dir": str(directory),
+        "session_count": len(sessions),
+        "returned_count": min(len(sessions), limit),
+        "sort": "total_tokens_desc",
+        "redaction": "prompt_content_omitted",
+        "sessions": sessions[:limit],
+    }
+
+
 def build_b0_baseline(args: argparse.Namespace) -> dict[str, Any]:
     sessions = [load_b0_session(path) for path in args.session_json]
     seen = {session["id"] for session in sessions}
@@ -361,6 +409,22 @@ def cmd_jsonl_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jsonl_inventory(args: argparse.Namespace) -> int:
+    try:
+        data = build_jsonl_inventory(
+            args.dir,
+            limit=args.limit,
+            min_usage_messages=args.min_usage_messages,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    if args.output:
+        write_json(args.output, data)
+    print(json.dumps(data, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_jsonl_session(args: argparse.Namespace) -> int:
     try:
         data = build_b0_session_from_jsonl(args)
@@ -451,6 +515,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     js.add_argument("--jsonl", type=Path, required=True)
     js.add_argument("--output", type=Path)
 
+    ji = sub.add_parser("jsonl-inventory", help="List Claude JSONL usage candidates without reading prompt text")
+    ji.add_argument("--dir", type=Path, required=True)
+    ji.add_argument("--limit", type=int, default=20)
+    ji.add_argument("--min-usage-messages", type=int, default=1)
+    ji.add_argument("--output", type=Path)
+
     bs = sub.add_parser("jsonl-session", help="Build one measured B0 session JSON from Claude JSONL plus explicit /cost")
     bs.add_argument("--jsonl", type=Path, required=True)
     bs.add_argument("--output", type=Path, required=True)
@@ -478,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_mixed_baseline(args)
     if args.cmd == "jsonl-summary":
         return cmd_jsonl_summary(args)
+    if args.cmd == "jsonl-inventory":
+        return cmd_jsonl_inventory(args)
     if args.cmd == "jsonl-session":
         return cmd_jsonl_session(args)
     if args.cmd == "check":

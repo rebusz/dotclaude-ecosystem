@@ -262,6 +262,57 @@ class TestSessionCostProbe(unittest.TestCase):
             self.assertEqual(session["usage"]["cost_usd"], 0.12)
             self.assertEqual(session["usage"]["cache_read_input_tokens"], 7)
 
+    def test_build_jsonl_inventory_sorts_candidates_without_prompt_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            small = directory / "small.jsonl"
+            large = directory / "large.jsonl"
+            small.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-06-29T00:00:00Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "do not leak small"}],
+                            "usage": {
+                                "input_tokens": 1,
+                                "output_tokens": 1,
+                                "cache_creation_input_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            large.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-06-29T00:01:00Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "do not leak large"}],
+                            "usage": {
+                                "input_tokens": 10,
+                                "output_tokens": 5,
+                                "cache_creation_input_tokens": 0,
+                                "cache_read_input_tokens": 100,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            inventory = probe.build_jsonl_inventory(directory, limit=10, min_usage_messages=1)
+            self.assertEqual(inventory["redaction"], "prompt_content_omitted")
+            self.assertEqual(inventory["session_count"], 2)
+            self.assertEqual(inventory["sessions"][0]["filename"], "large.jsonl")
+            self.assertEqual(inventory["sessions"][0]["usage"]["total_tokens"], 115)
+            inventory_text = json.dumps(inventory)
+            self.assertNotIn("do not leak small", inventory_text)
+            self.assertNotIn("do not leak large", inventory_text)
+
 
 if __name__ == "__main__":
     unittest.main()

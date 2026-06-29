@@ -76,6 +76,14 @@ When that file exists and passes review, the existing workflow trigger can surfa
 
 Claude Code stores per-message usage records in project JSONL files. `session_cost_probe.py` can now extract token/cache/output counts from those logs without reading prompt text into the output.
 
+List candidate sessions by token volume:
+
+```powershell
+python scripts/session_cost_probe.py jsonl-inventory `
+  --dir "$env:USERPROFILE\.claude\projects\D--APPS-TSU" `
+  --limit 12
+```
+
 Inspect one candidate session:
 
 ```powershell
@@ -106,7 +114,7 @@ Latest local validation after adding the contract and JSONL extractor:
 
 ```text
 python -m pytest scripts\tests
-57 passed
+58 passed
 ```
 
 ## Boundaries
