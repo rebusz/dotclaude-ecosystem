@@ -74,6 +74,12 @@ Inventory-only slice has a first pass at `design/audits/2026-06-29_mechanical_wr
 
 It is read-only and intentionally does not apply ACL changes. It found both trading repos dirty and Tsignal 5.0 graph branch drift, so the next dry-run ACL plan must refresh the inventory from a quiesced state before emitting apply/rollback commands.
 
+The first machine-readable R1 path manifest is `design/security/write_segregation_path_manifest.json`; validate it with:
+
+```powershell
+python scripts/write_segregation_manifest.py validate design/security/write_segregation_path_manifest.json
+```
+
 ## Validation Contract
 
 Before any real permission change:
