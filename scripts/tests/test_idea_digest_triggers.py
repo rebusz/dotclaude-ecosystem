@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +44,18 @@ class TestWorkflowTriggers(unittest.TestCase):
             )
             self.assertEqual(status, "deferred")
             self.assertIn("missing file", reason)
+
+    def test_command_exit_zero_trigger_defers_on_nonzero(self):
+        with tempfile.TemporaryDirectory() as d:
+            status, reason = idea_digest.evaluate_trigger(
+                {
+                    "type": "command_exit_zero",
+                    "command": [sys.executable, "-c", "raise SystemExit(1)"],
+                },
+                Path(d),
+            )
+            self.assertEqual(status, "deferred")
+            self.assertIn("exit 1", reason)
 
 
 if __name__ == "__main__":
