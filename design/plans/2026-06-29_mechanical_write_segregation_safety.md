@@ -68,6 +68,12 @@ The implementation plan must map each path to one of:
 3. **Pilot write-deny (R2/R3):** apply to a disposable agent identity or test directory first.
 4. **Trading repo apply (R3):** operator GO, validated rollback, and proof that live runtime still starts while coding agents cannot write denied paths.
 
+### Inventory Readback
+
+Inventory-only slice has a first pass at `design/audits/2026-06-29_mechanical_write_segregation_inventory.md`.
+
+It is read-only and intentionally does not apply ACL changes. It found both trading repos dirty and Tsignal 5.0 graph branch drift, so the next dry-run ACL plan must refresh the inventory from a quiesced state before emitting apply/rollback commands.
+
 ## Validation Contract
 
 Before any real permission change:
