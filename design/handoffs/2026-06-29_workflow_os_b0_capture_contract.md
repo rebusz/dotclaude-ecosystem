@@ -108,6 +108,8 @@ The extractor intentionally does not estimate model prices. If `/cost` is unavai
 
 Observed local evidence: `C:\Users\dszub\.claude\projects\D--APPS-TSU\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl` contains 370 assistant usage records with token/cache/output counters. This proves the usage side is recoverable; it does not prove `cost_usd`.
 
+Candidate inventory for the local TSU JSONL corpus lives at `design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md`. It is intentionally not a baseline and does not choose the three B0 session classes.
+
 ## Validation
 
 Latest local validation after adding the contract and JSONL extractor:
