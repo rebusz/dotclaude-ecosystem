@@ -10,7 +10,9 @@ Usage:
 """
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -18,9 +20,9 @@ from pathlib import Path
 from _catalog_common import discover_repos, EXCLUSIONS, walk_repos, parse_yaml_block  # noqa: F401
 
 # Force UTF-8 output on Windows consoles
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stdin.encoding and sys.stdin.encoding.lower() != "utf-8":
+if hasattr(sys.stdin, "reconfigure") and sys.stdin.encoding and sys.stdin.encoding.lower() != "utf-8":
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 REPO_ALIASES = {
@@ -60,6 +62,8 @@ ITEM_RE = re.compile(r"^\s*-\s+(\[P[123]\](?:\[(?:S|M|L|XL)\])?)\s+(.+)$")
 PRIO_RE = re.compile(r"\[P([123])\]")
 CROSS_RE = re.compile(r"\[CROSS-REPO[^\]]*\]", re.IGNORECASE)
 VISION_TAG_RE = re.compile(r"\[VISION:\s*([a-z0-9-]+)\s*\]")
+REPO_TRIGGER_FILE = Path("D:/dotclaude/dotclaude-ecosystem/design/workflow_os_revisit_triggers.json")
+DEFAULT_TRIGGER_FILE = Path(__file__).resolve().parent.parent / "design" / "workflow_os_revisit_triggers.json"
 
 
 # ── READ ──────────────────────────────────────────────────────────────────────
@@ -206,6 +210,90 @@ def cmd_by_vision(args: argparse.Namespace) -> None:
 
     if not any_output:
         print("(no items found)")
+
+
+def _resolve_trigger_path(path: str, base: Path) -> Path:
+    p = Path(path)
+    return p if p.is_absolute() else base / p
+
+
+def evaluate_trigger(predicate: dict, base: Path) -> tuple[str, str]:
+    kind = predicate.get("type", "")
+    if kind == "manual":
+        return "manual", str(predicate.get("reason", "manual operator trigger"))
+    if kind == "file_contains":
+        path = _resolve_trigger_path(str(predicate.get("path", "")), base)
+        needle = str(predicate.get("needle", ""))
+        if not path.exists():
+            return "deferred", f"missing file: {path}"
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        return ("triggered", f"found needle in {path}") if needle in text else ("deferred", f"needle not found in {path}")
+    if kind == "file_exists":
+        path = _resolve_trigger_path(str(predicate.get("path", "")), base)
+        return ("triggered", f"file exists: {path}") if path.exists() else ("deferred", f"missing file: {path}")
+    if kind == "command_exit_zero":
+        cmd = predicate.get("command", [])
+        if not isinstance(cmd, list) or not all(isinstance(part, str) for part in cmd):
+            return "blocked", "invalid command predicate"
+        cp = subprocess.run(cmd, cwd=base, capture_output=True, text=True, check=False)
+        return ("triggered", f"exit 0: {' '.join(cmd)}") if cp.returncode == 0 else ("deferred", f"exit {cp.returncode}: {' '.join(cmd)}")
+    if kind == "github_pr_state":
+        repo = str(predicate.get("repo", ""))
+        pr = str(predicate.get("pr", ""))
+        expected = str(predicate.get("state", "")).upper()
+        if not repo or not pr or not expected:
+            return "blocked", "invalid github_pr_state predicate"
+        cp = subprocess.run(
+            ["gh", "pr", "view", pr, "--json", "state", "--jq", ".state"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if cp.returncode != 0:
+            return "blocked", cp.stderr.strip() or "gh pr view failed"
+        actual = cp.stdout.strip().upper()
+        return ("triggered", f"PR {pr} is {actual}") if actual == expected else ("deferred", f"PR {pr} is {actual}, expected {expected}")
+    return "blocked", f"unknown predicate type: {kind}"
+
+
+def cmd_workflow_triggers(args: argparse.Namespace) -> None:
+    trigger_file = args.file
+    if not trigger_file.exists() and args.file == DEFAULT_TRIGGER_FILE and REPO_TRIGGER_FILE.exists():
+        trigger_file = REPO_TRIGGER_FILE
+    base = trigger_file.resolve().parent.parent
+    data = json.loads(trigger_file.read_text(encoding="utf-8"))
+    print(f"=== Workflow OS Revisit Triggers ({date.today().isoformat()}) ===\n")
+    triggered = manual = blocked = deferred = completed = killed = 0
+    for item in data.get("items", []):
+        item_status = str(item.get("status", "")).lower()
+        if item_status in {"completed", "killed"}:
+            status, reason = item_status, str(item.get("completion_note", item.get("action", "")))
+        else:
+            status, reason = evaluate_trigger(item.get("trigger_predicate", {}), base)
+        if status == "triggered":
+            triggered += 1
+        elif status == "manual":
+            manual += 1
+        elif status == "blocked":
+            blocked += 1
+        elif status in {"completed", "killed"}:
+            if status == "completed":
+                completed += 1
+            else:
+                killed += 1
+        else:
+            deferred += 1
+        if args.only_triggered and status != "triggered":
+            continue
+        print(f"[{status.upper()}] {item.get('id')} - {item.get('title')}")
+        print(f"  risk={item.get('risk_class')} plane={item.get('plane')}")
+        print(f"  reason={reason}")
+        print(f"  action={item.get('action')}\n")
+    print(
+        f"TOTALS: triggered={triggered} completed={completed} killed={killed} "
+        f"deferred={deferred} manual={manual} blocked={blocked}"
+    )
 
 
 # ── WRITE ─────────────────────────────────────────────────────────────────────
@@ -374,6 +462,10 @@ def main() -> None:
     d.add_argument("--repo", choices=list(REPOS.keys()))
     d.add_argument("--by-vision", action="store_true", help="Group digest by [VISION: slug] tags")
 
+    wt = sub.add_parser("workflow-triggers", help="Evaluate Workflow OS revisit triggers")
+    wt.add_argument("--file", type=Path, default=DEFAULT_TRIGGER_FILE)
+    wt.add_argument("--only-triggered", action="store_true")
+
     # add
     a = sub.add_parser("add", help="Add an idea to a box")
     a.add_argument("text", nargs="?", help="Idea text (omit for interactive)")
@@ -393,6 +485,8 @@ def main() -> None:
 
     if args.cmd == "add":
         cmd_add(args)
+    elif args.cmd == "workflow-triggers":
+        cmd_workflow_triggers(args)
     elif getattr(args, "by_vision", False):
         cmd_by_vision(args)
     else:
