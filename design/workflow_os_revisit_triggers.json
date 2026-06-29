@@ -76,8 +76,14 @@
       "risk_class": "R1",
       "status": "deferred",
       "trigger_predicate": {
-        "type": "file_exists",
-        "path": "design/baselines/workflow_os_b0_mixed_sessions.json"
+        "type": "command_exit_zero",
+        "command": [
+          "python",
+          "scripts/session_cost_probe.py",
+          "b0-status",
+          "--baseline",
+          "design/baselines/workflow_os_b0_mixed_sessions.json"
+        ]
       },
       "action": "Benchmark only after the section 9 B0 mixed-session baseline exists. The A1 kernel baseline alone is not enough."
     },
