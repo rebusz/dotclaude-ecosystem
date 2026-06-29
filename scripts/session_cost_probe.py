@@ -214,6 +214,7 @@ def build_probe(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = args.repo_root.resolve()
     claude_file = args.claude_file or (Path.home() / ".claude" / "CLAUDE.md")
     codex_file = args.codex_file or (Path.home() / ".codex" / "AGENTS.md")
+    cline_file = args.cline_file or (Path.home() / ".clinerules" / "agent-rules.md")
     probe = {
         "schema_version": 1,
         "generated_at": _now(),
@@ -223,6 +224,7 @@ def build_probe(args: argparse.Namespace) -> dict[str, Any]:
         "files": {
             "claude_global": kernel_presence(claude_file),
             "codex_global": kernel_presence(codex_file),
+            "cline_global": kernel_presence(cline_file),
         },
         "usage": load_usage(args.usage_json),
         "sync_check": None if args.skip_sync_check else run_sync_check(repo_root),
@@ -274,8 +276,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         "baseline": str(args.baseline),
         "method": current["method"],
         "files": {
-            "claude_global": _compare_metric("claude_global", baseline, current),
-            "codex_global": _compare_metric("codex_global", baseline, current),
+            name: _compare_metric(name, baseline, current)
+            for name in sorted(current.get("files", {}))
         },
         "sync_check": current["sync_check"],
     }
@@ -306,6 +308,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--usage-json", type=Path)
         p.add_argument("--claude-file", type=Path)
         p.add_argument("--codex-file", type=Path)
+        p.add_argument("--cline-file", type=Path)
         p.add_argument("--skip-sync-check", action="store_true")
         p.add_argument("--note", default="")
 

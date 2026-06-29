@@ -120,6 +120,62 @@ class TestSessionCostProbe(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "startup_context_tokens"):
                 probe.load_b0_session(path)
 
+    def test_probe_records_cline_kernel_presence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ("CLAUDE.md", "AGENTS.md", "cline.md"):
+                (root / name).write_text(
+                    "\n".join(
+                        [
+                            "# Test",
+                            probe.BEGIN_MARKER,
+                            "Token Budget Protocol",
+                            "Risk Classes",
+                            "Plan Lifecycle Hooks",
+                            probe.END_MARKER,
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+            args = type(
+                "Args",
+                (),
+                {
+                    "repo_root": root,
+                    "claude_file": root / "CLAUDE.md",
+                    "codex_file": root / "AGENTS.md",
+                    "cline_file": root / "cline.md",
+                    "method": "A1",
+                    "note": "",
+                    "usage_json": None,
+                    "skip_sync_check": True,
+                },
+            )()
+
+            data = probe.build_probe(args)
+            self.assertTrue(data["files"]["cline_global"]["ok"])
+
+    def test_compare_metric_reports_new_cline_file_missing_from_old_baseline(self):
+        baseline = {"files": {}}
+        current = {
+            "files": {
+                "cline_global": {
+                    "exists": True,
+                    "ok": True,
+                    "bytes": 10,
+                    "lines": 2,
+                    "sha256": "new",
+                }
+            }
+        }
+
+        metric = probe._compare_metric("cline_global", baseline, current)
+        self.assertTrue(metric["exists"])
+        self.assertTrue(metric["kernel_ok"])
+        self.assertEqual(metric["bytes_delta"], 10)
+        self.assertTrue(metric["sha_changed"])
+
 
 if __name__ == "__main__":
     unittest.main()

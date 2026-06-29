@@ -33,16 +33,16 @@
     },
     {
       "id": "cline-live-verify",
-      "title": "Cline live-install verification",
+      "title": "Cline live-install verification and global sync",
       "plane": "cross-platform",
       "risk_class": "R1",
       "status": "completed",
-      "completion_note": "Verified against local Cline 4.0.0 extension bundle: .clinerules, .cline/skills, .clinerules/skills, .agents/skills, and AGENTS.md are referenced. No sync target was written.",
+      "completion_note": "Verified against local Cline 4.0.0 extension bundle, added managed cline-global sync target at C:/Users/dszub/.clinerules/agent-rules.md, and refreshed A1 baseline so session_cost_probe reports cline_global.kernel_ok=true with zero drift.",
       "trigger_predicate": {
         "type": "manual",
         "reason": "Completed by local extension-code readback on 2026-06-29."
       },
-      "action": "Use the verified Cline surfaces only in a later explicit sync-target slice."
+      "action": "No further Cline global sync action pending; repo-local Cline propagation should use a later explicit per-repo sync slice."
     },
     {
       "id": "antigravity-live-verify",

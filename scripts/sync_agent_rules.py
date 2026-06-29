@@ -84,6 +84,7 @@ def _write_atomic(path: Path, text: str) -> Path:
 
 
 def _acquire_lock(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.parent / f".{path.name}.agent-rules.lock"
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     while True:
@@ -224,6 +225,14 @@ def target_specs(source_root: Path, repo: Path | None) -> list[TargetSpec]:
             path=home / ".codex" / "AGENTS.md",
             sources=(Path("core.md"), Path("overlays/codex-global.md")),
             byte_limit=32 * 1024,
+        ),
+        TargetSpec(
+            name="cline-global",
+            path=home / ".clinerules" / "agent-rules.md",
+            sources=(Path("core.md"), Path("overlays/cline-global.md")),
+            line_limit=190,
+            byte_limit=20000,
+            default_title="# Cline global agent rules",
         ),
     ]
 
