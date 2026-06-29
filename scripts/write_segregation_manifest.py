@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import json
 import sys
 from pathlib import Path
@@ -81,6 +82,77 @@ def validate_manifest(data: dict[str, Any], *, source: Path) -> dict[str, Any]:
     }
 
 
+def _expand_braces(pattern: str) -> list[str]:
+    start = pattern.find("{")
+    if start == -1:
+        return [pattern]
+    end = pattern.find("}", start)
+    if end == -1:
+        return [pattern]
+    prefix = pattern[:start]
+    suffix = pattern[end + 1 :]
+    expanded: list[str] = []
+    for option in pattern[start + 1 : end].split(","):
+        for tail in _expand_braces(suffix):
+            expanded.append(f"{prefix}{option}{tail}")
+    return expanded
+
+
+def _command_path(repo: str, path_glob: str) -> tuple[str, bool]:
+    recursive = path_glob.endswith("/**")
+    normalized = path_glob[:-3] if recursive else path_glob
+    full_path = f"{repo.rstrip('/')}/{normalized.lstrip('/')}"
+    return full_path.replace("/", "\\"), recursive
+
+
+def build_acl_dry_run_plan(
+    data: dict[str, Any],
+    *,
+    source: Path,
+    agent_identity: str,
+) -> dict[str, Any]:
+    if not agent_identity.strip():
+        raise ValueError("--agent-identity must be non-empty")
+    validate_manifest(data, source=source)
+
+    plan_entries: list[dict[str, Any]] = []
+    for entry in data["entries"]:
+        expanded_targets = []
+        apply_commands = []
+        rollback_commands = []
+        for expanded_glob in _expand_braces(entry["path_glob"]):
+            command_path, recursive = _command_path(entry["repo"], expanded_glob)
+            recursive_arg = " /T" if recursive else ""
+            expanded_targets.append({"path": command_path, "recursive": recursive})
+            if entry["class"] != "write-allowed-for-agents":
+                apply_commands.append(f'icacls "{command_path}" /deny "{agent_identity}:(W)"{recursive_arg}')
+                rollback_commands.append(f'icacls "{command_path}" /remove:d "{agent_identity}"{recursive_arg}')
+        plan_entries.append(
+            {
+                "id": entry["id"],
+                "class": entry["class"],
+                "owner": entry["owner"],
+                "reason": entry["reason"],
+                "expanded_targets": expanded_targets,
+                "apply_commands": apply_commands,
+                "rollback_commands": rollback_commands,
+                "no_op": entry["class"] == "write-allowed-for-agents",
+            }
+        )
+
+    return {
+        "kind": "mechanical_write_segregation_acl_dry_run",
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source_manifest": str(source),
+        "agent_identity": agent_identity,
+        "applies_acl": False,
+        "requires_operator_go_before_apply": True,
+        "warning": "Dry-run artifact only. Do not execute apply_commands without explicit R2/R3 operator GO and a refreshed quiesced-state manifest.",
+        "entries": plan_entries,
+    }
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
         summary = validate_manifest(load_manifest(args.manifest), source=args.manifest)
@@ -91,11 +163,35 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dry_run_acl(args: argparse.Namespace) -> int:
+    try:
+        data = build_acl_dry_run_plan(
+            load_manifest(args.manifest),
+            source=args.manifest,
+            agent_identity=args.agent_identity,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+        print(f"wrote {args.output}")
+    else:
+        print(text, end="")
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate mechanical write-segregation path manifests")
     sub = parser.add_subparsers(dest="cmd", required=True)
     validate = sub.add_parser("validate", help="Validate a path manifest without applying ACLs")
     validate.add_argument("manifest", type=Path)
+    dry_run = sub.add_parser("dry-run-acl", help="Generate ACL apply/rollback commands without executing them")
+    dry_run.add_argument("manifest", type=Path)
+    dry_run.add_argument("--agent-identity", required=True)
+    dry_run.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
 
@@ -103,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     if args.cmd == "validate":
         return cmd_validate(args)
+    if args.cmd == "dry-run-acl":
+        return cmd_dry_run_acl(args)
     raise AssertionError(args.cmd)
 
 

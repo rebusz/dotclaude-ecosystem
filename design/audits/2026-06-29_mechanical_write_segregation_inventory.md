@@ -89,8 +89,8 @@ The purpose is to identify candidate path classes for a later dry-run ACL plan. 
 3. Review the first machine-readable path manifest at `design/security/write_segregation_path_manifest.json`; refresh it from quiesced repo truth before any dry-run ACL command generation.
 4. Split `data/bridge/**` by producer ownership before denying writes; bridge directories are mixed advisory/live surfaces.
 5. Confirm the exact Windows identity or launcher profile that represents coding/advisory agents.
-6. Generate dry-run ACL apply and rollback commands only after the path manifest is reviewed.
+6. Generate dry-run ACL apply and rollback commands with `scripts/write_segregation_manifest.py dry-run-acl` only after the path manifest is reviewed.
 
 ## Current Gate
 
-Implementation remains gated. The next allowed step is a dry-run manifest/ACL plan (R1/R2) that emits commands but does not apply them. Any real write-deny pilot or trading-repo apply is R2/R3 and needs explicit operator GO naming that apply step.
+Implementation remains gated. The next allowed step is a reviewed dry-run ACL artifact for a concrete Windows agent identity; it emits commands but does not apply them. Any real write-deny pilot or trading-repo apply is R2/R3 and needs explicit operator GO naming that apply step.

@@ -80,6 +80,17 @@ The first machine-readable R1 path manifest is `design/security/write_segregatio
 python scripts/write_segregation_manifest.py validate design/security/write_segregation_path_manifest.json
 ```
 
+The dry-run ACL generator exists but intentionally requires an explicit Windows agent identity:
+
+```powershell
+python scripts/write_segregation_manifest.py dry-run-acl `
+  design/security/write_segregation_path_manifest.json `
+  --agent-identity "<DOMAIN-or-MACHINE>\<agent-user>" `
+  --output design/security/<reviewed-dry-run-acl-plan>.json
+```
+
+The generated artifact still has `applies_acl=false`; it only records candidate `icacls` apply/rollback commands for review.
+
 ## Validation Contract
 
 Before any real permission change:
