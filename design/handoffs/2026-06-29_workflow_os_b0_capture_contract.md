@@ -110,6 +110,15 @@ Observed local evidence: `C:\Users\dszub\.claude\projects\D--APPS-TSU\e3c378d6-d
 
 Candidate inventory for the local TSU JSONL corpus lives at `design/handoffs/2026-06-29_workflow_os_b0_candidate_inventory.md`. It is intentionally not a baseline and does not choose the three B0 session classes.
 
+Machine readiness check:
+
+```powershell
+python scripts/session_cost_probe.py b0-status `
+  --baseline design/baselines/workflow_os_b0_mixed_sessions.json
+```
+
+This command fails closed (`ready=false`, non-zero exit) until the mixed-session baseline exists and validates all three required session ids with explicit `cost_usd`, `startup_context_tokens`, and quality gates.
+
 ## Validation
 
 Latest local validation after adding the contract and JSONL extractor:

@@ -61,6 +61,15 @@ python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisi
 
 Expected effect: `headroom-rtk-benchmark` can stop being deferred only if the mixed-session baseline exists and passes review.
 
+Readiness check:
+
+```powershell
+python scripts/session_cost_probe.py b0-status `
+  --baseline design/baselines/workflow_os_b0_mixed_sessions.json
+```
+
+Expected current result: non-zero exit with `ready=false` until the measured B0 baseline exists and contains exactly `read_heavy_audit`, `multi_file_edit`, and `research_plan`.
+
 ## Gate 2: Section 3.7 Write-Segregation Identity
 
 Blocked artifact:

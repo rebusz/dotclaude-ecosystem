@@ -315,6 +315,63 @@ def build_b0_baseline(args: argparse.Namespace) -> dict[str, Any]:
     return data
 
 
+def build_b0_status(args: argparse.Namespace) -> dict[str, Any]:
+    baseline = args.baseline
+    status: dict[str, Any] = {
+        "schema_version": 1,
+        "generated_at": _now(),
+        "baseline": str(baseline),
+        "ready": False,
+        "required_session_ids": list(REQUIRED_B0_SESSION_IDS),
+        "errors": [],
+    }
+    if not baseline.exists():
+        status["errors"].append(f"missing baseline artifact: {baseline}")
+        return status
+    try:
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status["errors"].append(f"unable to read baseline JSON: {exc}")
+        return status
+
+    if data.get("method") != "B0":
+        status["errors"].append("baseline method must be B0")
+    mixed = data.get("mixed_session_baseline")
+    if not isinstance(mixed, dict):
+        status["errors"].append("missing object `mixed_session_baseline`")
+        sessions = []
+    else:
+        sessions = mixed.get("sessions")
+        if not isinstance(sessions, list):
+            status["errors"].append("mixed_session_baseline.sessions must be a list")
+            sessions = []
+
+    valid_sessions = []
+    for index, session in enumerate(sessions):
+        if not isinstance(session, dict):
+            status["errors"].append(f"mixed_session_baseline.sessions[{index}] must be an object")
+            continue
+        try:
+            valid_sessions.append(load_b0_session_from_object(session, baseline))
+        except ValueError as exc:
+            status["errors"].append(str(exc))
+
+    seen = {session["id"] for session in valid_sessions}
+    required = set(REQUIRED_B0_SESSION_IDS)
+    missing = sorted(required - seen)
+    extra = sorted(seen - required)
+    if missing:
+        status["errors"].append(f"missing required session ids: {', '.join(missing)}")
+    if extra:
+        status["errors"].append(f"unexpected session ids: {', '.join(extra)}")
+    if len(valid_sessions) != len(seen):
+        status["errors"].append("duplicate session ids present")
+
+    status["session_ids"] = sorted(seen)
+    status["ready"] = not status["errors"]
+    return status
+
+
 def build_b0_session_from_jsonl(args: argparse.Namespace) -> dict[str, Any]:
     if args.cost_usd < 0:
         raise ValueError("--cost-usd must be non-negative")
@@ -437,6 +494,14 @@ def cmd_jsonl_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_b0_status(args: argparse.Namespace) -> int:
+    data = build_b0_status(args)
+    if args.output:
+        write_json(args.output, data)
+    print(json.dumps(data, indent=2, sort_keys=True))
+    return 0 if data["ready"] else 1
+
+
 def _compare_metric(name: str, baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
     before = baseline.get("files", {}).get(name, {})
     after = current.get("files", {}).get(name, {})
@@ -532,6 +597,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     bs.add_argument("--validation-command", action="append", required=True)
     bs.add_argument("--expected-artifact", action="append", default=[])
 
+    b0 = sub.add_parser("b0-status", help="Fail closed unless the B0 mixed-session baseline is complete")
+    b0.add_argument(
+        "--baseline",
+        type=Path,
+        default=Path("design/baselines/workflow_os_b0_mixed_sessions.json"),
+    )
+    b0.add_argument("--output", type=Path)
+
     c = sub.add_parser("check", help="Compare current probe to a baseline")
     add_common(c)
     c.add_argument("--baseline", type=Path, required=True)
@@ -552,6 +625,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_jsonl_inventory(args)
     if args.cmd == "jsonl-session":
         return cmd_jsonl_session(args)
+    if args.cmd == "b0-status":
+        return cmd_b0_status(args)
     if args.cmd == "check":
         return cmd_check(args)
     raise AssertionError(args.cmd)

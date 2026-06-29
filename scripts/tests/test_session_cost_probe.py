@@ -95,6 +95,71 @@ class TestSessionCostProbe(unittest.TestCase):
             self.assertEqual(summary["totals"]["cache_creation_input_tokens"], 30)
             self.assertEqual(summary["totals"]["startup_context_tokens"], 3000)
 
+    def test_b0_status_fails_closed_when_baseline_is_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = type(
+                "Args",
+                (),
+                {
+                    "baseline": Path(d) / "missing.json",
+                },
+            )()
+
+            status = probe.build_b0_status(args)
+
+            self.assertFalse(status["ready"])
+            self.assertIn("missing baseline artifact", status["errors"][0])
+
+    def test_b0_status_accepts_complete_mixed_baseline(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            sessions = []
+            for index, session_id in enumerate(probe.REQUIRED_B0_SESSION_IDS, start=1):
+                sessions.append(
+                    {
+                        "id": session_id,
+                        "usage": {
+                            "input_tokens": 100 * index,
+                            "output_tokens": 10 * index,
+                            "cache_read_input_tokens": 20 * index,
+                            "cache_creation_input_tokens": 5 * index,
+                            "cost_usd": 0.01 * index,
+                            "startup_context_tokens": 1000,
+                        },
+                        "quality_baseline": {
+                            "summary": "produced the expected artifact shape",
+                            "validation_commands": ["python -m pytest scripts/tests"],
+                            "expected_artifacts": ["design/example.md"],
+                        },
+                    }
+                )
+            baseline = root / "workflow_os_b0_mixed_sessions.json"
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "method": "B0",
+                        "mixed_session_baseline": {
+                            "sessions": sessions,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "baseline": baseline,
+                },
+            )()
+
+            status = probe.build_b0_status(args)
+
+            self.assertTrue(status["ready"])
+            self.assertEqual(status["errors"], [])
+            self.assertEqual(status["session_ids"], sorted(probe.REQUIRED_B0_SESSION_IDS))
+
     def test_b0_session_rejects_missing_required_usage(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "read_heavy_audit.json"
