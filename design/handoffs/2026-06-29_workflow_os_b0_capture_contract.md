@@ -72,13 +72,41 @@ python scripts/session_cost_probe.py mixed-baseline `
 
 When that file exists and passes review, the existing workflow trigger can surface the Headroom/RTK benchmark slice.
 
+## Claude JSONL Extraction Path
+
+Claude Code stores per-message usage records in project JSONL files. `session_cost_probe.py` can now extract token/cache/output counts from those logs without reading prompt text into the output.
+
+Inspect one candidate session:
+
+```powershell
+python scripts/session_cost_probe.py jsonl-summary `
+  --jsonl "$env:USERPROFILE\.claude\projects\D--APPS-TSU\<session>.jsonl"
+```
+
+Build one B0 session JSON from real JSONL usage plus explicit `/cost`:
+
+```powershell
+python scripts/session_cost_probe.py jsonl-session `
+  --jsonl "$env:USERPROFILE\.claude\projects\D--APPS-TSU\<session>.jsonl" `
+  --output path/to/read_heavy_audit.json `
+  --session-id read_heavy_audit `
+  --cost-usd <value-from-claude-cost-readback> `
+  --startup-context-tokens <fresh-context-probe-value> `
+  --quality-summary "Describe the baseline artifact shape." `
+  --validation-command "python -m pytest scripts/tests"
+```
+
+The extractor intentionally does not estimate model prices. If `/cost` is unavailable, the B0 baseline remains incomplete.
+
+Observed local evidence: `C:\Users\dszub\.claude\projects\D--APPS-TSU\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl` contains 370 assistant usage records with token/cache/output counters. This proves the usage side is recoverable; it does not prove `cost_usd`.
+
 ## Validation
 
-Latest local validation after adding the contract:
+Latest local validation after adding the contract and JSONL extractor:
 
 ```text
 python -m pytest scripts\tests
-50 passed
+57 passed
 ```
 
 ## Boundaries

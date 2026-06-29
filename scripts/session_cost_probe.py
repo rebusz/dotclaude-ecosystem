@@ -114,21 +114,25 @@ def _require_non_empty_text(data: dict[str, Any], key: str, source: Path) -> str
 
 def load_b0_session(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    return load_b0_session_from_object(data, path)
+
+
+def load_b0_session_from_object(data: dict[str, Any], source: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
-        raise ValueError(f"{path}: session JSON must be an object")
-    session_id = _require_non_empty_text(data, "id", path)
+        raise ValueError(f"{source}: session JSON must be an object")
+    session_id = _require_non_empty_text(data, "id", source)
     if session_id not in REQUIRED_B0_SESSION_IDS:
         expected = ", ".join(REQUIRED_B0_SESSION_IDS)
-        raise ValueError(f"{path}: unexpected B0 session id `{session_id}`; expected one of: {expected}")
+        raise ValueError(f"{source}: unexpected B0 session id `{session_id}`; expected one of: {expected}")
 
     usage = data.get("usage")
     if not isinstance(usage, dict):
-        raise ValueError(f"{path}: missing object `usage`")
+        raise ValueError(f"{source}: missing object `usage`")
     normalized_usage: dict[str, int | float] = {
-        key: _require_non_negative_number(usage, key, path) for key in REQUIRED_B0_USAGE_FIELDS
+        key: _require_non_negative_number(usage, key, source) for key in REQUIRED_B0_USAGE_FIELDS
     }
     normalized_usage["cache_creation_input_tokens"] = _require_non_negative_number(
-        usage, "cache_creation_input_tokens", path
+        usage, "cache_creation_input_tokens", source
     ) if "cache_creation_input_tokens" in usage else 0
     normalized_usage["total_tokens"] = (
         normalized_usage["input_tokens"]
@@ -139,23 +143,23 @@ def load_b0_session(path: Path) -> dict[str, Any]:
 
     quality = data.get("quality_baseline")
     if not isinstance(quality, dict):
-        raise ValueError(f"{path}: missing object `quality_baseline`")
-    quality_summary = _require_non_empty_text(quality, "summary", path)
+        raise ValueError(f"{source}: missing object `quality_baseline`")
+    quality_summary = _require_non_empty_text(quality, "summary", source)
     validation_commands = quality.get("validation_commands")
     if not isinstance(validation_commands, list) or not validation_commands:
-        raise ValueError(f"{path}: `quality_baseline.validation_commands` must be a non-empty list")
+        raise ValueError(f"{source}: `quality_baseline.validation_commands` must be a non-empty list")
     if not all(isinstance(item, str) and item.strip() for item in validation_commands):
-        raise ValueError(f"{path}: every validation command must be non-empty text")
+        raise ValueError(f"{source}: every validation command must be non-empty text")
     expected_artifacts = quality.get("expected_artifacts", [])
     if not isinstance(expected_artifacts, list):
-        raise ValueError(f"{path}: `quality_baseline.expected_artifacts` must be a list when present")
+        raise ValueError(f"{source}: `quality_baseline.expected_artifacts` must be a list when present")
     if not all(isinstance(item, str) and item.strip() for item in expected_artifacts):
-        raise ValueError(f"{path}: every expected artifact must be non-empty text")
+        raise ValueError(f"{source}: every expected artifact must be non-empty text")
 
     return {
         "id": session_id,
         "label": data.get("label") or session_id.replace("_", " "),
-        "source": str(path),
+        "source": str(source),
         "usage": normalized_usage,
         "quality_baseline": {
             "summary": quality_summary,
@@ -184,6 +188,59 @@ def summarize_b0_sessions(sessions: list[dict[str, Any]]) -> dict[str, Any]:
     return {"session_count": count, "totals": totals, "averages": averages}
 
 
+def parse_claude_jsonl_usage(path: Path) -> dict[str, Any]:
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    models: set[str] = set()
+    assistant_messages = 0
+    usage_messages = 0
+    first_timestamp = None
+    last_timestamp = None
+
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = item.get("message")
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            assistant_messages += 1
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            usage_messages += 1
+            timestamp = item.get("timestamp")
+            if isinstance(timestamp, str):
+                first_timestamp = first_timestamp or timestamp
+                last_timestamp = timestamp
+            model = message.get("model")
+            if isinstance(model, str) and model:
+                models.add(model)
+            for key in totals:
+                value = usage.get(key, 0)
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                if value > 0:
+                    totals[key] += value
+
+    total_tokens = sum(totals.values())
+    return {
+        "source": str(path),
+        "assistant_messages": assistant_messages,
+        "usage_messages": usage_messages,
+        "first_timestamp": first_timestamp,
+        "last_timestamp": last_timestamp,
+        "models": sorted(models),
+        "usage": {**totals, "total_tokens": total_tokens},
+    }
+
+
 def build_b0_baseline(args: argparse.Namespace) -> dict[str, Any]:
     sessions = [load_b0_session(path) for path in args.session_json]
     seen = {session["id"] for session in sessions}
@@ -208,6 +265,45 @@ def build_b0_baseline(args: argparse.Namespace) -> dict[str, Any]:
         ),
     }
     return data
+
+
+def build_b0_session_from_jsonl(args: argparse.Namespace) -> dict[str, Any]:
+    if args.cost_usd < 0:
+        raise ValueError("--cost-usd must be non-negative")
+    if args.startup_context_tokens < 0:
+        raise ValueError("--startup-context-tokens must be non-negative")
+    if not args.validation_command:
+        raise ValueError("--validation-command is required at least once")
+
+    summary = parse_claude_jsonl_usage(args.jsonl)
+    if summary["usage_messages"] == 0:
+        raise ValueError(f"{args.jsonl}: no assistant usage records found")
+    usage = {
+        "input_tokens": summary["usage"]["input_tokens"],
+        "output_tokens": summary["usage"]["output_tokens"],
+        "cache_creation_input_tokens": summary["usage"]["cache_creation_input_tokens"],
+        "cache_read_input_tokens": summary["usage"]["cache_read_input_tokens"],
+        "cost_usd": args.cost_usd,
+        "startup_context_tokens": args.startup_context_tokens,
+    }
+    return {
+        "id": args.session_id,
+        "label": args.label or args.session_id.replace("_", " "),
+        "source_jsonl": str(args.jsonl),
+        "usage_source": "claude-jsonl-plus-explicit-cost",
+        "usage_record_count": summary["usage_messages"],
+        "time_range": {
+            "first_timestamp": summary["first_timestamp"],
+            "last_timestamp": summary["last_timestamp"],
+        },
+        "models": summary["models"],
+        "usage": usage,
+        "quality_baseline": {
+            "summary": args.quality_summary,
+            "validation_commands": args.validation_command,
+            "expected_artifacts": args.expected_artifact or [],
+        },
+    }
 
 
 def build_probe(args: argparse.Namespace) -> dict[str, Any]:
@@ -249,6 +345,26 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 def cmd_mixed_baseline(args: argparse.Namespace) -> int:
     try:
         data = build_b0_baseline(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    write_json(args.output, data)
+    print(f"wrote {args.output}")
+    return 0
+
+
+def cmd_jsonl_summary(args: argparse.Namespace) -> int:
+    data = parse_claude_jsonl_usage(args.jsonl)
+    if args.output:
+        write_json(args.output, data)
+    print(json.dumps(data, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_jsonl_session(args: argparse.Namespace) -> int:
+    try:
+        data = build_b0_session_from_jsonl(args)
+        load_b0_session_from_object(data, Path("<generated-jsonl-session>"))
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -331,6 +447,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Measured B0 session JSON. Provide exactly one for each required session id.",
     )
 
+    js = sub.add_parser("jsonl-summary", help="Summarize Claude JSONL usage without reading prompt text")
+    js.add_argument("--jsonl", type=Path, required=True)
+    js.add_argument("--output", type=Path)
+
+    bs = sub.add_parser("jsonl-session", help="Build one measured B0 session JSON from Claude JSONL plus explicit /cost")
+    bs.add_argument("--jsonl", type=Path, required=True)
+    bs.add_argument("--output", type=Path, required=True)
+    bs.add_argument("--session-id", choices=REQUIRED_B0_SESSION_IDS, required=True)
+    bs.add_argument("--label", default="")
+    bs.add_argument("--cost-usd", type=float, required=True)
+    bs.add_argument("--startup-context-tokens", type=int, required=True)
+    bs.add_argument("--quality-summary", required=True)
+    bs.add_argument("--validation-command", action="append", required=True)
+    bs.add_argument("--expected-artifact", action="append", default=[])
+
     c = sub.add_parser("check", help="Compare current probe to a baseline")
     add_common(c)
     c.add_argument("--baseline", type=Path, required=True)
@@ -345,6 +476,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_baseline(args)
     if args.cmd == "mixed-baseline":
         return cmd_mixed_baseline(args)
+    if args.cmd == "jsonl-summary":
+        return cmd_jsonl_summary(args)
+    if args.cmd == "jsonl-session":
+        return cmd_jsonl_session(args)
     if args.cmd == "check":
         return cmd_check(args)
     raise AssertionError(args.cmd)
