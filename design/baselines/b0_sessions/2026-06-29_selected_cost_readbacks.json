@@ -1,0 +1,49 @@
+{
+  "kind": "workflow_os_b0_selected_session_cost_readbacks",
+  "schema_version": 1,
+  "status": "startup_context_required",
+  "source_note": "Recovered from local Claude JSONL Stop hook footer lines containing cumulative `$... sess` readbacks. Prompt content was not exported. The max and last values match for each selected session.",
+  "remaining_blocker": "startup_context_tokens is still not known or confirmed, so workflow_os_b0_mixed_sessions.json must remain absent/fail-closed.",
+  "sessions": [
+    {
+      "cost_readbacks_count": 20,
+      "cost_source": "claude_stop_hook_footer_sess",
+      "cost_usd": 36.78,
+      "filename": "f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
+      "id": "read_heavy_audit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl",
+      "last_cost_line": 514,
+      "last_cost_timestamp": "2026-06-18T22:49:51.968Z",
+      "max_cost_line": 513,
+      "max_cost_timestamp": "2026-06-18T22:49:51.968Z"
+    },
+    {
+      "cost_readbacks_count": 32,
+      "cost_source": "claude_stop_hook_footer_sess",
+      "cost_usd": 69.18,
+      "filename": "5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl",
+      "id": "multi_file_edit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl",
+      "last_cost_line": 890,
+      "last_cost_timestamp": "2026-06-20T03:04:31.594Z",
+      "max_cost_line": 889,
+      "max_cost_timestamp": "2026-06-20T03:04:31.594Z"
+    },
+    {
+      "cost_readbacks_count": 62,
+      "cost_source": "claude_stop_hook_footer_sess",
+      "cost_usd": 154.78,
+      "filename": "e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl",
+      "id": "research_plan",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl",
+      "last_cost_line": 1055,
+      "last_cost_timestamp": "2026-06-20T19:56:32.103Z",
+      "max_cost_line": 1054,
+      "max_cost_timestamp": "2026-06-20T19:56:32.102Z"
+    }
+  ],
+  "totals": {
+    "cost_usd": 260.74,
+    "session_count": 3
+  }
+}
