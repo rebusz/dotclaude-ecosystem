@@ -69,9 +69,17 @@ Blocked artifact:
 design/security/<reviewed-dry-run-acl-plan>.json
 ```
 
+Observed candidate:
+
+```text
+design/security/2026-06-29_observed_codex_identity_acl_dry_run.json
+```
+
+This candidate was generated from the current Codex process identity `pc-tsignal-flow\dszub`. It is review-only: `applies_acl=false` and `requires_operator_go_before_apply=true`.
+
 Required operator input:
 
-- The exact Windows identity or launcher profile used by coding/advisory agents, for example `<MACHINE>\<agent-user>` or `<DOMAIN>\<agent-user>`.
+- Confirm that `pc-tsignal-flow\dszub` is the intended Windows identity for coding/advisory agents, or provide the exact launcher profile to use instead, for example `<MACHINE>\<agent-user>` or `<DOMAIN>\<agent-user>`.
 
 Current manifest:
 
