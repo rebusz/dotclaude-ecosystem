@@ -22,13 +22,20 @@ The user invokes modes with a flexible syntax. Parse as follows:
 
 ## Before You Begin Any Mode
 
-0. **Plan Lifecycle PRE-step (MANDATORY for plan-creating modes)**: for `ARCHITECT`, `IMPLEMENT`, `OPERATOR`, `INTEGRATE`, `CONTRACT`, `AUTOPLAN`, `SHIP`, `EXECUTOR`, run **before** any other tool call:
+0. **Plan Lifecycle PRE-step (MANDATORY for plan-creating modes and plan reviews)**: for `ARCHITECT`, `IMPLEMENT`, `OPERATOR`, `INTEGRATE`, `CONTRACT`, `AUTOPLAN`, `SHIP`, `EXECUTOR`, and for `AUDIT` / `AUDIT_AI` when the target is a plan or plan-like design doc, run **before** any other task tool call:
 
    ```bash
    python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <plan-path-if-known>]
    ```
 
-   Read the `<plan-context>...</plan-context>` block and reference vision Why+DoD, IDEA_BOX entries, and active PLANS.md items when scoping. Skip ONLY for: pure DEBUG/POSTMORTEM/REVIEW/QUANT (no plan creation), or R0 ad-hoc tweaks.
+   Read the `<plan-context>...</plan-context>` block and reference vision Why+DoD, IDEA_BOX entries, and active PLANS.md items when scoping. Skip ONLY for: pure DEBUG/POSTMORTEM/REVIEW/QUANT (no plan creation), non-plan AUDIT, or R0 ad-hoc tweaks.
+
+0a. **Vision / Plan Collision Check (MANDATORY before writing or reviewing a plan)**:
+   - Identify the project vision and quote or summarize the relevant Why + Definition of Done.
+   - Check existing and open plans from the plan-context output, `PLANS.md`, `design/plans/`, `design/tsu/plans/`, and `IDEA_BOX.md` when present.
+   - Decide explicitly whether the work should **modify an existing plan**, **supersede/link an existing plan**, or **create a new plan**. Default to modifying an existing active plan when it covers the same outcome.
+   - Before reviewing a plan, flag duplicate/conflicting plans and stale assumptions as audit findings instead of silently reviewing the plan in isolation.
+   - If `plan_context_loader.py` cannot detect the repo, do a bounded fallback search of the repo's vision/plan/idea files and state that fallback in the output.
 
 1. **Read the full protocol** for the requested mode(s) from the master agent prompt. Look for `Prompts/master_agent.md` in the current project. If it exists, read the `## MODE: <NAME>` section and follow its structured protocol exactly — the deliverables, ending tags, red lines, and safe deferrals defined there are authoritative.
 
@@ -172,6 +179,8 @@ If the project defines frozen boundaries (in master_agent.md, CLAUDE.md, or simi
 ### ARCHITECT
 **Phase 0 — Restatement** (mandatory): restate goals, assumptions, edge cases, constraints. End with `>> PHASE 0 COMPLETE`. Skip if operator says so or task is trivial.
 
+**Phase 0a — Vision / Plan Collision Verdict** (mandatory when writing or changing a plan): name the project vision, list any related open plans, and state one of: `AMEND EXISTING PLAN`, `SUPERSEDE/LINK EXISTING PLAN`, or `CREATE NEW PLAN`. If there is no clear vision/plan context, say so and narrow the architecture to a discovery or plan-repair step.
+
 **Phase 1 — Architecture**: optimal end-state, components + data flow, Mermaid when non-trivial, files impacted, risks, phased execution, red lines, safe deferrals.
 
 **Scope challenge** (from gstack eng-review): before designing, check: can we reuse existing code? Is this ≤8 files? Is there a built-in that already does this? Does this include distribution (CI/CD, deploy)?
@@ -224,6 +233,8 @@ Use when DEBUG needs deeper root cause analysis. Same as DEBUG but adds:
 6. **WebSearch**: if local patterns don't match, search for known issues in dependencies
 
 ### AUDIT
+**Layer 0 — Vision / Plan Collision Check** (mandatory when auditing a plan or design doc): load plan context for the repo and target plan, then verify the plan is aligned with the project vision and does not duplicate or conflict with active plans. If a nearby plan should be amended instead, report that as a P1/P2 planning finding.
+
 **Layer 1 — Surface scan**: file structure, imports, obvious violations.
 **Layer 2 — Data flow trace**: end-to-end with file:line references.
 **Layer 3 — Invariant verification**: threading, atomic writes, idempotency, error handling.
