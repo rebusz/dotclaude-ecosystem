@@ -113,6 +113,12 @@ Detailed apply runbook:
 design/handoffs/2026-07-01_workflow_os_37_apply_runbook.md
 ```
 
+Apply/rollback review packet:
+
+```text
+design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md
+```
+
 This candidate was generated from the current Codex process identity `pc-tsignal-flow\dszub`. It is review-only: `applies_acl=false` and `requires_operator_go_before_apply=true`.
 
 Required operator input:

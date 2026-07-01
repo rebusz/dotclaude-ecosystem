@@ -30,6 +30,12 @@ Current review-only dry-run artifact:
 design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
 ```
 
+Apply/rollback review packet:
+
+```text
+design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md
+```
+
 Observed coding/advisory identity in that artifact:
 
 ```text
@@ -89,7 +95,7 @@ Current note as of this runbook creation: TSU was observed on branch `codex/renk
 
 ## Phase 2: Dry-Run and Rollback Packet
 
-Create a small apply packet from the dry-run artifact before running any command:
+Create or refresh the apply packet from the dry-run artifact before running any command:
 
 1. Count all non-noop entries.
 2. Group entries by repo and class.
@@ -99,6 +105,12 @@ Create a small apply packet from the dry-run artifact before running any command
 6. Confirm all commands are `icacls /deny` for apply or `icacls /remove:d` for rollback.
 7. Confirm no command uses `/grant`.
 8. Commit the packet as docs before apply.
+
+Current packet:
+
+```text
+design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md
+```
 
 Minimum packet sections:
 

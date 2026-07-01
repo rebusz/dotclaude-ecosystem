@@ -45,6 +45,12 @@ Detailed apply runbook:
 design/handoffs/2026-07-01_workflow_os_37_apply_runbook.md
 ```
 
+Apply/rollback review packet:
+
+```text
+design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md
+```
+
 Sanity readback:
 
 - `applies_acl=false`
