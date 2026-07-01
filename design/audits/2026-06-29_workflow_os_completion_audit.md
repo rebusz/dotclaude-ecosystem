@@ -43,6 +43,8 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `applies_acl=false`
   - `requires_operator_go_before_apply=true`
   - 24 manifest entries, 22 non-noop entries, no missing apply/rollback command pairs
+- `design/handoffs/2026-07-01_workflow_os_37_apply_runbook.md`
+  - detailed R2/R3 apply sequence, including identity, repo-state preflight, rollback packet, pilot, TSU/Tsignal batches, probes, and stop conditions
 - `python scripts/write_segregation_manifest.py validate-dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json --manifest design/security/write_segregation_path_manifest.json`
   - validates dry-run shape and source-manifest parity without applying ACLs
 - `python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json`
