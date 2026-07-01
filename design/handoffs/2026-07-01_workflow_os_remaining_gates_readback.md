@@ -79,6 +79,14 @@ python scripts/write_segregation_manifest.py preapply-check `
 
 Clean non-default TSU/Tsignal branches require explicit `--allow-branch`.
 
+Packet-only validation:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-packet `
+  design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Apply evidence template:
 
 ```text
@@ -97,6 +105,7 @@ Before any apply:
 - TSU and Tsignal branches must be default or explicitly accepted.
 - The dry-run artifact must include apply and rollback commands.
 - `validate-dry-run` must pass against the source manifest.
+- `validate-packet` must pass against the dry-run artifact.
 - `preapply-check` must report `ok_without_go=true`.
 - Rollback commands must be reviewed.
 - A write probe and read probe must be defined.

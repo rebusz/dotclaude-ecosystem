@@ -180,12 +180,21 @@ python scripts/write_segregation_manifest.py validate-apply-evidence `
   --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
 ```
 
+Validate the apply/rollback packet itself:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-packet `
+  design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Important: the generated dry-run artifact still has `applies_acl=false`. Do not execute any generated `icacls` command without:
 
 - quiesced TSU and Tsignal repos,
 - default or explicitly accepted TSU/Tsignal branches,
 - refreshed path manifest from live repo truth,
 - passing `validate-dry-run` preflight,
+- passing `validate-packet` preflight,
 - passing `preapply-check` preflight,
 - reviewed rollback commands,
 - passing `validate-apply-evidence` after pilot/batch execution,

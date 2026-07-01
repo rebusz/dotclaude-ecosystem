@@ -315,6 +315,30 @@ def _dry_run_command_sets(dry_run_data: dict[str, Any]) -> tuple[set[str], set[s
     return apply_commands, rollback_commands
 
 
+def validate_apply_rollback_packet(
+    *,
+    packet_text: str,
+    packet_source: Path,
+    dry_run_data: dict[str, Any],
+) -> dict[str, Any]:
+    missing = _packet_missing_commands(dry_run_data, packet_text)
+    apply_commands, rollback_commands = _dry_run_command_sets(dry_run_data)
+    errors: list[str] = []
+    if missing:
+        errors.append(f"packet is missing {len(missing)} dry-run commands")
+    if not apply_commands:
+        errors.append("dry-run contains no apply commands")
+    if len(apply_commands) != len(rollback_commands):
+        errors.append("dry-run apply and rollback command counts differ")
+    if errors:
+        raise ValueError(f"{packet_source}: " + "; ".join(errors))
+    return {
+        "apply_command_count": len(apply_commands),
+        "rollback_command_count": len(rollback_commands),
+        "missing_command_count": len(missing),
+    }
+
+
 def validate_apply_evidence(
     evidence: dict[str, Any],
     *,
@@ -474,10 +498,21 @@ def build_preapply_check(
         manifest_source=manifest_path,
     )
 
-    packet_text = packet_path.read_text(encoding="utf-8")
-    missing_commands = _packet_missing_commands(dry_run_data, packet_text)
-    if missing_commands:
-        reasons.append(f"packet is missing {len(missing_commands)} dry-run commands")
+    packet_ok = True
+    try:
+        packet_summary = validate_apply_rollback_packet(
+            packet_text=packet_path.read_text(encoding="utf-8"),
+            packet_source=packet_path,
+            dry_run_data=dry_run_data,
+        )
+    except ValueError as exc:
+        packet_ok = False
+        packet_summary = {
+            "path": str(packet_path),
+            "missing_command_count": -1,
+            "error": str(exc),
+        }
+        reasons.append(str(exc))
 
     repo_statuses = []
     repo_state_ok = True
@@ -502,7 +537,7 @@ def build_preapply_check(
     if not operator_go_accepted:
         reasons.append("missing explicit Section 3.7 R2/R3 apply pilot GO token")
 
-    ok_without_go = not missing_commands and repo_state_ok
+    ok_without_go = packet_ok and repo_state_ok
     ready_to_apply = ok_without_go and operator_go_accepted
     return {
         "ok_without_go": ok_without_go,
@@ -512,7 +547,7 @@ def build_preapply_check(
         "dry_run": dry_run_summary,
         "packet": {
             "path": str(packet_path),
-            "missing_command_count": len(missing_commands),
+            **packet_summary,
         },
         "repo_statuses": repo_statuses,
         "reasons": reasons,
@@ -557,6 +592,22 @@ def cmd_validate_dry_run(args: argparse.Namespace) -> int:
             source=args.dry_run,
             manifest_data=manifest_data,
             manifest_source=args.manifest,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"ok": True, **summary}, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_validate_packet(args: argparse.Namespace) -> int:
+    try:
+        dry_run_data = load_manifest(args.dry_run)
+        validate_acl_dry_run_plan(dry_run_data, source=args.dry_run)
+        summary = validate_apply_rollback_packet(
+            packet_text=args.packet.read_text(encoding="utf-8"),
+            packet_source=args.packet,
+            dry_run_data=dry_run_data,
         )
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -620,6 +671,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate_dry_run = sub.add_parser("validate-dry-run", help="Validate an ACL dry-run artifact without applying ACLs")
     validate_dry_run.add_argument("dry_run", type=Path)
     validate_dry_run.add_argument("--manifest", type=Path)
+    packet = sub.add_parser("validate-packet", help="Validate an apply/rollback packet against a dry-run artifact")
+    packet.add_argument("packet", type=Path)
+    packet.add_argument("--dry-run", type=Path, required=True)
     preapply = sub.add_parser("preapply-check", help="Check Section 3.7 pre-apply gates without applying ACLs")
     preapply.add_argument("--manifest", type=Path, required=True)
     preapply.add_argument("--dry-run", type=Path, required=True)
@@ -643,6 +697,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_dry_run_acl(args)
     if args.cmd == "validate-dry-run":
         return cmd_validate_dry_run(args)
+    if args.cmd == "validate-packet":
+        return cmd_validate_packet(args)
     if args.cmd == "preapply-check":
         return cmd_preapply_check(args)
     if args.cmd == "validate-apply-evidence":

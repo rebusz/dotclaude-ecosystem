@@ -89,6 +89,14 @@ If TSU or Tsignal branch/dirt is not explicitly accepted as reviewed input state
 
 The pre-apply checker enforces this mechanically by failing on unaccepted dirty state, failing on unaccepted branch state, and refusing `ready_to_apply=true` without an exact Section 3.7 R2/R3 apply pilot token.
 
+Packet-only validation:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-packet `
+  design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Apply evidence template:
 
 ```text
@@ -446,6 +454,7 @@ After apply:
 Stop and rollback if:
 
 - any apply command exits nonzero
+- `validate-packet` fails before apply
 - denied write unexpectedly succeeds
 - audit read unexpectedly fails
 - allowed docs write unexpectedly fails

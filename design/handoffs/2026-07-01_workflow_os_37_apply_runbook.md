@@ -79,6 +79,14 @@ python scripts/write_segregation_manifest.py preapply-check `
 
 The command should report `ok_without_go=true` only when dry-run, packet, repo branch, and repo dirt are acceptable. It should still report `ready_to_apply=false` until an exact R2/R3 apply token is supplied.
 
+Packet-only validation:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-packet `
+  design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Apply evidence template:
 
 ```text
@@ -149,7 +157,8 @@ Create or refresh the apply packet from the dry-run artifact before running any 
 5. Confirm every command targets the same identity.
 6. Confirm all commands are `icacls /deny` for apply or `icacls /remove:d` for rollback.
 7. Confirm no command uses `/grant`.
-8. Commit the packet as docs before apply.
+8. Run `validate-packet` against the packet and dry-run artifact.
+9. Commit the packet as docs before apply.
 
 Current packet:
 
@@ -309,6 +318,7 @@ Stop before apply if any of these is true:
 - TSU/Tsignal branch is non-default and not explicitly accepted with `--allow-branch`
 - `validate-dry-run` fails
 - `preapply-check` does not report `ok_without_go=true`
+- `validate-packet` fails
 - rollback commands are missing or unreviewed
 - probe commands are undefined
 - the requested action touches broker/order path beyond OS-level write-deny

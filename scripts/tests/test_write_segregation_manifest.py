@@ -200,6 +200,49 @@ class TestWriteSegregationManifest(unittest.TestCase):
 
         self.assertEqual(missing, [commands[-1]])
 
+    def test_validate_apply_rollback_packet_accepts_all_commands(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        packet_text = "\n".join(
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        )
+
+        summary = manifest.validate_apply_rollback_packet(
+            packet_text=packet_text,
+            packet_source=Path("packet.md"),
+            dry_run_data=plan,
+        )
+
+        self.assertEqual(summary["apply_command_count"], 3)
+        self.assertEqual(summary["rollback_command_count"], 3)
+        self.assertEqual(summary["missing_command_count"], 0)
+
+    def test_validate_apply_rollback_packet_rejects_missing_command(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        commands = [
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        ]
+
+        with self.assertRaises(ValueError) as caught:
+            manifest.validate_apply_rollback_packet(
+                packet_text="\n".join(commands[:-1]),
+                packet_source=Path("packet.md"),
+                dry_run_data=plan,
+            )
+
+        self.assertIn("packet is missing 1 dry-run commands", str(caught.exception))
+
     def test_dirty_lines_not_allowed_accepts_configured_fragment_only(self):
         dirty = [" M skills/master-agent/SKILL.md", "?? design/new.md"]
 
