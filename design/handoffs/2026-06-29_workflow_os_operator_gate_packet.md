@@ -101,6 +101,12 @@ Observed candidate:
 design/security/2026-06-29_observed_codex_identity_acl_dry_run.json
 ```
 
+Refreshed candidate:
+
+```text
+design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 This candidate was generated from the current Codex process identity `pc-tsignal-flow\dszub`. It is review-only: `applies_acl=false` and `requires_operator_go_before_apply=true`.
 
 Required operator input:
@@ -167,4 +173,4 @@ Current remaining-gates status:
 design/handoffs/2026-07-01_workflow_os_remaining_gates_readback.md
 ```
 
-Current blocker for Section 3.7 apply: `D:/APPS/TSU` is not quiesced because another session has active WIP on branch `codex/channel-runbook-ab-review-state`. A refreshed ACL artifact should be review-only unless the operator explicitly accepts that state and gives a separate R2/R3 apply GO.
+Current status for Section 3.7 apply: `D:/APPS/TSU` is clean on `master == origin/master`, `D:/APPS/Tsignal 5.0` is clean on `main == origin/main`, and the refreshed ACL artifact is review-only with `applies_acl=false`. Real ACL writes still require operator identity confirmation, rollback review, probes, and a separate R2/R3 apply GO.

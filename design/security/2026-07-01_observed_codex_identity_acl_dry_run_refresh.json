@@ -1,0 +1,562 @@
+{
+  "agent_identity": "pc-tsignal-flow\\dszub",
+  "applies_acl": false,
+  "entries": [
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\.env\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\.env",
+          "recursive": false
+        }
+      ],
+      "id": "tsu-env",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Credential and runtime environment material.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\.env\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\live_state*.db*\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\data\\live_state*.db*",
+          "recursive": false
+        }
+      ],
+      "id": "tsu-live-state-db",
+      "no_op": false,
+      "owner": "TSU live brain",
+      "reason": "SQLite/WAL live state; cloud/network is never the live path.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\live_state*.db*\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\journal*\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\data\\journal*",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-journals",
+      "no_op": false,
+      "owner": "TSU journal writer",
+      "reason": "Journal destinations are single-writer runtime evidence.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\journal*\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\interlock\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\data\\interlock",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-interlocks",
+      "no_op": false,
+      "owner": "TSU live brain",
+      "reason": "Account and ProjectX interlock lock files.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\data\\interlock\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\broker\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\broker",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-broker-code",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Broker adapters, ownership, custody, fake/live ports, ProjectX, and IBKR surfaces.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\broker\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\approve\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\approve",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-approval-code",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Approval envelope, inbox, and applier authority.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\approve\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\journal.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\live_state.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\manifest.py\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\core\\journal.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\core\\live_state.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\core\\manifest.py",
+          "recursive": false
+        }
+      ],
+      "id": "tsu-core-runtime-authority",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Journal writer, live state, and manifest authority.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\journal.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\live_state.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\core\\manifest.py\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\supervisor\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\supervisor",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-supervisor",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Supervisor process, lock, and health handling.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\supervisor\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\interlock\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\lanes\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\risk\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\strategy\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\interlock",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\lanes",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\risk",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\TSU\\src\\tsu\\strategy",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-decision-path-code",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "Interlock, lane runtime, risk, and strategy modules are live-decision-path adjacent.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\interlock\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\lanes\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\risk\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\TSU\\src\\tsu\\strategy\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\TSU\\tsu-gui\\src\\components\\*Broker*\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\TSU\\tsu-gui\\src\\components\\*ConfigWrite*\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\tsu-gui\\src\\components\\*Broker*",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\TSU\\tsu-gui\\src\\components\\*ConfigWrite*",
+          "recursive": false
+        }
+      ],
+      "id": "tsu-gui-broker-config-controls",
+      "no_op": false,
+      "owner": "TSU operator",
+      "reason": "GUI controls that can affect broker session or config-write routes.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\TSU\\tsu-gui\\src\\components\\*Broker*\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\TSU\\tsu-gui\\src\\components\\*ConfigWrite*\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [],
+      "class": "write-allowed-for-agents",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\TSU\\design",
+          "recursive": true
+        }
+      ],
+      "id": "tsu-design-docs",
+      "no_op": true,
+      "owner": "TSU planning workflow",
+      "reason": "Planning, audit, and handoff docs are allowed unless a specific plan marks them frozen.",
+      "rollback_commands": []
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\.env\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\active_accounts.json\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\.env",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\active_accounts.json",
+          "recursive": false
+        }
+      ],
+      "id": "tsignal-env-and-account",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Credential, runtime environment, and active account material.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\.env\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\active_accounts.json\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\config\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\config",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-config",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Runtime and broker configuration; requires finer split before ACL generation.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\config\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\*.db*\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\*.db*",
+          "recursive": false
+        }
+      ],
+      "id": "tsignal-live-db",
+      "no_op": false,
+      "owner": "Tsignal live brain",
+      "reason": "SQLite/WAL state including Tsignal, OpusF, Questrade, basket, and router stores.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\*.db*\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\interlock\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\interlock",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-interlocks",
+      "no_op": false,
+      "owner": "Tsignal live brain",
+      "reason": "Account interlock locks.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\interlock\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\executor\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\tsignal\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\questrade\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "live-brain-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\bridge\\executor",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\bridge\\tsignal",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\bridge\\questrade",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-live-bridge",
+      "no_op": false,
+      "owner": "Tsignal live brain",
+      "reason": "Executor diagnostics, lineage, lifecycle state, Tsignal-owned bridge outputs, and broker-adjacent bridge surfaces.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\executor\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\tsignal\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\questrade\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\watchf\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "read-only-for-agents",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data\\bridge\\watchf",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-watchf-bridge",
+      "no_op": false,
+      "owner": "WatchF producer",
+      "reason": "Advisory WatchF snapshots should be readable for audits, but generic coding agents should not write producer outputs.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\\bridge\\watchf\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_bot.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_headless.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_webhook_handler.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_order_panel.py\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_settings.py\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal_bot.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal_headless.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal_webhook_handler.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal_order_panel.py",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal_settings.py",
+          "recursive": false
+        }
+      ],
+      "id": "tsignal-entrypoints",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Main app, headless runtime, webhook intake, order panel, and settings entrypoints.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_bot.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_headless.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_webhook_handler.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_order_panel.py\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal_settings.py\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\trading\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal\\trading",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-trading-code",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Broker, order, risk, position, and pure-signal execution modules.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\trading\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\feed\\questrade_*\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal\\feed\\questrade_*",
+          "recursive": false
+        }
+      ],
+      "id": "tsignal-feed-auth",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Broker feed and auth paths.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\feed\\questrade_*\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\runtime\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\interlock\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal\\runtime",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal\\interlock",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-runtime-interlock-code",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Runtime control/state and interlock code.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\runtime\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal\\interlock\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\components\\order-entry*\" /deny \"pc-tsignal-flow\\dszub:(W)\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\panels\\qt-rapid\\*Order*\" /deny \"pc-tsignal-flow\\dszub:(W)\""
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\components\\order-entry*",
+          "recursive": false
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\panels\\qt-rapid\\*Order*",
+          "recursive": false
+        }
+      ],
+      "id": "tsignal-order-gui",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Order entry, order confirmation, and order table UI.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\components\\order-entry*\" /remove:d \"pc-tsignal-flow\\dszub\"",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\tsignal-gui\\src\\app\\panels\\qt-rapid\\*Order*\" /remove:d \"pc-tsignal-flow\\dszub\""
+      ]
+    },
+    {
+      "apply_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\AI\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\scratch\\bench\\models\" /deny \"pc-tsignal-flow\\dszub:(W)\" /T"
+      ],
+      "class": "operator-only",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\data",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\AI",
+          "recursive": true
+        },
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\scratch\\bench\\models",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-heavy-live-assets",
+      "no_op": false,
+      "owner": "Tsignal operator",
+      "reason": "Junction-backed heavy assets include live DB, llama.cpp binaries, and GGUF models.",
+      "rollback_commands": [
+        "icacls \"D:\\APPS\\Tsignal 5.0\\data\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\AI\" /remove:d \"pc-tsignal-flow\\dszub\" /T",
+        "icacls \"D:\\APPS\\Tsignal 5.0\\scratch\\bench\\models\" /remove:d \"pc-tsignal-flow\\dszub\" /T"
+      ]
+    },
+    {
+      "apply_commands": [],
+      "class": "write-allowed-for-agents",
+      "expanded_targets": [
+        {
+          "path": "D:\\APPS\\Tsignal 5.0\\design",
+          "recursive": true
+        }
+      ],
+      "id": "tsignal-design-docs",
+      "no_op": true,
+      "owner": "Tsignal planning workflow",
+      "reason": "Planning and audit docs are valid write targets unless operator WIP or a plan freezes them.",
+      "rollback_commands": []
+    }
+  ],
+  "generated_at": "2026-07-01T17:26:38Z",
+  "kind": "mechanical_write_segregation_acl_dry_run",
+  "requires_operator_go_before_apply": true,
+  "schema_version": 1,
+  "source_manifest": "design\\security\\write_segregation_path_manifest.json",
+  "warning": "Dry-run artifact only. Do not execute apply_commands without explicit R2/R3 operator GO and a refreshed quiesced-state manifest."
+}

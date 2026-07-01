@@ -6,10 +6,10 @@ Status: shipped scope complete; future gated work remains
 
 ## Current State
 
-Workflow OS shipped scope is complete at:
+Workflow OS shipped scope is complete. Recent committed readback before this R1 refresh:
 
 ```text
-a6c25c8 docs(workflow-os): benchmark Headroom and RTK
+b2f52ea docs(workflow-os): record remaining gated work
 ```
 
 `python scripts/workflow_os_completion.py` reports `ready=true`.
@@ -30,18 +30,24 @@ Section 3.7 is not executable from a broad "go" or from the shipped Workflow OS 
 
 Current boundary check:
 
-- `D:/APPS/TSU` is not quiesced: active branch `codex/channel-runbook-ab-review-state` with WIP in `tests/test_channel_reader_shadow_window_runbook.py` and `tools/channel_reader_shadow_window_runbook.py`.
+- `D:/APPS/TSU` is clean on `master == origin/master`.
 - `D:/APPS/Tsignal 5.0` is clean on `main == origin/main`.
 
-Therefore the next safe token is:
+Refreshed review-only dry-run artifact:
 
 ```text
-GO §3.7 R1 refresh only
+design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
 ```
 
-That token means: refresh the manifest and dry-run ACL/rollback artifact for review only, with `applies_acl=false`. It still must not execute `icacls`.
+Sanity readback:
 
-The later apply token must be explicit, for example:
+- `applies_acl=false`
+- `requires_operator_go_before_apply=true`
+- 24 manifest entries
+- 22 non-noop entries
+- no missing apply/rollback command pairs
+
+The next executable token must be explicit, for example:
 
 ```text
 GO §3.7 R2/R3 apply pilot
@@ -66,4 +72,4 @@ No manual trigger is active now. These stay parked:
 
 ## Decision
 
-Do not mark Section 3.7 apply complete. Do not execute ACL writes. Do not regenerate an apply-ready artifact from the current TSU WIP unless the operator explicitly accepts that state as the reviewed input.
+Do not mark Section 3.7 apply complete. Do not execute ACL writes. The R1 dry-run refresh is complete, but real permission changes still require a separate R2/R3 apply GO.
