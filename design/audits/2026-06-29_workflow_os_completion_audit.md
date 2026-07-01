@@ -14,8 +14,11 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 
 ## Current Repo Readback
 
-- `dotclaude-ecosystem`: pre-audit baseline was `main == origin/main` at `ec239d5`.
-- Dirty boundary: `skills/master-agent/SKILL.md` is operator WIP and remains outside Workflow OS commits.
+- `dotclaude-ecosystem`: current Workflow OS HEAD is `a6c25c8` (`docs(workflow-os): benchmark Headroom and RTK`), `main == origin/main`.
+- Dirty boundary: `skills/master-agent/SKILL.md` is operator/other-session WIP and remains outside Workflow OS commits.
+- External §3.7 apply boundary checked on 2026-07-01:
+  - `D:/APPS/TSU` is not quiesced: active branch `codex/channel-runbook-ab-review-state` with WIP in `tests/test_channel_reader_shadow_window_runbook.py` and `tools/channel_reader_shadow_window_runbook.py`.
+  - `D:/APPS/Tsignal 5.0` is clean on `main == origin/main`.
 - `python scripts/session_cost_probe.py check --baseline design/baselines/workflow_os_a1_baseline.json`
   - `claude_global`, `codex_global`, `cline_global`, `antigravity_global`: `kernel_ok=true`
   - `sync_check.ok=true`
@@ -69,6 +72,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 ## Future Gated Work
 
 1. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
+   - Current 2026-07-01 status: apply remains gated because `D:/APPS/TSU` has active WIP. A refreshed ACL apply/rollback artifact should be generated only from a quiesced or explicitly accepted repo state.
 2. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
 
 ## Completion Gate

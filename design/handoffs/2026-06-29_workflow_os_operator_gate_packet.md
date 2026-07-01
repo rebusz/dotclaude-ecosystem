@@ -146,7 +146,7 @@ These remain manual and must not be pulled forward silently:
 
 ## Current Safe Stop
 
-If no operator input is available, stop here. Do not mark the full Workflow OS plan complete, and do not invent B0 costs, Windows identities, or manual trigger readiness.
+If no operator input is available, stop here. The shipped Workflow OS scope is complete, but do not mark Section 3.7 apply complete and do not invent Windows identities, quiesced repo state, or manual trigger readiness.
 
 ## Follow-up Readback: Headroom/RTK
 
@@ -158,3 +158,13 @@ design/measurements/2026-07-01_headroom_rtk_benchmark_report.json
 ```
 
 Decision: `PARK`. No proxy, wrapper, hook, or global default was enabled.
+
+## Follow-up Readback: Remaining Gates
+
+Current remaining-gates status:
+
+```text
+design/handoffs/2026-07-01_workflow_os_remaining_gates_readback.md
+```
+
+Current blocker for Section 3.7 apply: `D:/APPS/TSU` is not quiesced because another session has active WIP on branch `codex/channel-runbook-ab-review-state`. A refreshed ACL artifact should be review-only unless the operator explicitly accepts that state and gives a separate R2/R3 apply GO.
