@@ -321,6 +321,70 @@ class TestWriteSegregationManifest(unittest.TestCase):
         self.assertTrue(summary["ok_without_go"])
         self.assertTrue(summary["repo_statuses"][0]["branch_allowed"])
 
+    def _valid_apply_evidence(self, plan):
+        first_apply = next(command for entry in plan["entries"] for command in entry["apply_commands"])
+        first_rollback = next(command for entry in plan["entries"] for command in entry["rollback_commands"])
+        return {
+            "schema_version": 1,
+            "kind": "mechanical_write_segregation_apply_evidence",
+            "scope": "pilot",
+            "operator_go_token": "GO Section 3.7 R2/R3 apply pilot",
+            "agent_identity": plan["agent_identity"],
+            "command_results": [
+                {"phase": "apply", "command": first_apply, "exit_code": 0},
+                {"phase": "rollback", "command": first_rollback, "exit_code": 0},
+            ],
+            "probes": {
+                "write_denied": True,
+                "audit_read_allowed": True,
+                "allowed_docs_write_ok": True,
+                "runtime_owner_not_blocked": True,
+            },
+            "final_decision": "pilot_passed",
+        }
+
+    def test_validate_apply_evidence_accepts_pilot_evidence(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        evidence = self._valid_apply_evidence(plan)
+
+        summary = manifest.validate_apply_evidence(evidence, source=Path("evidence.json"), dry_run_data=plan)
+
+        self.assertEqual(summary["scope"], "pilot")
+        self.assertEqual(summary["apply_result_count"], 1)
+        self.assertEqual(summary["rollback_result_count"], 1)
+
+    def test_validate_apply_evidence_rejects_command_outside_dry_run(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        evidence = self._valid_apply_evidence(plan)
+        evidence["command_results"][0]["command"] = 'icacls "D:\\APPS\\TSU\\other" /deny "LOCAL\\CodexAgent:(W)"'
+
+        with self.assertRaises(ValueError) as caught:
+            manifest.validate_apply_evidence(evidence, source=Path("evidence.json"), dry_run_data=plan)
+
+        self.assertIn("not in dry-run apply_commands", str(caught.exception))
+
+    def test_validate_apply_evidence_rejects_missing_runtime_probe(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        evidence = self._valid_apply_evidence(plan)
+        evidence["probes"]["runtime_owner_not_blocked"] = False
+
+        with self.assertRaises(ValueError) as caught:
+            manifest.validate_apply_evidence(evidence, source=Path("evidence.json"), dry_run_data=plan)
+
+        self.assertIn("runtime_owner_not_blocked", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

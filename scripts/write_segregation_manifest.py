@@ -304,6 +304,103 @@ def _packet_missing_commands(dry_run_data: dict[str, Any], packet_text: str) -> 
     return missing
 
 
+def _dry_run_command_sets(dry_run_data: dict[str, Any]) -> tuple[set[str], set[str]]:
+    apply_commands: set[str] = set()
+    rollback_commands: set[str] = set()
+    for entry in dry_run_data.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        apply_commands.update(command for command in entry.get("apply_commands", []) if isinstance(command, str))
+        rollback_commands.update(command for command in entry.get("rollback_commands", []) if isinstance(command, str))
+    return apply_commands, rollback_commands
+
+
+def validate_apply_evidence(
+    evidence: dict[str, Any],
+    *,
+    source: Path,
+    dry_run_data: dict[str, Any],
+) -> dict[str, Any]:
+    errors: list[str] = []
+    if evidence.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+    if evidence.get("kind") != "mechanical_write_segregation_apply_evidence":
+        errors.append("kind must be mechanical_write_segregation_apply_evidence")
+    if evidence.get("operator_go_token") not in SECTION37_APPLY_GO_TOKENS:
+        errors.append("operator_go_token must be an accepted Section 3.7 R2/R3 apply token")
+    if evidence.get("agent_identity") != dry_run_data.get("agent_identity"):
+        errors.append("agent_identity must match dry-run artifact")
+
+    scope = evidence.get("scope")
+    if scope not in {"pilot", "batch", "full"}:
+        errors.append("scope must be one of: pilot, batch, full")
+
+    apply_commands, rollback_commands = _dry_run_command_sets(dry_run_data)
+    command_results = evidence.get("command_results")
+    if not isinstance(command_results, list) or not command_results:
+        errors.append("command_results must be a non-empty list")
+        command_results = []
+
+    applied_count = 0
+    rollback_count = 0
+    for index, result in enumerate(command_results):
+        if not isinstance(result, dict):
+            errors.append(f"command_results[{index}] must be an object")
+            continue
+        phase = result.get("phase")
+        command = result.get("command")
+        exit_code = result.get("exit_code")
+        if phase not in {"apply", "rollback"}:
+            errors.append(f"command_results[{index}].phase must be apply or rollback")
+        if not isinstance(command, str) or not command.strip():
+            errors.append(f"command_results[{index}].command must be non-empty text")
+            continue
+        if not isinstance(exit_code, int):
+            errors.append(f"command_results[{index}].exit_code must be an integer")
+        if phase == "apply":
+            applied_count += 1
+            if command not in apply_commands:
+                errors.append(f"command_results[{index}].command is not in dry-run apply_commands")
+        if phase == "rollback":
+            rollback_count += 1
+            if command not in rollback_commands:
+                errors.append(f"command_results[{index}].command is not in dry-run rollback_commands")
+
+    probes = evidence.get("probes")
+    if not isinstance(probes, dict):
+        errors.append("probes must be an object")
+        probes = {}
+    required_probe_keys = {
+        "write_denied",
+        "audit_read_allowed",
+        "allowed_docs_write_ok",
+        "runtime_owner_not_blocked",
+    }
+    for key in sorted(required_probe_keys):
+        if probes.get(key) is not True:
+            errors.append(f"probes.{key} must be true")
+
+    final_decision = evidence.get("final_decision")
+    if final_decision not in {"pilot_passed", "batch_passed", "full_apply_verified", "rolled_back", "failed_stop"}:
+        errors.append(
+            "final_decision must be one of: pilot_passed, batch_passed, full_apply_verified, rolled_back, failed_stop"
+        )
+    if final_decision in {"pilot_passed", "batch_passed", "full_apply_verified"} and rollback_count == 0:
+        errors.append("successful apply evidence must include at least one rollback command result")
+    if applied_count == 0:
+        errors.append("apply evidence must include at least one apply command result")
+
+    if errors:
+        raise ValueError(f"{source}: " + "; ".join(errors))
+    return {
+        "scope": scope,
+        "command_result_count": len(command_results),
+        "apply_result_count": applied_count,
+        "rollback_result_count": rollback_count,
+        "final_decision": final_decision,
+    }
+
+
 def _git_status(repo: Path) -> dict[str, Any]:
     completed = subprocess.run(
         ["git", "-C", str(repo), "status", "--short", "--branch"],
@@ -495,6 +592,22 @@ def cmd_preapply_check(args: argparse.Namespace) -> int:
     return 0 if summary["ok_without_go"] else 1
 
 
+def cmd_validate_apply_evidence(args: argparse.Namespace) -> int:
+    try:
+        dry_run_data = load_manifest(args.dry_run)
+        validate_acl_dry_run_plan(dry_run_data, source=args.dry_run)
+        summary = validate_apply_evidence(
+            load_manifest(args.evidence),
+            source=args.evidence,
+            dry_run_data=dry_run_data,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"ok": True, **summary}, indent=2, sort_keys=True))
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate mechanical write-segregation path manifests")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -516,6 +629,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     preapply.add_argument("--require-branch", action="append", help="Require <repo>=<git status branch line>")
     preapply.add_argument("--allow-branch", action="append", help="Accept <repo>=<git status branch line> instead of the default branch")
     preapply.add_argument("--operator-go-token")
+    evidence = sub.add_parser("validate-apply-evidence", help="Validate Section 3.7 apply evidence without applying ACLs")
+    evidence.add_argument("evidence", type=Path)
+    evidence.add_argument("--dry-run", type=Path, required=True)
     return parser.parse_args(argv)
 
 
@@ -529,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_validate_dry_run(args)
     if args.cmd == "preapply-check":
         return cmd_preapply_check(args)
+    if args.cmd == "validate-apply-evidence":
+        return cmd_validate_apply_evidence(args)
     raise AssertionError(args.cmd)
 
 

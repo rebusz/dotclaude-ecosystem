@@ -79,6 +79,12 @@ python scripts/write_segregation_manifest.py preapply-check `
 
 Clean non-default TSU/Tsignal branches require explicit `--allow-branch`.
 
+Apply evidence template:
+
+```text
+design/security/2026-07-01_section37_apply_evidence_template.json
+```
+
 The next executable token must be explicit, for example:
 
 ```text
@@ -94,6 +100,7 @@ Before any apply:
 - `preapply-check` must report `ok_without_go=true`.
 - Rollback commands must be reviewed.
 - A write probe and read probe must be defined.
+- Future pilot/batch evidence must pass `validate-apply-evidence`.
 - Operator must confirm the Windows identity to deny writes for.
 
 ### Manual Triggers

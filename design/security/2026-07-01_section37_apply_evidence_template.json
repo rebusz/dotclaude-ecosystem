@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "mechanical_write_segregation_apply_evidence",
+  "scope": "pilot",
+  "operator_go_token": "GO Section 3.7 R2/R3 apply pilot",
+  "agent_identity": "pc-tsignal-flow\\dszub",
+  "source_manifest": "design/security/write_segregation_path_manifest.json",
+  "source_dry_run": "design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json",
+  "source_packet": "design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md",
+  "command_results": [
+    {
+      "phase": "apply",
+      "command": "<exact command copied from dry-run apply_commands>",
+      "exit_code": 0,
+      "stdout_excerpt": "",
+      "stderr_excerpt": ""
+    },
+    {
+      "phase": "rollback",
+      "command": "<exact command copied from dry-run rollback_commands>",
+      "exit_code": 0,
+      "stdout_excerpt": "",
+      "stderr_excerpt": ""
+    }
+  ],
+  "probes": {
+    "write_denied": true,
+    "audit_read_allowed": true,
+    "allowed_docs_write_ok": true,
+    "runtime_owner_not_blocked": true
+  },
+  "final_decision": "pilot_passed",
+  "notes": [
+    "Template only. Replace placeholder commands with exact commands from the dry-run artifact before validation.",
+    "Do not use this as apply evidence until a real operator-approved pilot has run."
+  ]
+}

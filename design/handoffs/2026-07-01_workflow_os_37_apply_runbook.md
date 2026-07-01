@@ -79,6 +79,20 @@ python scripts/write_segregation_manifest.py preapply-check `
 
 The command should report `ok_without_go=true` only when dry-run, packet, repo branch, and repo dirt are acceptable. It should still report `ready_to_apply=false` until an exact R2/R3 apply token is supplied.
 
+Apply evidence template:
+
+```text
+design/security/2026-07-01_section37_apply_evidence_template.json
+```
+
+Future apply evidence validator:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-apply-evidence `
+  design/security/<section37-apply-evidence>.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Expected current shape:
 
 - `ok=true`
@@ -205,6 +219,7 @@ Pilot success evidence:
 - allowed docs write still works
 - rollback command exit code captured
 - post-rollback write behavior returns to expected state
+- `validate-apply-evidence` passes against the recorded evidence JSON
 
 ## Phase 5: TSU Batches
 
@@ -277,6 +292,9 @@ python scripts/write_segregation_manifest.py validate design/security/write_segr
 python scripts/write_segregation_manifest.py validate-dry-run `
   design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json `
   --manifest design/security/write_segregation_path_manifest.json
+python scripts/write_segregation_manifest.py validate-apply-evidence `
+  design/security/<section37-apply-evidence>.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
 python -m pytest scripts/tests -q
 ```
 

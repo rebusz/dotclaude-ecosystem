@@ -166,6 +166,20 @@ python scripts/write_segregation_manifest.py preapply-check `
 
 If TSU or Tsignal is intentionally reviewed on a clean non-default branch, add an explicit `--allow-branch "<repo>=<git-status-branch-line>"` argument.
 
+Apply evidence template:
+
+```text
+design/security/2026-07-01_section37_apply_evidence_template.json
+```
+
+Validate future pilot/batch evidence:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-apply-evidence `
+  design/security/<section37-apply-evidence>.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 Important: the generated dry-run artifact still has `applies_acl=false`. Do not execute any generated `icacls` command without:
 
 - quiesced TSU and Tsignal repos,
@@ -174,6 +188,7 @@ Important: the generated dry-run artifact still has `applies_acl=false`. Do not 
 - passing `validate-dry-run` preflight,
 - passing `preapply-check` preflight,
 - reviewed rollback commands,
+- passing `validate-apply-evidence` after pilot/batch execution,
 - explicit R2/R3 operator GO naming the apply step.
 
 ## Gate 3: Manual Deferred Triggers

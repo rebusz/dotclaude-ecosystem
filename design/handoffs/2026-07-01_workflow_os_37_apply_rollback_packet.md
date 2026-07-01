@@ -89,6 +89,20 @@ If TSU or Tsignal branch/dirt is not explicitly accepted as reviewed input state
 
 The pre-apply checker enforces this mechanically by failing on unaccepted dirty state, failing on unaccepted branch state, and refusing `ready_to_apply=true` without an exact Section 3.7 R2/R3 apply pilot token.
 
+Apply evidence template:
+
+```text
+design/security/2026-07-01_section37_apply_evidence_template.json
+```
+
+Future apply evidence must validate with:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-apply-evidence `
+  design/security/<section37-apply-evidence>.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json
+```
+
 ## Pilot Recommendation
 
 Use the smallest low-blast pilot before any repo-wide apply:
@@ -435,6 +449,7 @@ Stop and rollback if:
 - denied write unexpectedly succeeds
 - audit read unexpectedly fails
 - allowed docs write unexpectedly fails
+- `validate-apply-evidence` fails on the recorded evidence
 - rollback command exits nonzero
 - a command target is not present in the dry-run artifact
 - the operator did not explicitly approve the batch being applied
