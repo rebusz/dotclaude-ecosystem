@@ -8,7 +8,7 @@ Parent plan: `design/plans/2026-06-27_global_agent_workflow_os.md`
 
 The current Workflow OS shipped scope is complete.
 
-The operator closed B0/Headroom, Section 3.7 apply, and manual trigger lanes as future gated work on 2026-06-29. This is a scope-close decision, not evidence that `/cost` values, ACL application, or future GUI/research/capability-registry work were performed.
+The operator closed B0/Headroom, Section 3.7 apply, and manual trigger lanes as future gated work on 2026-06-29. Later follow-up work completed B0 and the Headroom/RTK measurement gate; ACL application and future GUI/research/capability-registry work remain unperformed.
 
 Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_gate_packet.md`.
 
@@ -36,8 +36,8 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `requires_operator_go_before_apply=true`
   - review-only candidate, not an operator-approved apply plan
 - `python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json`
-  - `completed=4`
-  - `killed=5`
+  - `completed=5`
+  - `killed=4`
   - `deferred=0`
   - `manual=0`
   - `triggered=0`
@@ -58,7 +58,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 | Cline global sync | Complete | `design/handoffs/2026-06-29_cline_global_sync.md`; A1 check shows `cline_global.kernel_ok=true` | Repo-local Cline propagation is a later explicit per-repo sync slice |
 | Antigravity global sync | Complete | `design/handoffs/2026-06-29_antigravity_global_sync.md`; A1 check shows `antigravity_global.kernel_ok=true` | MCP/hooks remain unwritten later slice |
 | B0 mixed-session baseline | Complete after shipped-scope close | `design/baselines/workflow_os_b0_mixed_sessions.json`; `design/baselines/b0_sessions/read_heavy_audit.json`; `design/baselines/b0_sessions/multi_file_edit.json`; `design/baselines/b0_sessions/research_plan.json`; `design/baselines/b0_sessions/2026-06-29_selected_cost_readbacks.json` | None for baseline artifact; Headroom/RTK remains separate future gated work |
-| Headroom/RTK benchmark | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after explicit Headroom/RTK GO |
+| Headroom/RTK benchmark | Complete as R1 measurement; decision PARK | `scripts/headroom_rtk_benchmark.py`; `design/measurements/2026-07-01_headroom_rtk_benchmark_report.json`; trigger board marks it `completed` | No default-on proxy. Future proxy replay would need explicit plan proving total cost reduction >=15 percent with no quality regression |
 | Capability registry live file/status surface | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after >=3 gated tools pass section 9, generated only |
 | Impeccable layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work when a real GUI/web build starts |
 | deer-flow research layer | Closed out of shipped scope | `design/workflow_os_revisit_triggers.json` marks it `killed` for current scope | Future gated work after PAPER WEEK and LAB research trigger |
@@ -68,12 +68,11 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 
 ## Future Gated Work
 
-1. **Headroom/RTK benchmark:** B0 is now measured, but the benchmark remains separate future gated work after explicit Headroom/RTK GO.
-2. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
-3. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
+1. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
+2. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
 
 ## Completion Gate
 
 - `python scripts/workflow_os_completion.py` exits 0 with `ready=true`.
-- Current proof is by scope-close decision, not by B0 `/cost`, ACL apply, or manual trigger execution.
+- Current proof is by completed B0 plus scope-close decision for ACL apply and manual trigger lanes.
 - Future gated work remains separately recoverable from the decision, trigger board, and operator gate packet.

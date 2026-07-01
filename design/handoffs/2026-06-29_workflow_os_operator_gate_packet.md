@@ -76,7 +76,7 @@ Then re-run:
 python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json
 ```
 
-Expected effect: `headroom-rtk-benchmark` can stop being deferred only if the mixed-session baseline exists and passes review.
+Current effect: `headroom-rtk-benchmark` has now run as a measurement-only R1 slice and is parked, not enabled by default.
 
 Readiness check:
 
@@ -147,3 +147,14 @@ These remain manual and must not be pulled forward silently:
 ## Current Safe Stop
 
 If no operator input is available, stop here. Do not mark the full Workflow OS plan complete, and do not invent B0 costs, Windows identities, or manual trigger readiness.
+
+## Follow-up Readback: Headroom/RTK
+
+Completed after this packet:
+
+```text
+design/handoffs/2026-07-01_workflow_os_headroom_rtk_readback.md
+design/measurements/2026-07-01_headroom_rtk_benchmark_report.json
+```
+
+Decision: `PARK`. No proxy, wrapper, hook, or global default was enabled.

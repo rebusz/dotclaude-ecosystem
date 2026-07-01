@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-06-29",
+  "updated": "2026-07-01",
   "items": [
     {
       "id": "slice-0b-after-tsu-pr-141",
@@ -75,8 +75,8 @@
       "title": "Headroom and RTK benchmark",
       "plane": "token",
       "risk_class": "R1",
-      "status": "killed",
-      "completion_note": "Closed out of current Workflow OS shipped scope by operator decision on 2026-06-29; remains future gated work after explicit B0 /cost collection.",
+      "status": "completed",
+      "completion_note": "Completed as R1 measurement-only benchmark on 2026-07-01. Decision: PARK, not default-on. Headroom audit-reads measured B0 read traffic but did not prove total-cost replay/no-regression; RTK executable was not locally available.",
       "trigger_predicate": {
         "type": "command_exit_zero",
         "command": [
@@ -87,7 +87,7 @@
           "design/baselines/workflow_os_b0_mixed_sessions.json"
         ]
       },
-      "action": "Benchmark only after the section 9 B0 mixed-session baseline exists. The A1 kernel baseline alone is not enough."
+      "action": "Keep Headroom/RTK parked unless a future explicit proxy-replay plan can measure total cost reduction >=15 percent with no quality regression."
     },
     {
       "id": "deer-flow-after-paper-week",

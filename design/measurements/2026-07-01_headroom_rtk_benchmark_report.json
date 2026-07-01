@@ -1,0 +1,100 @@
+{
+  "baseline": "D:\\dotclaude\\dotclaude-ecosystem\\design\\baselines\\workflow_os_b0_mixed_sessions.json",
+  "decision": {
+    "decision": "PARK",
+    "default_on": false,
+    "reasons": [
+      "headroom audit-reads measured B0 read traffic, but this is an opportunity audit, not a full replay with output/cost and artifact equivalence",
+      "B0 selected sessions showed no identical/subset read dedup opportunity",
+      "rtk executable was not available locally, so no RTK command-output benchmark was run",
+      "Workflow OS ship gate requires total cost reduction >=15 percent with no quality regression before default-on"
+    ],
+    "ship_gate_pass": false
+  },
+  "generated_at": "2026-07-01T17:17:58+00:00",
+  "headroom": {
+    "available": true,
+    "command": [
+      "C:\\Users\\dszub\\AppData\\Local\\Temp\\workflow-os-headroom-venv\\Scripts\\headroom.exe",
+      "audit-reads",
+      "--path",
+      "<temp-b0-jsonls>",
+      "--format",
+      "json"
+    ],
+    "metrics": {
+      "class_bytes": {
+        "data/config": 12345,
+        "docs/text": 222761,
+        "other": 270419,
+        "source code": 165008
+      },
+      "dedup_identical_bytes": 0,
+      "dedup_identical_calls": 0,
+      "files_skipped": 0,
+      "gaps_over_1h": 12,
+      "gaps_over_5m": 91,
+      "linenum_overhead_bytes": 27907,
+      "read_bytes": 670533,
+      "read_calls": 73,
+      "read_calls_small": 12,
+      "reads_per_file_max": 4,
+      "reads_per_file_max_median": 3,
+      "residency_mean": 176.75342465753425,
+      "residency_median": 164,
+      "residency_p90": 322,
+      "sessions": 3,
+      "sessions_with_gap": 3,
+      "stale_bytes": 88427,
+      "stale_calls": 17,
+      "subset_bytes": 0,
+      "subset_calls": 0,
+      "tool_bytes": {
+        "Agent": 112535,
+        "AskUserQuestion": 1459,
+        "Bash": 91738,
+        "Edit": 10434,
+        "Glob": 2012,
+        "Grep": 70283,
+        "PowerShell": 37045,
+        "Read": 670533,
+        "Skill": 81,
+        "ToolSearch": 0,
+        "WebFetch": 4709,
+        "WebSearch": 15643,
+        "Workflow": 6491,
+        "Write": 3058,
+        "mcp__ccd_session__mark_chapter": 313,
+        "mcp__plugin_claude-mem_mcp-search__search": 7103,
+        "unknown": 96
+      },
+      "write_readback_bytes": 0,
+      "write_readback_calls": 0
+    }
+  },
+  "risk_class": "R1",
+  "rtk": {
+    "available": false,
+    "command": [
+      "rtk",
+      "--version"
+    ],
+    "reason": "rtk executable not found on PATH"
+  },
+  "schema_version": 1,
+  "scope": "Workflow OS token proxy benchmark; measurement-only; no proxy, wrapper, hook, or global config change",
+  "sessions": [
+    {
+      "id": "read_heavy_audit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\f0b6fcbb-cf29-4d3f-90cb-056d0728f893.jsonl"
+    },
+    {
+      "id": "multi_file_edit",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\5844f91a-68e0-4252-97e6-fae3702ca4f0.jsonl"
+    },
+    {
+      "id": "research_plan",
+      "jsonl": "C:\\Users\\dszub\\.claude\\projects\\D--APPS-TSU\\e3c378d6-d4fd-4397-834a-9ca6ed35378f.jsonl"
+    }
+  ]
+}
