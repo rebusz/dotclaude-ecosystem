@@ -153,6 +153,135 @@ def build_acl_dry_run_plan(
     }
 
 
+def validate_acl_dry_run_plan(
+    data: dict[str, Any],
+    *,
+    source: Path,
+    manifest_data: dict[str, Any] | None = None,
+    manifest_source: Path | None = None,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    if data.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+    if data.get("kind") != "mechanical_write_segregation_acl_dry_run":
+        errors.append("kind must be mechanical_write_segregation_acl_dry_run")
+    if data.get("applies_acl") is not False:
+        errors.append("applies_acl must be false for dry-run artifacts")
+    if data.get("requires_operator_go_before_apply") is not True:
+        errors.append("requires_operator_go_before_apply must be true")
+
+    agent_identity = data.get("agent_identity")
+    if not isinstance(agent_identity, str) or not agent_identity.strip():
+        errors.append("agent_identity must be non-empty text")
+        agent_identity = ""
+
+    entries = data.get("entries")
+    if not isinstance(entries, list) or not entries:
+        errors.append("entries must be a non-empty list")
+        entries = []
+
+    manifest_entries_by_id: dict[str, dict[str, Any]] = {}
+    if manifest_data is not None:
+        try:
+            validate_manifest(manifest_data, source=manifest_source or Path("<manifest>"))
+        except ValueError as exc:
+            errors.append(f"source manifest invalid: {exc}")
+        else:
+            manifest_entries_by_id = {entry["id"]: entry for entry in manifest_data["entries"]}
+
+    seen_ids: set[str] = set()
+    non_noop_count = 0
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"entries[{index}] must be an object")
+            continue
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, str) or not entry_id.strip():
+            errors.append(f"entries[{index}].id must be non-empty text")
+            entry_id = f"<invalid-{index}>"
+        elif entry_id in seen_ids:
+            errors.append(f"duplicate entry id: {entry_id}")
+        else:
+            seen_ids.add(entry_id)
+
+        entry_class = entry.get("class")
+        if entry_class not in ALLOWED_CLASSES:
+            errors.append(f"entries[{index}].class must be one of: {', '.join(sorted(ALLOWED_CLASSES))}")
+        manifest_entry = manifest_entries_by_id.get(entry_id)
+        if manifest_entries_by_id and manifest_entry is None:
+            errors.append(f"entries[{index}].id not found in source manifest: {entry_id}")
+        if manifest_entry and entry_class != manifest_entry.get("class"):
+            errors.append(f"entries[{index}].class does not match source manifest for {entry_id}")
+
+        no_op = entry.get("no_op")
+        if not isinstance(no_op, bool):
+            errors.append(f"entries[{index}].no_op must be boolean")
+            no_op = False
+
+        apply_commands = entry.get("apply_commands")
+        rollback_commands = entry.get("rollback_commands")
+        expanded_targets = entry.get("expanded_targets")
+        if not isinstance(apply_commands, list):
+            errors.append(f"entries[{index}].apply_commands must be a list")
+            apply_commands = []
+        if not isinstance(rollback_commands, list):
+            errors.append(f"entries[{index}].rollback_commands must be a list")
+            rollback_commands = []
+        if not isinstance(expanded_targets, list) or not expanded_targets:
+            errors.append(f"entries[{index}].expanded_targets must be a non-empty list")
+
+        if no_op:
+            if apply_commands or rollback_commands:
+                errors.append(f"entries[{index}] no_op entries must not contain ACL commands")
+            if entry_class != "write-allowed-for-agents":
+                errors.append(f"entries[{index}] no_op is only valid for write-allowed-for-agents")
+            continue
+
+        non_noop_count += 1
+        if not apply_commands:
+            errors.append(f"entries[{index}] non-noop entry is missing apply_commands")
+        if not rollback_commands:
+            errors.append(f"entries[{index}] non-noop entry is missing rollback_commands")
+        if len(apply_commands) != len(rollback_commands):
+            errors.append(f"entries[{index}] apply_commands and rollback_commands length mismatch")
+
+        for command in apply_commands:
+            if not isinstance(command, str):
+                errors.append(f"entries[{index}] apply command must be text")
+                continue
+            if not command.startswith('icacls "') or " /deny " not in command:
+                errors.append(f"entries[{index}] apply command must be an icacls /deny command")
+            if f'"{agent_identity}:(W)"' not in command:
+                errors.append(f"entries[{index}] apply command must deny the dry-run agent identity")
+            if " /grant " in command or " /remove" in command:
+                errors.append(f"entries[{index}] apply command contains a non-apply ACL operation")
+
+        for command in rollback_commands:
+            if not isinstance(command, str):
+                errors.append(f"entries[{index}] rollback command must be text")
+                continue
+            if not command.startswith('icacls "') or " /remove:d " not in command:
+                errors.append(f"entries[{index}] rollback command must be an icacls /remove:d command")
+            if f'"{agent_identity}"' not in command:
+                errors.append(f"entries[{index}] rollback command must remove the dry-run agent identity")
+            if " /deny " in command or " /grant " in command:
+                errors.append(f"entries[{index}] rollback command contains a non-rollback ACL operation")
+
+    if manifest_entries_by_id:
+        missing_from_dry_run = sorted(set(manifest_entries_by_id) - seen_ids)
+        if missing_from_dry_run:
+            errors.append("dry-run missing source manifest entries: " + ", ".join(missing_from_dry_run))
+
+    if errors:
+        raise ValueError(f"{source}: " + "; ".join(errors))
+    return {
+        "entry_count": len(entries),
+        "non_noop_count": non_noop_count,
+        "agent_identity": agent_identity,
+        "manifest_checked": manifest_data is not None,
+    }
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
         summary = validate_manifest(load_manifest(args.manifest), source=args.manifest)
@@ -183,6 +312,22 @@ def cmd_dry_run_acl(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate_dry_run(args: argparse.Namespace) -> int:
+    try:
+        manifest_data = load_manifest(args.manifest) if args.manifest else None
+        summary = validate_acl_dry_run_plan(
+            load_manifest(args.dry_run),
+            source=args.dry_run,
+            manifest_data=manifest_data,
+            manifest_source=args.manifest,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"ok": True, **summary}, indent=2, sort_keys=True))
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate mechanical write-segregation path manifests")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -192,6 +337,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     dry_run.add_argument("manifest", type=Path)
     dry_run.add_argument("--agent-identity", required=True)
     dry_run.add_argument("--output", type=Path)
+    validate_dry_run = sub.add_parser("validate-dry-run", help="Validate an ACL dry-run artifact without applying ACLs")
+    validate_dry_run.add_argument("dry_run", type=Path)
+    validate_dry_run.add_argument("--manifest", type=Path)
     return parser.parse_args(argv)
 
 
@@ -201,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_validate(args)
     if args.cmd == "dry-run-acl":
         return cmd_dry_run_acl(args)
+    if args.cmd == "validate-dry-run":
+        return cmd_validate_dry_run(args)
     raise AssertionError(args.cmd)
 
 

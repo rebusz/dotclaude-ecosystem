@@ -3,6 +3,11 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+import sys
+
+_SCRIPTS = Path(__file__).parent.parent
+sys.path.insert(0, str(_SCRIPTS))
+
 import write_segregation_manifest as manifest
 
 
@@ -128,6 +133,55 @@ class TestWriteSegregationManifest(unittest.TestCase):
         docs = next(entry for entry in plan["entries"] if entry["id"] == "tsu-design-docs")
         self.assertTrue(docs["no_op"])
         self.assertEqual(docs["apply_commands"], [])
+
+    def test_validate_acl_dry_run_plan_accepts_generated_plan_with_manifest(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+
+        summary = manifest.validate_acl_dry_run_plan(
+            plan,
+            source=Path("dry-run.json"),
+            manifest_data=data,
+            manifest_source=Path("manifest.json"),
+        )
+
+        self.assertEqual(summary["entry_count"], 3)
+        self.assertEqual(summary["non_noop_count"], 2)
+        self.assertEqual(summary["agent_identity"], "LOCAL\\CodexAgent")
+        self.assertTrue(summary["manifest_checked"])
+
+    def test_validate_acl_dry_run_plan_rejects_apply_artifact(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        plan["applies_acl"] = True
+
+        with self.assertRaises(ValueError) as caught:
+            manifest.validate_acl_dry_run_plan(plan, source=Path("dry-run.json"), manifest_data=data)
+
+        self.assertIn("applies_acl must be false", str(caught.exception))
+
+    def test_validate_acl_dry_run_plan_rejects_missing_rollback(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        first_non_noop = next(entry for entry in plan["entries"] if not entry["no_op"])
+        first_non_noop["rollback_commands"] = []
+
+        with self.assertRaises(ValueError) as caught:
+            manifest.validate_acl_dry_run_plan(plan, source=Path("dry-run.json"), manifest_data=data)
+
+        self.assertIn("missing rollback_commands", str(caught.exception))
 
 
 if __name__ == "__main__":

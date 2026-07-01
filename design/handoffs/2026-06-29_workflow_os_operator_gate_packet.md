@@ -134,10 +134,19 @@ python scripts/write_segregation_manifest.py dry-run-acl `
   --output design/security/<reviewed-dry-run-acl-plan>.json
 ```
 
+Validate the generated dry-run artifact:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-dry-run `
+  design/security/<reviewed-dry-run-acl-plan>.json `
+  --manifest design/security/write_segregation_path_manifest.json
+```
+
 Important: the generated dry-run artifact still has `applies_acl=false`. Do not execute any generated `icacls` command without:
 
 - quiesced TSU and Tsignal repos,
 - refreshed path manifest from live repo truth,
+- passing `validate-dry-run` preflight,
 - reviewed rollback commands,
 - explicit R2/R3 operator GO naming the apply step.
 

@@ -47,6 +47,14 @@ Sanity readback:
 - 22 non-noop entries
 - no missing apply/rollback command pairs
 
+Repeatable validation:
+
+```powershell
+python scripts/write_segregation_manifest.py validate-dry-run `
+  design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json `
+  --manifest design/security/write_segregation_path_manifest.json
+```
+
 The next executable token must be explicit, for example:
 
 ```text
@@ -57,6 +65,7 @@ Before any apply:
 
 - TSU and Tsignal repo states must be quiesced or explicitly accepted.
 - The dry-run artifact must include apply and rollback commands.
+- `validate-dry-run` must pass against the source manifest.
 - Rollback commands must be reviewed.
 - A write probe and read probe must be defined.
 - Operator must confirm the Windows identity to deny writes for.

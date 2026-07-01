@@ -43,6 +43,8 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
   - `applies_acl=false`
   - `requires_operator_go_before_apply=true`
   - 24 manifest entries, 22 non-noop entries, no missing apply/rollback command pairs
+- `python scripts/write_segregation_manifest.py validate-dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json --manifest design/security/write_segregation_path_manifest.json`
+  - validates dry-run shape and source-manifest parity without applying ACLs
 - `python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json`
   - `completed=5`
   - `killed=4`
@@ -77,7 +79,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 ## Future Gated Work
 
 1. **Section 3.7 apply:** review the observed `pc-tsignal-flow\dszub` dry-run candidate and either confirm it as the coding/advisory agent identity or provide the intended launcher identity. Do not apply it without explicit R2/R3 operator GO.
-   - Current 2026-07-01 status: the review-only dry-run was refreshed from clean TSU/Tsignal repo status. Apply remains gated behind operator identity confirmation, rollback review, probes, and explicit R2/R3 apply GO.
+   - Current 2026-07-01 status: the review-only dry-run was refreshed from clean TSU/Tsignal repo status and now has a repeatable `validate-dry-run` preflight. Apply remains gated behind operator identity confirmation, rollback review, probes, and explicit R2/R3 apply GO.
 2. **Manual triggers:** wait for real GUI/web build, PAPER WEEK/LAB research triggers, or >=3 section-9-passing gated tools before touching Impeccable/deer-flow/autoresearch/capability-registry.
 
 ## Completion Gate
