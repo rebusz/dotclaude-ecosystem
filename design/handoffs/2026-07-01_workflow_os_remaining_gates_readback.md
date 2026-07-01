@@ -67,6 +67,16 @@ python scripts/write_segregation_manifest.py validate-dry-run `
   --manifest design/security/write_segregation_path_manifest.json
 ```
 
+Full pre-apply check:
+
+```powershell
+python scripts/write_segregation_manifest.py preapply-check `
+  --manifest design/security/write_segregation_path_manifest.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json `
+  --packet design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --allow-dirty skills/master-agent/SKILL.md
+```
+
 The next executable token must be explicit, for example:
 
 ```text
@@ -78,6 +88,7 @@ Before any apply:
 - TSU and Tsignal repo states must be quiesced or explicitly accepted.
 - The dry-run artifact must include apply and rollback commands.
 - `validate-dry-run` must pass against the source manifest.
+- `preapply-check` must report `ok_without_go=true`.
 - Rollback commands must be reviewed.
 - A write probe and read probe must be defined.
 - Operator must confirm the Windows identity to deny writes for.

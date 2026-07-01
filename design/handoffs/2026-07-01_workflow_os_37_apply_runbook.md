@@ -50,6 +50,18 @@ python scripts/write_segregation_manifest.py validate-dry-run `
   --manifest design/security/write_segregation_path_manifest.json
 ```
 
+Full pre-apply check, still without applying ACLs:
+
+```powershell
+python scripts/write_segregation_manifest.py preapply-check `
+  --manifest design/security/write_segregation_path_manifest.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json `
+  --packet design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --allow-dirty skills/master-agent/SKILL.md
+```
+
+That command should report `ok_without_go=true` when dry-run, packet, and repo state are acceptable. It should still report `ready_to_apply=false` until an exact R2/R3 apply token is supplied.
+
 Expected current shape:
 
 - `ok=true`
@@ -72,7 +84,8 @@ python scripts/write_segregation_manifest.py dry-run-acl `
 ```
 
 4. Run `validate-dry-run` against the regenerated artifact.
-5. Commit the identity refresh before any apply work.
+5. Run `preapply-check` against the dry-run and packet.
+6. Commit the identity refresh before any apply work.
 
 ## Phase 1: Repo-State Preflight
 
@@ -90,6 +103,7 @@ Required interpretation:
 2. `D:/APPS/TSU` must be clean, or the operator must explicitly accept the current branch and dirt as the reviewed input state.
 3. `D:/APPS/Tsignal 5.0` must be clean, or the operator must explicitly accept the current branch and dirt as the reviewed input state.
 4. If TSU/Tsignal contain unreviewed WIP, stop before apply.
+5. Run `preapply-check`; it must report `ok_without_go=true` before the apply token can be honored.
 
 Current note as of this runbook creation: TSU was observed on branch `codex/renko-producer-contract-spec` with an untracked design artifact. That is not a blocker to this R0 runbook, but it is a blocker to unattended apply.
 
@@ -258,6 +272,7 @@ Stop before apply if any of these is true:
 - operator identity is unclear
 - TSU/Tsignal repo state is not clean or explicitly accepted
 - `validate-dry-run` fails
+- `preapply-check` does not report `ok_without_go=true`
 - rollback commands are missing or unreviewed
 - probe commands are undefined
 - the requested action touches broker/order path beyond OS-level write-deny

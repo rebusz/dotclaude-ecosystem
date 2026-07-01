@@ -26,6 +26,16 @@ python scripts/write_segregation_manifest.py validate-dry-run `
   --manifest design/security/write_segregation_path_manifest.json
 ```
 
+Full pre-apply check:
+
+```powershell
+python scripts/write_segregation_manifest.py preapply-check `
+  --manifest design/security/write_segregation_path_manifest.json `
+  --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json `
+  --packet design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --allow-dirty skills/master-agent/SKILL.md
+```
+
 Expected shape:
 
 - identity: `pc-tsignal-flow\dszub`
@@ -34,6 +44,7 @@ Expected shape:
 - write-allowed no-op entries: 2
 - `applies_acl=false`
 - `requires_operator_go_before_apply=true`
+- `preapply-check` should be `ok_without_go=true` and `ready_to_apply=false` until an exact R2/R3 apply token is supplied
 
 ## Operator Gate
 
@@ -68,6 +79,8 @@ Current note at packet creation:
 - `D:/APPS/Tsignal 5.0`: clean on `main == origin/main`
 
 If TSU or Tsignal branch/dirt is not explicitly accepted as reviewed input state, stop before apply.
+
+The pre-apply checker enforces this mechanically by failing on unaccepted dirty state and by refusing `ready_to_apply=true` without an exact Section 3.7 R2/R3 apply pilot token.
 
 ## Pilot Recommendation
 

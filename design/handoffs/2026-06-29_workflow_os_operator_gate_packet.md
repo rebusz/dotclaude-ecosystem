@@ -154,11 +154,22 @@ python scripts/write_segregation_manifest.py validate-dry-run `
   --manifest design/security/write_segregation_path_manifest.json
 ```
 
+Run the full pre-apply check against the reviewed packet:
+
+```powershell
+python scripts/write_segregation_manifest.py preapply-check `
+  --manifest design/security/write_segregation_path_manifest.json `
+  --dry-run design/security/<reviewed-dry-run-acl-plan>.json `
+  --packet design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md `
+  --allow-dirty skills/master-agent/SKILL.md
+```
+
 Important: the generated dry-run artifact still has `applies_acl=false`. Do not execute any generated `icacls` command without:
 
 - quiesced TSU and Tsignal repos,
 - refreshed path manifest from live repo truth,
 - passing `validate-dry-run` preflight,
+- passing `preapply-check` preflight,
 - reviewed rollback commands,
 - explicit R2/R3 operator GO naming the apply step.
 

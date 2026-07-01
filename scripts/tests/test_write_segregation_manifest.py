@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sys
 
@@ -182,6 +183,66 @@ class TestWriteSegregationManifest(unittest.TestCase):
             manifest.validate_acl_dry_run_plan(plan, source=Path("dry-run.json"), manifest_data=data)
 
         self.assertIn("missing rollback_commands", str(caught.exception))
+
+    def test_packet_missing_commands_reports_absent_apply_or_rollback(self):
+        plan = manifest.build_acl_dry_run_plan(
+            self._valid_manifest(),
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        commands = [
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        ]
+
+        missing = manifest._packet_missing_commands(plan, "\n".join(commands[:-1]))
+
+        self.assertEqual(missing, [commands[-1]])
+
+    def test_dirty_lines_not_allowed_accepts_configured_fragment_only(self):
+        dirty = [" M skills/master-agent/SKILL.md", "?? design/new.md"]
+
+        self.assertEqual(
+            manifest._dirty_lines_not_allowed(dirty, ["skills/master-agent/SKILL.md"]),
+            ["?? design/new.md"],
+        )
+
+    def test_preapply_check_requires_explicit_go_token(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        packet_text = "\n".join(
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        )
+        status = {
+            "repo": "repo",
+            "exit_code": 0,
+            "branch": "## main...origin/main",
+            "dirty_lines": [],
+            "stderr": "",
+        }
+
+        with unittest.mock.patch.object(manifest, "load_manifest", side_effect=[data, plan]), \
+            unittest.mock.patch.object(Path, "read_text", return_value=packet_text), \
+            unittest.mock.patch.object(manifest, "_git_status", return_value=status):
+            summary = manifest.build_preapply_check(
+                manifest_path=Path("manifest.json"),
+                dry_run_path=Path("dry-run.json"),
+                packet_path=Path("packet.md"),
+                repo_paths=[Path("repo")],
+                allowed_dirty=[],
+                operator_go_token=None,
+            )
+
+        self.assertTrue(summary["ok_without_go"])
+        self.assertFalse(summary["ready_to_apply"])
+        self.assertFalse(summary["operator_go_accepted"])
 
 
 if __name__ == "__main__":

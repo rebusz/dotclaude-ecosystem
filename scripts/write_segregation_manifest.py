@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,11 @@ REQUIRED_ENTRY_FIELDS = {
     "owner",
     "reason",
     "rollback_expectation",
+}
+
+SECTION37_APPLY_GO_TOKENS = {
+    "GO Section 3.7 R2/R3 apply pilot",
+    "GO §3.7 R2/R3 apply pilot",
 }
 
 
@@ -282,6 +288,103 @@ def validate_acl_dry_run_plan(
     }
 
 
+def _packet_missing_commands(dry_run_data: dict[str, Any], packet_text: str) -> list[str]:
+    missing: list[str] = []
+    for entry in dry_run_data.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        for command in entry.get("apply_commands", []) + entry.get("rollback_commands", []):
+            if isinstance(command, str) and command not in packet_text:
+                missing.append(command)
+    return missing
+
+
+def _git_status(repo: Path) -> dict[str, Any]:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "status", "--short", "--branch"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    output = completed.stdout.strip().splitlines()
+    branch = output[0] if output else ""
+    dirty_lines = [line for line in output[1:] if line.strip()]
+    return {
+        "repo": str(repo),
+        "exit_code": completed.returncode,
+        "branch": branch,
+        "dirty_lines": dirty_lines,
+        "stderr": completed.stderr.strip(),
+    }
+
+
+def _dirty_lines_not_allowed(dirty_lines: list[str], allowed_dirty: list[str]) -> list[str]:
+    not_allowed = []
+    for line in dirty_lines:
+        if not any(fragment and fragment in line for fragment in allowed_dirty):
+            not_allowed.append(line)
+    return not_allowed
+
+
+def build_preapply_check(
+    *,
+    manifest_path: Path,
+    dry_run_path: Path,
+    packet_path: Path,
+    repo_paths: list[Path],
+    allowed_dirty: list[str],
+    operator_go_token: str | None,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+
+    manifest_data = load_manifest(manifest_path)
+    dry_run_data = load_manifest(dry_run_path)
+    dry_run_summary = validate_acl_dry_run_plan(
+        dry_run_data,
+        source=dry_run_path,
+        manifest_data=manifest_data,
+        manifest_source=manifest_path,
+    )
+
+    packet_text = packet_path.read_text(encoding="utf-8")
+    missing_commands = _packet_missing_commands(dry_run_data, packet_text)
+    if missing_commands:
+        reasons.append(f"packet is missing {len(missing_commands)} dry-run commands")
+
+    repo_statuses = []
+    repo_state_ok = True
+    for repo in repo_paths:
+        status = _git_status(repo)
+        status["unaccepted_dirty_lines"] = _dirty_lines_not_allowed(status["dirty_lines"], allowed_dirty)
+        if status["exit_code"] != 0:
+            repo_state_ok = False
+            reasons.append(f"git status failed for {repo}")
+        if status["unaccepted_dirty_lines"]:
+            repo_state_ok = False
+            reasons.append(f"{repo} has unaccepted dirty state")
+        repo_statuses.append(status)
+
+    operator_go_accepted = (operator_go_token or "").strip() in SECTION37_APPLY_GO_TOKENS
+    if not operator_go_accepted:
+        reasons.append("missing explicit Section 3.7 R2/R3 apply pilot GO token")
+
+    ok_without_go = not missing_commands and repo_state_ok
+    ready_to_apply = ok_without_go and operator_go_accepted
+    return {
+        "ok_without_go": ok_without_go,
+        "ready_to_apply": ready_to_apply,
+        "operator_go_accepted": operator_go_accepted,
+        "accepted_go_tokens": sorted(SECTION37_APPLY_GO_TOKENS),
+        "dry_run": dry_run_summary,
+        "packet": {
+            "path": str(packet_path),
+            "missing_command_count": len(missing_commands),
+        },
+        "repo_statuses": repo_statuses,
+        "reasons": reasons,
+    }
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
         summary = validate_manifest(load_manifest(args.manifest), source=args.manifest)
@@ -328,6 +431,28 @@ def cmd_validate_dry_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preapply_check(args: argparse.Namespace) -> int:
+    repo_paths = args.repo or [
+        Path(__file__).resolve().parent.parent,
+        Path("D:/APPS/TSU"),
+        Path("D:/APPS/Tsignal 5.0"),
+    ]
+    try:
+        summary = build_preapply_check(
+            manifest_path=args.manifest,
+            dry_run_path=args.dry_run,
+            packet_path=args.packet,
+            repo_paths=repo_paths,
+            allowed_dirty=args.allow_dirty or [],
+            operator_go_token=args.operator_go_token,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if summary["ok_without_go"] else 1
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate mechanical write-segregation path manifests")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -340,6 +465,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate_dry_run = sub.add_parser("validate-dry-run", help="Validate an ACL dry-run artifact without applying ACLs")
     validate_dry_run.add_argument("dry_run", type=Path)
     validate_dry_run.add_argument("--manifest", type=Path)
+    preapply = sub.add_parser("preapply-check", help="Check Section 3.7 pre-apply gates without applying ACLs")
+    preapply.add_argument("--manifest", type=Path, required=True)
+    preapply.add_argument("--dry-run", type=Path, required=True)
+    preapply.add_argument("--packet", type=Path, required=True)
+    preapply.add_argument("--repo", action="append", type=Path)
+    preapply.add_argument("--allow-dirty", action="append")
+    preapply.add_argument("--operator-go-token")
     return parser.parse_args(argv)
 
 
@@ -351,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_dry_run_acl(args)
     if args.cmd == "validate-dry-run":
         return cmd_validate_dry_run(args)
+    if args.cmd == "preapply-check":
+        return cmd_preapply_check(args)
     raise AssertionError(args.cmd)
 
 
