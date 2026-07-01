@@ -50,7 +50,7 @@ Operator-facing gate packet: `design/handoffs/2026-06-29_workflow_os_operator_ga
 - `python scripts/write_segregation_manifest.py validate-dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json --manifest design/security/write_segregation_path_manifest.json`
   - validates dry-run shape and source-manifest parity without applying ACLs
 - `python scripts/write_segregation_manifest.py preapply-check --manifest design/security/write_segregation_path_manifest.json --dry-run design/security/2026-07-01_observed_codex_identity_acl_dry_run_refresh.json --packet design/handoffs/2026-07-01_workflow_os_37_apply_rollback_packet.md --allow-dirty skills/master-agent/SKILL.md`
-  - validates dry-run, packet command coverage, repo dirt allowance, and exact GO-token readiness without applying ACLs
+  - validates dry-run, packet command coverage, repo branch/dirt allowance, and exact GO-token readiness without applying ACLs
 - `python scripts/idea_digest.py workflow-triggers --file design/workflow_os_revisit_triggers.json`
   - `completed=5`
   - `killed=4`

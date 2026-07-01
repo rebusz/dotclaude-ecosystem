@@ -237,12 +237,89 @@ class TestWriteSegregationManifest(unittest.TestCase):
                 packet_path=Path("packet.md"),
                 repo_paths=[Path("repo")],
                 allowed_dirty=[],
+                required_branches={manifest._repo_key(Path("repo")): "## main...origin/main"},
+                allowed_branches={},
                 operator_go_token=None,
             )
 
         self.assertTrue(summary["ok_without_go"])
         self.assertFalse(summary["ready_to_apply"])
         self.assertFalse(summary["operator_go_accepted"])
+
+    def test_preapply_check_rejects_unaccepted_branch(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        packet_text = "\n".join(
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        )
+        status = {
+            "repo": "repo",
+            "exit_code": 0,
+            "branch": "## codex/work",
+            "dirty_lines": [],
+            "stderr": "",
+        }
+
+        with unittest.mock.patch.object(manifest, "load_manifest", side_effect=[data, plan]), \
+            unittest.mock.patch.object(Path, "read_text", return_value=packet_text), \
+            unittest.mock.patch.object(manifest, "_git_status", return_value=status):
+            summary = manifest.build_preapply_check(
+                manifest_path=Path("manifest.json"),
+                dry_run_path=Path("dry-run.json"),
+                packet_path=Path("packet.md"),
+                repo_paths=[Path("repo")],
+                allowed_dirty=[],
+                required_branches={manifest._repo_key(Path("repo")): "## main...origin/main"},
+                allowed_branches={},
+                operator_go_token=None,
+            )
+
+        self.assertFalse(summary["ok_without_go"])
+        self.assertFalse(summary["repo_statuses"][0]["branch_allowed"])
+        self.assertIn("unaccepted branch", summary["reasons"][0])
+
+    def test_preapply_check_accepts_explicit_branch_override(self):
+        data = self._valid_manifest()
+        plan = manifest.build_acl_dry_run_plan(
+            data,
+            source=Path("manifest.json"),
+            agent_identity="LOCAL\\CodexAgent",
+        )
+        packet_text = "\n".join(
+            command
+            for entry in plan["entries"]
+            for command in entry["apply_commands"] + entry["rollback_commands"]
+        )
+        status = {
+            "repo": "repo",
+            "exit_code": 0,
+            "branch": "## codex/work",
+            "dirty_lines": [],
+            "stderr": "",
+        }
+
+        with unittest.mock.patch.object(manifest, "load_manifest", side_effect=[data, plan]), \
+            unittest.mock.patch.object(Path, "read_text", return_value=packet_text), \
+            unittest.mock.patch.object(manifest, "_git_status", return_value=status):
+            summary = manifest.build_preapply_check(
+                manifest_path=Path("manifest.json"),
+                dry_run_path=Path("dry-run.json"),
+                packet_path=Path("packet.md"),
+                repo_paths=[Path("repo")],
+                allowed_dirty=[],
+                required_branches={manifest._repo_key(Path("repo")): "## main...origin/main"},
+                allowed_branches={manifest._repo_key(Path("repo")): "## codex/work"},
+                operator_go_token=None,
+            )
+
+        self.assertTrue(summary["ok_without_go"])
+        self.assertTrue(summary["repo_statuses"][0]["branch_allowed"])
 
 
 if __name__ == "__main__":

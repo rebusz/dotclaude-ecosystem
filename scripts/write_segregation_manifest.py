@@ -30,6 +30,11 @@ SECTION37_APPLY_GO_TOKENS = {
     "GO §3.7 R2/R3 apply pilot",
 }
 
+DEFAULT_PREAPPLY_BRANCHES = {
+    "D:/APPS/TSU": "## master...origin/master",
+    "D:/APPS/Tsignal 5.0": "## main...origin/main",
+}
+
 
 def load_manifest(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -326,6 +331,30 @@ def _dirty_lines_not_allowed(dirty_lines: list[str], allowed_dirty: list[str]) -
     return not_allowed
 
 
+def _repo_key(repo: Path) -> str:
+    return str(repo).replace("\\", "/").rstrip("/").lower()
+
+
+def _parse_repo_mapping(values: list[str] | None, *, option: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError(f"{option} must use <repo>=<value>: {value}")
+        repo, mapped = value.split("=", 1)
+        if not repo.strip() or not mapped.strip():
+            raise ValueError(f"{option} must use non-empty <repo>=<value>: {value}")
+        parsed[_repo_key(Path(repo.strip()))] = mapped.strip()
+    return parsed
+
+
+def _branch_allowed(repo: Path, branch: str, required_branches: dict[str, str], allowed_branches: dict[str, str]) -> bool:
+    key = _repo_key(repo)
+    if key in allowed_branches:
+        return branch == allowed_branches[key]
+    required = required_branches.get(key)
+    return required is None or branch == required
+
+
 def build_preapply_check(
     *,
     manifest_path: Path,
@@ -333,6 +362,8 @@ def build_preapply_check(
     packet_path: Path,
     repo_paths: list[Path],
     allowed_dirty: list[str],
+    required_branches: dict[str, str],
+    allowed_branches: dict[str, str],
     operator_go_token: str | None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
@@ -356,9 +387,15 @@ def build_preapply_check(
     for repo in repo_paths:
         status = _git_status(repo)
         status["unaccepted_dirty_lines"] = _dirty_lines_not_allowed(status["dirty_lines"], allowed_dirty)
+        status["branch_allowed"] = _branch_allowed(repo, status["branch"], required_branches, allowed_branches)
+        status["required_branch"] = required_branches.get(_repo_key(repo))
+        status["allowed_branch_override"] = allowed_branches.get(_repo_key(repo))
         if status["exit_code"] != 0:
             repo_state_ok = False
             reasons.append(f"git status failed for {repo}")
+        if not status["branch_allowed"]:
+            repo_state_ok = False
+            reasons.append(f"{repo} is on an unaccepted branch")
         if status["unaccepted_dirty_lines"]:
             repo_state_ok = False
             reasons.append(f"{repo} has unaccepted dirty state")
@@ -438,12 +475,17 @@ def cmd_preapply_check(args: argparse.Namespace) -> int:
         Path("D:/APPS/Tsignal 5.0"),
     ]
     try:
+        required_branches = {_repo_key(Path(__file__).resolve().parent.parent): "## main...origin/main"}
+        required_branches.update({_repo_key(Path(repo)): branch for repo, branch in DEFAULT_PREAPPLY_BRANCHES.items()})
+        required_branches.update(_parse_repo_mapping(args.require_branch, option="--require-branch"))
         summary = build_preapply_check(
             manifest_path=args.manifest,
             dry_run_path=args.dry_run,
             packet_path=args.packet,
             repo_paths=repo_paths,
             allowed_dirty=args.allow_dirty or [],
+            required_branches=required_branches,
+            allowed_branches=_parse_repo_mapping(args.allow_branch, option="--allow-branch"),
             operator_go_token=args.operator_go_token,
         )
     except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -471,6 +513,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     preapply.add_argument("--packet", type=Path, required=True)
     preapply.add_argument("--repo", action="append", type=Path)
     preapply.add_argument("--allow-dirty", action="append")
+    preapply.add_argument("--require-branch", action="append", help="Require <repo>=<git status branch line>")
+    preapply.add_argument("--allow-branch", action="append", help="Accept <repo>=<git status branch line> instead of the default branch")
     preapply.add_argument("--operator-go-token")
     return parser.parse_args(argv)
 

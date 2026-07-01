@@ -77,6 +77,8 @@ python scripts/write_segregation_manifest.py preapply-check `
   --allow-dirty skills/master-agent/SKILL.md
 ```
 
+Clean non-default TSU/Tsignal branches require explicit `--allow-branch`.
+
 The next executable token must be explicit, for example:
 
 ```text
@@ -86,6 +88,7 @@ GO §3.7 R2/R3 apply pilot
 Before any apply:
 
 - TSU and Tsignal repo states must be quiesced or explicitly accepted.
+- TSU and Tsignal branches must be default or explicitly accepted.
 - The dry-run artifact must include apply and rollback commands.
 - `validate-dry-run` must pass against the source manifest.
 - `preapply-check` must report `ok_without_go=true`.

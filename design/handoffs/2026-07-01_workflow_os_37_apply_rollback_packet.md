@@ -36,6 +36,12 @@ python scripts/write_segregation_manifest.py preapply-check `
   --allow-dirty skills/master-agent/SKILL.md
 ```
 
+If a clean non-default TSU branch is the reviewed input state, add an explicit branch override:
+
+```powershell
+  --allow-branch "D:/APPS/TSU=## codex/<accepted-branch>...origin/codex/<accepted-branch>"
+```
+
 Expected shape:
 
 - identity: `pc-tsignal-flow\dszub`
@@ -45,6 +51,7 @@ Expected shape:
 - `applies_acl=false`
 - `requires_operator_go_before_apply=true`
 - `preapply-check` should be `ok_without_go=true` and `ready_to_apply=false` until an exact R2/R3 apply token is supplied
+- non-default TSU/Tsignal branches should require explicit `--allow-branch`
 
 ## Operator Gate
 
@@ -80,7 +87,7 @@ Current note at packet creation:
 
 If TSU or Tsignal branch/dirt is not explicitly accepted as reviewed input state, stop before apply.
 
-The pre-apply checker enforces this mechanically by failing on unaccepted dirty state and by refusing `ready_to_apply=true` without an exact Section 3.7 R2/R3 apply pilot token.
+The pre-apply checker enforces this mechanically by failing on unaccepted dirty state, failing on unaccepted branch state, and refusing `ready_to_apply=true` without an exact Section 3.7 R2/R3 apply pilot token.
 
 ## Pilot Recommendation
 

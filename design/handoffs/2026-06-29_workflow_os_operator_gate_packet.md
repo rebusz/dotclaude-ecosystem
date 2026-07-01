@@ -164,9 +164,12 @@ python scripts/write_segregation_manifest.py preapply-check `
   --allow-dirty skills/master-agent/SKILL.md
 ```
 
+If TSU or Tsignal is intentionally reviewed on a clean non-default branch, add an explicit `--allow-branch "<repo>=<git-status-branch-line>"` argument.
+
 Important: the generated dry-run artifact still has `applies_acl=false`. Do not execute any generated `icacls` command without:
 
 - quiesced TSU and Tsignal repos,
+- default or explicitly accepted TSU/Tsignal branches,
 - refreshed path manifest from live repo truth,
 - passing `validate-dry-run` preflight,
 - passing `preapply-check` preflight,
