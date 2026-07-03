@@ -31,7 +31,7 @@ cp "$REPO_ROOT/scripts/"*.py "$CLAUDE_HOME/scripts/"
 
 # Skills
 echo "[3/6] Copy skills -> ~/.claude/skills/"
-for skill in master-agent executor; do
+for skill in master-agent executor distill-repo; do
     mkdir -p "$CLAUDE_HOME/skills/$skill"
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
 done
