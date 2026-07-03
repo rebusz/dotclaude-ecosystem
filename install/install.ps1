@@ -32,7 +32,7 @@ Copy-Item -Path "$ScriptsSrc\*.py" -Destination $ScriptsDst -Force
 
 # Skills
 Write-Host "[3/6] Copy skills -> ~/.claude/skills/" -ForegroundColor Cyan
-foreach ($skill in @("master-agent", "executor")) {
+foreach ($skill in @("master-agent", "executor", "distill-repo")) {
     $src = Join-Path $RepoRoot "skills\$skill"
     $dst = Join-Path $ClaudeHome "skills\$skill"
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
