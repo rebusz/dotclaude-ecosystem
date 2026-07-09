@@ -21,7 +21,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `triage` — Move issues and external PRs through a state machine of triage roles — categorise, verify, grill if needed, and write agent-ready briefs.
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 
-### Claude Code (`~/.claude/skills`) — 73
+### Claude Code (`~/.claude/skills`) — 79
 - `gstack` — Router for the gstack skill suite.
 - `autoplan` — Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision princi...
 - `benchmark` — Performance regression detection using the browse daemon.
@@ -42,6 +42,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `devex-review` — Live developer experience audit.
 - `diagnosing-bugs` — Diagnosis loop for hard bugs and performance regressions.
 - `diagram` — Turn an English description (or mermaid source) into a diagram triplet: the source, an editable .excalidraw file you can open (gstack)
+- `distill-repo` — Distill a repository into lazy-loadable repo skills and bounded PACKET digests from verified code, tests, CI, design docs, handoffs, readbacks, memory pointe...
 - `document-generate` — Generate missing documentation from scratch for a feature, module, or entire project.
 - `document-release` — Post-ship documentation update.
 - `domain-modeling` — Build and sharpen a project's domain model.
@@ -49,6 +50,9 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `freeze` — Restrict file edits to a specific directory for the session.
 - `frontend-house-rules` — House rules layered on top of the taste-skill family (design-taste-frontend, gpt-taste, minimalist-ui, redesign-existing-projects) for ALL web / UI / fronten...
 - `gpt-taste` — Elite UX/UI & Advanced GSAP Motion Engineer.
+- `grill-me` — A relentless interview to sharpen a plan or design.
+- `grill-with-docs` — A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go.
+- `grilling` — Grill the user relentlessly about a plan or design.
 - `gstack` — Router for the gstack skill suite.
 - `gstack-upgrade` — Upgrade gstack to the latest version.
 - `guard` — Full safety mode: destructive command warnings + directory-scoped edits.
@@ -80,6 +84,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `qa` — Systematically QA test a web application and fix bugs found.
 - `qa-only` — Report-only QA testing.
 - `redesign-existing-projects` — Upgrades existing websites and apps to premium quality.
+- `research` — Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo.
 - `retro` — Weekly engineering retrospective.
 - `review` — Pre-landing PR review.
 - `scrape` — Pull data from a web page.
@@ -95,6 +100,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 - `unfreeze` — Clear the freeze boundary set by /freeze, allowing edits to all directories again.
 - `whatnext` — Steering ritual — answer "what next / co dalej / priorytety / are we drifting" with a STEERING BRIEF grounded in the income north-star, the vision DoD, a cov...
+- `writing-great-skills` — Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.
 
 ### Codex (`~/.codex/skills`) — 70
 - `design-taste-frontend` — Anti-slop frontend skill for landing pages, portfolios, and redesigns.
@@ -168,7 +174,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 - `zoom-out` — Use when the user invokes /zoom-out, asks for broader context, wants to understand a module/path/repo before acting, or seems lost in implementation details.
 
-### Cursor (`~/.cursor/skills-cursor`) — 18
+### Cursor (`~/.cursor/skills-cursor`) — 19
 - `automate` — Use this skill to create Cursor Automations.
 - `babysit` — Keep a PR merge-ready by triaging comments, resolving clear conflicts, and fixing CI in a loop.
 - `canvas` — A Cursor Canvas is a live React app that the user can open beside the chat.
@@ -178,6 +184,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `create-subagent` — Create custom subagents for specialized AI tasks.
 - `loop` — Run a prompt or skill in this session on a recurring or variable interval (e.g.
 - `migrate-to-skills` — Convert 'Applied intelligently' Cursor rules (.cursor/rules/*.mdc) and slash commands (.cursor/commands/*.md) to Agent Skills format (.cursor/skills/).
+- `onboard` — Use /onboard for a focused Cursor onboarding flow that learns basic preferences, picks a first goal, and routes the user to the right next action.
 - `review` — Review code changes with the Bugbot or Security Review subagent.
 - `review-bugbot` — Review code changes with Bugbot subagent.
 - `review-security` — Review code changes with Security Review subagent.
