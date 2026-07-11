@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ponytail On Demand"
+  short_description: "Minimal correct changes for bounded R0/R1 work"
+  default_prompt: "Use $ponytail-on-demand to find the smallest correct R0/R1 implementation."
+policy:
+  allow_implicit_invocation: false
