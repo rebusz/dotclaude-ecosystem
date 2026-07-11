@@ -10,6 +10,7 @@ A reusable system for managing **plans, visions, idea boxes, and AI memory** acr
 - **IDEA_BOX system** — per-repo backlog + global ecosystem-wide cross-cutting items, ranked digest tooling
 - **Auto-commit hook** for design docs — protects against context-loss data destruction (root-cause incident: 55k-char plan never landed on disk)
 - **AUDIT_AI / AUDIT_Q** — multi-model plan audit pipelines (5 premium models or 4 free models)
+- **External implementation review gate** — `mode IMPLEMENT` and `/executor` publish a draft PR, pin the exact SHA/diff in a review packet, and run independent CDP-backed review before merge
 
 ## Files
 
@@ -18,6 +19,7 @@ scripts/                              ← Python tooling (drop into ~/.claude/sc
   plan_context_loader.py              ← PRE-step: vision + IDEA_BOX + PLANS.md preamble
   plan_context_updater.py             ← POST-step: catalog regen + vision auto-log
   plan_keyword_detector.py            ← UserPromptSubmit hook for trigger words
+  implementation_review_packet.py     ← exact SHA/diff/PR packet for external code review
   plan_catalog.py                     ← generates ~/.claude/PLANS.md
   vision_catalog.py                   ← generates ~/.claude/VISIONS.md
   vision.py                           ← /vision CLI (list, show, new, attach, sync)
@@ -70,7 +72,7 @@ bash install/install.sh
 The installer:
 1. Backs up your existing `~/.claude/` and `~/.codex/` (if present)
 2. Copies scripts into `~/.claude/scripts/`
-3. Copies bundled skills into `~/.claude/skills/` (`master-agent`, `executor`, `distill-repo`, `ponytail-on-demand`) and installs the bounded Ponytail skill into `~/.codex/skills/` when Codex is present
+3. Copies bundled skills into both `~/.claude/skills/` and (when present) `~/.codex/skills/`, including the shared `master-agent` and `executor` external-review contract
 4. Merges hooks into `~/.claude/settings.json` (preserves your existing config)
 5. Appends Plan Lifecycle Hooks section to `~/.codex/AGENTS.md` (if Codex installed)
 6. Initializes empty `~/.claude/MEMORY.md` and `~/.claude/ECOSYSTEM_IDEA_BOX.md` if missing

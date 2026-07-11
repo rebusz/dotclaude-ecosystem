@@ -108,11 +108,70 @@ python ~/.claude/scripts/plan_context_updater.py --plan <plan-path> [--shipped] 
 This regenerates `PLANS.md` + `VISIONS.md`, appends to vision auto-log, and marks IDEA_BOX entries DONE.
 Best-effort: log failures, do not block the closing tag.
 
-**REVIEW scope** (by mode):
+**LOCAL REVIEW scope** (by mode):
 - IMPLEMENT / EXECUTOR: REVIEW passes 1-3 (correctness, safety, robustness — skip P4 style).
   Use diff algorithm: git diff $START_SHA..HEAD (or git diff HEAD if uncommitted).
   Keep review concise — P1/P2 findings only, no verbose P3/P4 exposition.
 - SHIP: COMPOUND only — no REVIEW (code was already reviewed during IMPLEMENT).
+
+**EXTERNAL IMPLEMENTATION REVIEW GATE** (IMPLEMENT / EXECUTOR, after local tests and
+LOCAL REVIEW, before COMPOUND or `>> DONE`):
+
+This gate is mandatory for every non-empty code diff. R0 documentation/prompt-only
+diffs skip it. The operator may bypass it only with the explicit task phrase
+`skip external review`; record that override in the completion report. Generic
+`skip review` skips both local and external review.
+
+1. **Publish the exact review surface.** Commit the validated implementation, push
+   the implementation branch, and create or update a **draft PR**. Never ask a CDP
+   reviewer to inspect the repository default branch as a substitute for the exact
+   implementation head. Do not mark the PR ready yet.
+2. **Build a provider-neutral packet** containing the base/head SHA, draft PR URL,
+   plan path, risk class, validation evidence, changed-file list, diff stat, and
+   exact diff:
+
+   ```bash
+   python ~/.claude/scripts/implementation_review_packet.py \
+     --repo "$PWD" --start-sha "$START_SHA" --end-sha HEAD \
+     --mode IMPLEMENT --risk R1 --plan-path "<plan-or-empty>" \
+     --pr-url "<draft-pr-url>" --validation-file "<test-output-file>"
+   ```
+
+   Use `--mode EXECUTOR` and the executor payload's `worktree_path` when applicable.
+   Capture the printed packet path. For large diffs the packet may truncate the
+   embedded patch; reviewers must then inspect the exact PR/head SHA before verdict.
+3. **Launch the external panel** through the canonical free audit runner. Pass the
+   real GitHub repository so the Perplexity CDP lane receives repository grounding;
+   every lane receives the exact packet and PR URL. Match `--synthesizer` to the
+   parent agent to avoid self-grading (`gpt` for Codex, `claude` for Claude):
+
+   ```bash
+   python "D:/APPS/_shared/audit/auditf.py" "<packet-path>" \
+     --topic "implementation-review-<head-short-sha>" \
+     --output-dir "<temp>/implementation-review-audits" \
+     --synthesizer <gpt|claude> \
+     --repo-label "<repo-name>" --github-repo "<github-url>"
+   ```
+
+   CDP browsers must already be operator-started and signed in. This invocation is
+   review-only: it never grants merge, runtime, broker, or order authority.
+4. **Verify lane evidence, then synthesize.** Read `_auditf_meta.json` and
+   `synthesis_prompt.md`; do not treat auditF's process exit alone as a passed review.
+   Minimum evidence:
+   - R1: at least one successful CDP lane.
+   - R2/R3: at least two successful external reviewers, including at least one CDP;
+     for a GitHub-hosted repo the GitHub-grounded Perplexity CDP lane must succeed.
+5. **Fix loop.** Synthesize only `SHIP-BLOCKING`, `FIX-LATER`, or `NO FINDINGS`.
+   Fix every ship-blocker, rerun targeted validation, push the updated draft PR,
+   rebuild the packet with the new head SHA, and repeat the external review. A
+   verdict against an older head is stale and cannot clear the gate.
+6. **Handoff to SHIP.** Record the reviewed head SHA, successful lanes, synthesis
+   artifact path, blockers fixed, and remaining FIX-LATER items. Only then may SHIP
+   mark the PR ready and continue the land-on-main lifecycle.
+
+If the required CDP/GitHub evidence is unavailable, emit `>> BLOCKED` with the exact
+missing lane or prerequisite. Do not silently downgrade to self-review or a default-
+branch review.
 
 **COMPOUND**: read `~/.claude/skills/compound/compound.md` and execute.
 Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
@@ -125,7 +184,8 @@ Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
 
 **Skip conditions** (case-insensitive, checked in task line):
 - `bare` → skip entire epilog
-- `skip review` → run COMPOUND only
+- `skip review` → skip local and external review; run COMPOUND only
+- `skip external review` → run LOCAL REVIEW + COMPOUND and record the operator override
 - `no compound` → run REVIEW only
 
 **Diff surface algorithm**:
@@ -136,7 +196,8 @@ Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
    c. If committed: `git diff $START_SHA..HEAD`
    d. If both: `git diff $START_SHA`
 3. If diff is empty: skip REVIEW, run COMPOUND only, note "no diff detected"
-4. If diff > 300 lines: review only changed files list + summary
+4. If diff > 300 lines: LOCAL REVIEW may use changed files + summary; the external
+   packet still pins the exact PR/head and includes the diff up to its explicit limit
 
 ---
 
