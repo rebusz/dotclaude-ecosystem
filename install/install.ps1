@@ -32,19 +32,30 @@ Copy-Item -Path "$ScriptsSrc\*.py" -Destination $ScriptsDst -Force
 
 # Skills
 Write-Host "[3/6] Copy skills -> ~/.claude/skills/" -ForegroundColor Cyan
-foreach ($skill in @("master-agent", "executor", "distill-repo")) {
+$BundledSkills = @("master-agent", "executor", "distill-repo", "ponytail-on-demand")
+foreach ($skill in $BundledSkills) {
     $src = Join-Path $RepoRoot "skills\$skill"
     $dst = Join-Path $ClaudeHome "skills\$skill"
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 }
+if (Test-Path $CodexHome) {
+    $src = Join-Path $RepoRoot "skills\ponytail-on-demand"
+    $dst = Join-Path $CodexHome "skills\ponytail-on-demand"
+    if (Test-Path $dst) {
+        Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
+    Write-Host "  copied explicit-only ponytail-on-demand -> ~/.codex/skills/" -ForegroundColor Green
+}
 
-# settings.json — merge hooks
+# settings.json -- merge hooks
 Write-Host "[4/6] Merge hooks into ~/.claude/settings.json" -ForegroundColor Cyan
 $SettingsTpl = Join-Path $RepoRoot "templates\settings.json.template"
 $SettingsDst = Join-Path $ClaudeHome "settings.json"
 if (Test-Path $SettingsDst) {
-    Write-Host "  existing settings.json found — manual merge required, see install_notes.md" -ForegroundColor Yellow
+    Write-Host "  existing settings.json found -- manual merge required, see install_notes.md" -ForegroundColor Yellow
     Copy-Item -Path $SettingsTpl -Destination "$SettingsDst.from-template" -Force
 } else {
     Copy-Item -Path $SettingsTpl -Destination $SettingsDst -Force
@@ -56,7 +67,7 @@ Write-Host "[5/6] Install CLAUDE.md template" -ForegroundColor Cyan
 $ClaudeMdTpl = Join-Path $RepoRoot "templates\CLAUDE.md.template"
 $ClaudeMdDst = Join-Path $ClaudeHome "CLAUDE.md"
 if (Test-Path $ClaudeMdDst) {
-    Write-Host "  existing CLAUDE.md found — leaving in place; template at $ClaudeMdDst.from-template" -ForegroundColor Yellow
+    Write-Host "  existing CLAUDE.md found -- leaving in place; template at $ClaudeMdDst.from-template" -ForegroundColor Yellow
     Copy-Item -Path $ClaudeMdTpl -Destination "$ClaudeMdDst.from-template" -Force
 } else {
     Copy-Item -Path $ClaudeMdTpl -Destination $ClaudeMdDst -Force
@@ -69,7 +80,7 @@ if (Test-Path $CodexHome) {
     $AgentsTpl = Join-Path $RepoRoot "templates\AGENTS.md.template"
     $AgentsDst = Join-Path $CodexHome "AGENTS.md"
     if (Test-Path $AgentsDst) {
-        Write-Host "  existing ~/.codex/AGENTS.md found — appending Plan Lifecycle Hooks section if missing"
+        Write-Host "  existing ~/.codex/AGENTS.md found -- appending Plan Lifecycle Hooks section if missing"
         $existing = Get-Content $AgentsDst -Raw
         if ($existing -notmatch "Plan Lifecycle Hooks") {
             $append = Get-Content $AgentsTpl -Raw
@@ -83,7 +94,7 @@ if (Test-Path $CodexHome) {
         Write-Host "  installed fresh AGENTS.md" -ForegroundColor Green
     }
 } else {
-    Write-Host "  ~/.codex not found — skipping" -ForegroundColor Gray
+    Write-Host "  ~/.codex not found -- skipping" -ForegroundColor Gray
 }
 
 # Initial empty memory/idea-box if missing

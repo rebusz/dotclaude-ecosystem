@@ -31,10 +31,18 @@ cp "$REPO_ROOT/scripts/"*.py "$CLAUDE_HOME/scripts/"
 
 # Skills
 echo "[3/6] Copy skills -> ~/.claude/skills/"
-for skill in master-agent executor distill-repo; do
+for skill in master-agent executor distill-repo ponytail-on-demand; do
     mkdir -p "$CLAUDE_HOME/skills/$skill"
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
 done
+if [ -d "$CODEX_HOME" ]; then
+    if [ -d "$CODEX_HOME/skills/ponytail-on-demand" ]; then
+        cp -R "$CODEX_HOME/skills/ponytail-on-demand" "$CODEX_HOME/skills/ponytail-on-demand.bak.$STAMP"
+    fi
+    mkdir -p "$CODEX_HOME/skills/ponytail-on-demand"
+    cp -R "$REPO_ROOT/skills/ponytail-on-demand/"* "$CODEX_HOME/skills/ponytail-on-demand/"
+    echo "  copied explicit-only ponytail-on-demand -> ~/.codex/skills/"
+fi
 
 # settings.json
 echo "[4/6] Merge hooks into ~/.claude/settings.json"

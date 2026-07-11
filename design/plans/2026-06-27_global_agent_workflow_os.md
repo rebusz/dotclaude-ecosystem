@@ -266,6 +266,61 @@ ARTIFACT BUS   (packets · audits · handoffs)  ──►  OBSIDIAN FLOW (memory
 
 ---
 
+## Operator-reopened Slice S0-PW (2026-07-10, R1)
+
+**GO token:** `GO FIRECRAWL-S0 PUBLIC-WEB-PILOT` plus an explicit request to
+adopt the previously recommended Ponytail elements.
+
+This operator decision reopens only the two bounded capabilities below. It does
+not reopen the always-on Ponytail plugin, the live capability registry, research
+engines, R2 ingest wiring, or any trading-runtime path.
+
+### S0-PW-A - `ponytail-on-demand`
+
+- Canonical source: `skills/ponytail-on-demand/` in this repo.
+- Explicit invocation only: `policy.allow_implicit_invocation: false`.
+- R0/R1 implementation only; excluded from audit, review, security, QUANT,
+  R2/R3, persistence/ingestion contracts, broker/order path, and live runtime.
+- No SessionStart/UserPromptSubmit/SubagentStart hooks and no injected hot
+  kernel text.
+- Repo rules, approved plans, tests, rollback, review, and operator GO outrank
+  the minimal-change ladder.
+
+### S0-PW-B - Firecrawl public-web pilot
+
+- Canonical adapter: `D:/APPS/_shared/public_web_ingest/`.
+- Cloud `/v2` API only in S0; no self-host stack and no always-on MCP.
+- Public HTTPS only, explicit domain allowlist, maximum 100 pages, no cookies,
+  arbitrary headers, browser actions, credentials, private URLs, or authenticated
+  sources.
+- Operations: `scrape`, `map`, and bounded `crawl`; `storeInCache=false` where
+  the endpoint contract supports it.
+- Atomic JSON artifact contains provider, request policy, timestamps, response
+  hash, and the provider payload. It contains no API key.
+- Dry-run and fixture modes must validate without network or credentials.
+- Live smoke requires `FIRECRAWL_API_KEY`; absence is a clean external gate, not
+  permission to create an account or mint credentials.
+- Outputs remain research/advisory artifacts. Any persistent consumer wiring is
+  a separate R2 plan plus GO. TSU/Tsignal live paths never call Firecrawl.
+
+### Acceptance
+
+1. Ponytail skill passes the official skill validator and remains explicit-only.
+2. Windows and POSIX installers carry the skill without adding hooks.
+3. Firecrawl policy rejects HTTP, localhost/private literals, non-allowlisted
+   domains, limits above 100, and unsupported operations.
+4. Fixture/dry-run tests prove deterministic payloads, atomic provenance, and no
+   credential persistence.
+5. Focused tests and `git diff --check` pass in both repos.
+6. Because the combined R1 diff exceeds five files, run a blocking diff review
+   before landing; fix ship-blocking findings.
+
+**Rollback:** remove the explicit skill/install entries and revert the shared
+adapter commit. No repo consumer imports the adapter in S0, so rollback has no
+runtime migration.
+
+---
+
 ## AUTOPLAN REVIEW (ENG)
 
 **Workflow:** `wfu402xzm` (AUTOPLAN, engineering-manager lens — every quantitative claim + edit-target verified against the live filesystem). **Verdict: GO-WITH-AMENDMENTS (Slice 0 only).** Dimensions: Architecture GO · Data-flow **FLAG** · Sequencing/blast-radius **FLAG** · Guard-constant **FLAG** · Idempotency/concurrency GO · Edge-cases GO · Boundary GO (Slice 0).
