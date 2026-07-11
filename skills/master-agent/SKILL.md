@@ -1,7 +1,7 @@
 ---
 name: master-agent
 description: |
-  Master Agent mode system for structured engineering work. Invoke with "mode <MODE> task <description>" to engage structured protocols. Core modes: OPERATOR, AUDIT, AUDIT_AI, ARCHITECT, IMPLEMENT, DEBUG, POSTMORTEM, QUANT, INTEGRATE, REVIEW, TEST, CONTRACT. Ops modes (from gstack): SHIP, QA, CSO, INVESTIGATE, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN. Supports multi-mode chaining (e.g., "mode audit debug task ...") and "go" to confirm prior approval. Use this skill whenever the user types "mode" followed by any mode name, or references master_agent protocols, risk classes, frozen boundaries, approval gates, or any gstack command (/review, /ship, /qa, /investigate, /cso, /retro, /learn, /office-hours, /autoplan, /careful). Also triggers on Polish equivalents like "tryb", "audyt", "implementuj", "debuguj", "wyślij", "sprawdź", "zbadaj".
+  Master Agent mode system for structured engineering work. Invoke with "mode MODE task DESCRIPTION" to engage structured protocols. Core modes: OPERATOR, AUDIT, AUDIT_AI, ARCHITECT, IMPLEMENT, DEBUG, POSTMORTEM, QUANT, INTEGRATE, REVIEW, TEST, CONTRACT. Ops modes (from gstack): SHIP, QA, CSO, INVESTIGATE, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN. Supports multi-mode chaining (e.g., "mode audit debug task ..."), FWF/FWP plan gates, and "go" to confirm prior approval. Use this skill whenever the user types "mode" followed by any mode name, invokes FWF/FWP, or references master_agent protocols, risk classes, frozen boundaries, approval gates, or any gstack command (/review, /ship, /qa, /investigate, /cso, /retro, /learn, /office-hours, /autoplan, /careful). Also triggers on Polish equivalents like "tryb", "audyt", "implementuj", "debuguj", "wyślij", "sprawdź", "zbadaj".
 ---
 
 # Master Agent Mode System
@@ -15,6 +15,9 @@ The user invokes modes with a flexible syntax. Parse as follows:
 1. **`mode <MODE> [MODE2 ...] task <description>`** — one or more modes, then `task` introduces the description of what to do
 2. **`mode <MODE> task <description> go`** — the trailing `go` means the operator already approved this work in an earlier exchange; skip the approval gate and proceed directly to execution
 3. **`go`** alone (without `mode`) — the operator is confirming a plan you presented earlier; proceed with implementation
+4. **`FWF <plan>` / `FWP <plan>`** — load the installed `fw.md` command
+   protocol (`~/.claude/commands/fw.md` or `~/.codex/prompts/fw.md`) and run
+   its free or paid lane. The operator does not need a Ponytail-specific flag.
 
 **Multi-mode**: when multiple modes are listed (e.g., `mode audit debug task ...`), execute them **sequentially**. Each mode produces its structured output, and the findings of the previous mode feed into the next as context. Present results under clear headers per mode.
 
@@ -44,6 +47,16 @@ The user invokes modes with a flexible syntax. Parse as follows:
 3. **Determine the risk class** of the work (see Risk Classes below). This decides whether you need an approval gate.
 
 4. **Check for phase status** — if the project has a phase roadmap, check if the task belongs to a PENDING phase and respond with BLOCKED if so.
+
+5. **ARCHITECT Ponytail decision (global)** — after drafting an R0/R1
+   architecture, decide whether a concrete simplification candidate exists. If
+   yes, explicitly invoke `ponytail-on-demand` and then run the remaining
+   architecture validation. If none exists, record
+   `PONYTAIL: SKIPPED - no concrete simplification candidate`. This global rule
+   still applies when a repo-local `Prompts/master_agent.md` supplies the mode
+   protocol; that protocol may tighten the exclusions but cannot remove them.
+   Never run the checkpoint for AUDIT, REVIEW, security, QUANT, R2/R3,
+   persistence/ingestion contracts, broker/order paths, or live runtime.
 
 ## Risk Classes
 
@@ -184,6 +197,14 @@ If the project defines frozen boundaries (in master_agent.md, CLAUDE.md, or simi
 **Phase 1 — Architecture**: optimal end-state, components + data flow, Mermaid when non-trivial, files impacted, risks, phased execution, red lines, safe deferrals.
 
 **Scope challenge** (from gstack eng-review): before designing, check: can we reuse existing code? Is this ≤8 files? Is there a built-in that already does this? Does this include distribution (CI/CD, deploy)?
+
+**Ponytail decision checkpoint**: for R0/R1 architecture only, decide whether a
+concrete simplification candidate exists. If yes, invoke `ponytail-on-demand`,
+apply only changes that preserve requirements and gates, then validate the
+result through the rest of ARCHITECT. If none exists, record
+`PONYTAIL: SKIPPED - no concrete simplification candidate`. Never use this
+checkpoint for AUDIT, R2/R3, security, QUANT, persistence/ingestion contracts,
+broker/order paths, or live runtime. The operator does not need a separate flag.
 
 **EPILOG_PAYLOAD — MANDATORY before `>> ARCHITECTURE COMPLETE`** (same shape as IMPLEMENT, but `committed: false` if no code shipped yet — only the plan file is created/edited).
 

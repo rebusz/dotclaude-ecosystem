@@ -321,6 +321,28 @@ runtime migration.
 
 ---
 
+## Operator refinement S1-PW (2026-07-11, R0/R1)
+
+The operator continues to invoke only `FWF` or `FWP`; no `--lean`, `close`, or
+Ponytail-specific flag is required. ARCHITECT/FWF/FWP may select the
+`ponytail-on-demand` checkpoint when the owning AI first identifies a concrete
+simplification candidate.
+
+- Decision, not ritual: record `PONYTAIL: USED` with the candidate and preserved
+  constraints, or `PONYTAIL: SKIPPED - no concrete simplification candidate`.
+- FWF/FWP run the decision checkpoint before Eng Review, so normal plan gates
+  validate any smaller proposal.
+- ARCHITECT runs it before the final architecture validation/output.
+- AUDIT, REVIEW, security, QUANT, R2/R3, persistence/ingestion contracts,
+  broker/order paths, and live runtime remain excluded.
+- Codex implicit invocation remains disabled; the owning orchestrator explicitly
+  selects the checkpoint after classification.
+
+**Rollback:** remove the checkpoint clauses. FWF/FWP and ARCHITECT otherwise
+retain their existing pipeline and operator interface.
+
+---
+
 ## AUTOPLAN REVIEW (ENG)
 
 **Workflow:** `wfu402xzm` (AUTOPLAN, engineering-manager lens — every quantitative claim + edit-target verified against the live filesystem). **Verdict: GO-WITH-AMENDMENTS (Slice 0 only).** Dimensions: Architecture GO · Data-flow **FLAG** · Sequencing/blast-radius **FLAG** · Guard-constant **FLAG** · Idempotency/concurrency GO · Edge-cases GO · Boundary GO (Slice 0).
