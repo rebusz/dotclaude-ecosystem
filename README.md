@@ -31,7 +31,7 @@ skills/
   master-agent/SKILL.md               ← mode architect, mode implement, etc.
   executor/SKILL.md                   ← /executor with EPILOG_PAYLOAD contract
   distill-repo/SKILL.md               ← build repo-scoped skill libraries and PACKET digests
-  ponytail-on-demand/SKILL.md          ← explicit-only minimal correct R0/R1 changes
+  ponytail-on-demand/SKILL.md          ← bounded minimal R0/R1 changes; operator or ARCHITECT/FWF/FWP selected
 
 templates/
   CLAUDE.md.template                  ← global instructions (Plan Lifecycle Hooks contract)
@@ -70,7 +70,7 @@ bash install/install.sh
 The installer:
 1. Backs up your existing `~/.claude/` and `~/.codex/` (if present)
 2. Copies scripts into `~/.claude/scripts/`
-3. Copies bundled skills into `~/.claude/skills/` (`master-agent`, `executor`, `distill-repo`, `ponytail-on-demand`) and installs the explicit-only Ponytail skill into `~/.codex/skills/` when Codex is present
+3. Copies bundled skills into `~/.claude/skills/` (`master-agent`, `executor`, `distill-repo`, `ponytail-on-demand`) and installs the bounded Ponytail skill into `~/.codex/skills/` when Codex is present
 4. Merges hooks into `~/.claude/settings.json` (preserves your existing config)
 5. Appends Plan Lifecycle Hooks section to `~/.codex/AGENTS.md` (if Codex installed)
 6. Initializes empty `~/.claude/MEMORY.md` and `~/.claude/ECOSYSTEM_IDEA_BOX.md` if missing
