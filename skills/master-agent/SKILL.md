@@ -168,7 +168,10 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
    ```
 
    CDP browsers must already be operator-started and signed in. This invocation is
-   review-only: it never grants merge, runtime, broker, or order authority.
+   review-only: it never grants merge, runtime, broker, or order authority. Probe
+   the configured CDP endpoints before the send and pass an explicit runner timeout
+   (normally `--lane-timeout-s 900`). Use a unique UTC run id after the head SHA in
+   `--topic` so concurrent reviews cannot share an output directory.
 5. **Verify lane evidence, then synthesize.** Read `_auditf_meta.json` and
    `synthesis_prompt.md`; do not treat auditF's process exit alone as a passed review.
    A reviewer that inspected only the default branch is invalid. At least one accepted
@@ -179,6 +182,15 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
    - R1: at least one successful CDP lane.
    - R2/R3: at least two successful external reviewers, including at least one CDP;
      for a GitHub-hosted repo the GitHub-grounded Perplexity CDP lane must succeed.
+
+   Completeness decision table:
+
+   | Local packet | Reviewer transmission | Eligible evidence |
+   |---|---|---|
+   | complete | `yes` | draft PR or transmitted packet |
+   | truncated | any value | exact draft PR only |
+   | any value | `no` or `unknown` | exact draft PR only |
+   | any value | missing/stale head or default branch | reject verdict |
 6. **Fix loop.** Synthesize only `SHIP-BLOCKING`, `FIX-LATER`, or `NO FINDINGS`.
    Fix every ship-blocker, rerun targeted validation, push the updated draft PR,
    rebuild the packet with the new head SHA, and repeat the external review. A
@@ -189,7 +201,9 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
 
 If the required CDP/GitHub evidence is unavailable, emit `>> BLOCKED` with the exact
 missing lane or prerequisite. Do not silently downgrade to self-review or a default-
-branch review.
+branch review. The external reviewer remains advisory and cannot authorize a merge;
+the operator can explicitly invoke `skip external review` to take responsibility for
+a provider outage or urgent hotfix, but never to override a secret finding.
 
 **COMPOUND**: read `~/.claude/skills/compound/compound.md` and execute.
 Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.

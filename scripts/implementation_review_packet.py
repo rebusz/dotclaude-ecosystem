@@ -9,6 +9,7 @@ lanes also receive the repository and draft-PR URLs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ from pathlib import Path
 
 
 DEFAULT_MAX_DIFF_CHARS = 180_000
+PACKET_SCHEMA_VERSION = "implementation-review/v1"
 SENSITIVE_PATH_PATTERNS = (
     re.compile(r"(?:^|/)\.env(?:\.|$)", re.IGNORECASE),
     re.compile(r"\.(?:pem|key|p12|pfx)$", re.IGNORECASE),
@@ -90,6 +92,12 @@ def _reject_sensitive_content(name_status: str, diff: str) -> None:
             )
 
 
+def _repo_label(repo: Path, github_repo: str) -> str:
+    if github_repo.startswith("https://github.com/"):
+        return github_repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    return repo.name
+
+
 def build_packet(
     *,
     repo: Path,
@@ -139,6 +147,7 @@ def build_packet(
             github_repo = ""
 
     original_chars = len(diff)
+    diff_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
     truncated = original_chars > max_diff_chars
     if truncated:
         diff = diff[:max_diff_chars].rsplit("\n", 1)[0]
@@ -165,20 +174,26 @@ robustness, regression risk, and agreement with the named plan. Report only:
 - `NO FINDINGS`: only when the supplied evidence supports it.
 
 Do not review the repository default branch in place of the exact head SHA or
-draft PR. Cite file paths and changed lines for every finding. End with this
-attestation; a verdict without it cannot clear the gate:
+draft PR. Cite file paths and changed lines for every finding.
+
+### Required reviewer output
+
+End your response with the following attestation. `REVIEWED_HEAD` is already
+pinned; copy it exactly. Select one concrete value for each remaining field.
+A verdict without this completed reviewer output cannot clear the gate:
 
 ```text
-REVIEWED_HEAD: <full head SHA>
-REVIEW_SOURCE: draft-pr | transmitted-packet
-TRANSMISSION_COMPLETE: yes | no | unknown
+REVIEWED_HEAD: {end}
+REVIEW_SOURCE: draft-pr OR transmitted-packet
+TRANSMISSION_COMPLETE: yes OR no OR unknown
 ```
 
 ## Identity
 
 - Mode: `{mode}`
 - Risk class: `{risk}`
-- Repository label: `{repo.name}`
+- Packet schema: `{PACKET_SCHEMA_VERSION}`
+- Repository label: `{_repo_label(repo, github_repo)}`
 - GitHub repository: {github_repo}
 - Draft PR: {pr_url}
 - Base SHA: `{start}`
@@ -186,6 +201,7 @@ TRANSMISSION_COMPLETE: yes | no | unknown
 - Plan: `{plan_path}`
 - Changed files: {changed_count}
 - Diff characters: {original_chars}
+- Full diff SHA-256: `{diff_sha256}`
 - Local packet diff truncated: {str(truncated).lower()}
 - Transmission completeness: unverified by packet generator
 
@@ -266,7 +282,17 @@ def main(argv: list[str] | None = None) -> int:
 
     output = (args.output or _default_output(args.repo.resolve(), end)).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(packet, encoding="utf-8")
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=output.parent,
+        prefix=f".{output.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(packet)
+        temp_output = Path(handle.name)
+    temp_output.replace(output)
     print(output)
     return 0
 

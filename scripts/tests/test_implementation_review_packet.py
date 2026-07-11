@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
 
@@ -58,10 +59,14 @@ class ImplementationReviewPacketTests(unittest.TestCase):
         self.assertIn(f"Head SHA: `{self.end}`", packet)
         self.assertIn("Draft PR: https://github.com/acme/repo/pull/7", packet)
         self.assertIn("pytest: 12 passed", packet)
-        self.assertIn("Repository label:", packet)
+        self.assertIn("Packet schema: `implementation-review/v1`", packet)
+        self.assertIn("Repository label: `repo`", packet)
         self.assertNotIn(str(self.repo.resolve()), packet)
         self.assertIn("Transmission completeness: unverified", packet)
-        self.assertIn("REVIEWED_HEAD: <full head SHA>", packet)
+        self.assertIn(f"REVIEWED_HEAD: {self.end}", packet)
+        self.assertIn("REVIEW_SOURCE: draft-pr OR transmitted-packet", packet)
+        raw_diff = _git(self.repo, "diff", "--no-ext-diff", "--find-renames", "--find-copies", self.start, self.end)
+        self.assertIn(sha256(raw_diff.encode("utf-8")).hexdigest(), packet)
         self.assertIn("-VALUE = 1", packet)
         self.assertIn("+VALUE = 2", packet)
 
@@ -149,6 +154,7 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("verdict against an older head is stale", text)
         self.assertIn("external review send", text)
         self.assertIn("TRANSMISSION_COMPLETE", text)
+        self.assertIn("Completeness decision table", text)
 
     def test_executor_delegates_external_gate_to_parent(self) -> None:
         text = (ROOT / "skills" / "executor" / "SKILL.md").read_text(encoding="utf-8")
