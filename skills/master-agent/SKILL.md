@@ -427,8 +427,10 @@ Two postures: **Startup** (hard questions) | **Builder** (design partner). Defau
 
 Output: design doc with findings + recommended next action.
 
-### AUTOPLAN (Full Review Pipeline)
-Runs CEO → Design → Eng review automatically with decision principles.
+### AUTOPLAN (Full Review Pipeline — multi-agent)
+Runs an independent multi-persona review (CEO → Design → Eng → DX) of a plan, **in parallel**, then
+synthesizes a consolidated verdict. Upgraded 2026-06-15 to fan out via the **Workflow tool** instead of
+a single inline pass — each persona is its own subagent, so disagreements surface instead of averaging out.
 
 **6 Decision Principles** (auto-decide mechanical items, surface taste decisions):
 1. **Completeness**: does the plan cover all requirements?
@@ -443,12 +445,28 @@ Runs CEO → Design → Eng review automatically with decision principles.
 - **Taste** (close call, recoverable): auto-decide + surface to operator for awareness
 - **User challenge** (irreversible or against operator's stated direction): NEVER auto-decide, always ask
 
-Steps:
-1. Read project context (CLAUDE.md, README, git log, design docs)
-2. **Scope challenge**: can we reuse existing code? Is this ≤8 files? Built-in available?
-3. **Architecture review**: data flow, diagrams, edge cases, test plan
-4. **Design review**: rate UX/DX dimensions 0-10
-5. Surface all taste decisions and user challenges at end
+**Execution (preferred — multi-agent fan-out):**
+1. PRE-step if scoping or reviewing a plan: `python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <path>]`, then perform the Vision / Plan Collision Check before dispatching personas.
+2. Identify the absolute path of the plan under review.
+3. Run the reusable review workflow via the **Workflow tool** (this skill instruction is the explicit
+   opt-in for the Workflow tool — no `ultracode` keyword needed):
+   ```
+   Workflow({ scriptPath: "<HOME>/.claude/scripts/autoplan_review_workflow.js",
+              args: { plan: "<abs-plan-path>", personas: ["ceo","design","eng","dx"] } })
+   ```
+   Resolve `<HOME>` to the real home dir (Windows: `C:/Users/<you>`). It fans out one opus reviewer per
+   persona (each reads the plan + repo invariants), then a synthesis agent returns
+   `{ overall_verdict, dimension_table, critical_issues, taste_decisions, user_challenges, scope_recommendation, go_decision }`.
+4. **Append the synthesized report to the plan file** as a `## AUTOPLAN REVIEW` section (GSTACK style),
+   then surface every **Taste** decision (for awareness) and **User Challenge** (must be answered) to the operator.
+5. Drop a persona from `personas` for a lighter pass (e.g. `["ceo","eng"]`); pass `context` for extra framing.
+
+**Fallback (inline, no Workflow):** if the Workflow tool is unavailable, the plan is trivial, or the
+operator says "inline", run the personas sequentially yourself using the same principles + classification:
+read context → scope challenge (reuse? ≤8 files? built-in?) → architecture review → design review → surface
+taste decisions and user challenges.
+
+**Model routing:** persona reviewers + synthesis = opus (judgment-heavy); any web research inside a persona = sonnet.
 
 ### RETRO (Weekly Retrospective)
 Analyze recent work patterns and code quality. Default period: 7 days.
