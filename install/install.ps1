@@ -40,14 +40,17 @@ foreach ($skill in $BundledSkills) {
     Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 }
 if (Test-Path $CodexHome) {
-    $src = Join-Path $RepoRoot "skills\ponytail-on-demand"
-    $dst = Join-Path $CodexHome "skills\ponytail-on-demand"
-    if (Test-Path $dst) {
-        Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
+    $CodexSkills = @("master-agent", "executor", "ponytail-on-demand")
+    foreach ($skill in $CodexSkills) {
+        $src = Join-Path $RepoRoot "skills\$skill"
+        $dst = Join-Path $CodexHome "skills\$skill"
+        if (Test-Path $dst) {
+            Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
     }
-    New-Item -ItemType Directory -Force -Path $dst | Out-Null
-    Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
-    Write-Host "  copied explicit-only ponytail-on-demand -> ~/.codex/skills/" -ForegroundColor Green
+    Write-Host "  copied bundled skills -> ~/.codex/skills/" -ForegroundColor Green
 }
 
 # settings.json -- merge hooks

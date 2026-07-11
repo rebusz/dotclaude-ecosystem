@@ -62,3 +62,16 @@ If `plan_path` is empty in payload, skip with a warning (catalogs only get regen
 After STEP 2 completes, run the Post-Mode Epilog from master-agent SKILL.md
 using the diff range start_sha..end_sha (or git diff HEAD if uncommitted).
 The executor subagent does NOT run its own epilog — epilog runs in parent context only.
+
+The parent must run both parts of that epilog for every non-empty code diff:
+
+1. LOCAL REVIEW against the executor payload's exact SHA range.
+2. EXTERNAL IMPLEMENTATION REVIEW GATE: push the validated executor commit to a
+   draft PR, build the review packet with
+   `~/.claude/scripts/implementation_review_packet.py --mode EXECUTOR`, and launch
+   the CDP-backed auditF panel with GitHub repository grounding.
+
+Do not emit `>> DONE`, mark the PR ready, or merge until the external verdict matches
+the current head SHA and every `SHIP-BLOCKING` finding is fixed. R0 docs/prompts skip
+the external gate; an explicit operator phrase `skip external review` is the only
+bypass and must be reported.
