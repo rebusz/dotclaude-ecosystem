@@ -40,7 +40,8 @@ foreach ($skill in $BundledSkills) {
     Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 }
 if (Test-Path $CodexHome) {
-    foreach ($skill in $BundledSkills) {
+    $CodexSkills = @("master-agent", "executor", "ponytail-on-demand")
+    foreach ($skill in $CodexSkills) {
         $src = Join-Path $RepoRoot "skills\$skill"
         $dst = Join-Path $CodexHome "skills\$skill"
         if (Test-Path $dst) {

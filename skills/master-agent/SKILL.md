@@ -122,11 +122,18 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
 `skip external review`; record that override in the completion report. Generic
 `skip review` skips both local and external review.
 
-1. **Publish the exact review surface.** Commit the validated implementation, push
+1. **External-publication preflight.** Treat sending a diff to browser AI as an
+   irreversible external disclosure. Run the repo's secret scanner when available;
+   the packet builder also fails closed on `.env`, private-key/credential files, and
+   high-confidence secret patterns. Never override a secret finding. For R2/R3 or a
+   trading/execution repo, the approved pre-code plan must explicitly disclose the
+   external review send; otherwise obtain a separate operator GO before continuing.
+2. **Publish the exact review surface.** Commit the validated implementation, push
    the implementation branch, and create or update a **draft PR**. Never ask a CDP
    reviewer to inspect the repository default branch as a substitute for the exact
-   implementation head. Do not mark the PR ready yet.
-2. **Build a provider-neutral packet** containing the base/head SHA, draft PR URL,
+   implementation head. Do not mark the PR ready yet. For a local/non-GitHub repo,
+   omit the PR URL and review the exact packet; R2/R3 still require operator GO.
+3. **Build a provider-neutral packet** containing the base/head SHA, draft PR URL,
    plan path, risk class, validation evidence, changed-file list, diff stat, and
    exact diff:
 
@@ -138,15 +145,22 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
    ```
 
    Use `--mode EXECUTOR` and the executor payload's `worktree_path` when applicable.
+   For an operator-approved R2/R3 external send, also pass
+   `--external-publication-approved`.
    Capture the printed packet path. For large diffs the packet may truncate the
    embedded patch; reviewers must then inspect the exact PR/head SHA before verdict.
-3. **Launch the external panel** through the canonical free audit runner. Pass the
+4. **Launch the external panel** through the canonical free audit runner. Discover
+   `auditf.py` from `AUDITF_PATH`, the ecosystem `_shared/audit` location, or the
+   installed `~/.claude/scripts` copy; block with the checked paths if none exists.
+   Pass the
    real GitHub repository so the Perplexity CDP lane receives repository grounding;
    every lane receives the exact packet and PR URL. Match `--synthesizer` to the
-   parent agent to avoid self-grading (`gpt` for Codex, `claude` for Claude):
+   parent (`gpt` for Codex, `claude` for Claude); auditF then excludes the same-family
+   frontier audit lane. The independent findings come from the remaining external
+   lanes, while the parent still owns synthesis:
 
    ```bash
-   python "D:/APPS/_shared/audit/auditf.py" "<packet-path>" \
+   python "<resolved-auditf-path>" "<packet-path>" \
      --topic "implementation-review-<head-short-sha>" \
      --output-dir "<temp>/implementation-review-audits" \
      --synthesizer <gpt|claude> \
@@ -155,17 +169,21 @@ diffs skip it. The operator may bypass it only with the explicit task phrase
 
    CDP browsers must already be operator-started and signed in. This invocation is
    review-only: it never grants merge, runtime, broker, or order authority.
-4. **Verify lane evidence, then synthesize.** Read `_auditf_meta.json` and
+5. **Verify lane evidence, then synthesize.** Read `_auditf_meta.json` and
    `synthesis_prompt.md`; do not treat auditF's process exit alone as a passed review.
+   A reviewer that inspected only the default branch is invalid. At least one accepted
+   CDP verdict must attest the current full `REVIEWED_HEAD` and name its source as the
+   draft PR or transmitted packet. `TRANSMISSION_COMPLETE: unknown` cannot support a
+   `NO FINDINGS` verdict unless that reviewer inspected the exact draft PR.
    Minimum evidence:
    - R1: at least one successful CDP lane.
    - R2/R3: at least two successful external reviewers, including at least one CDP;
      for a GitHub-hosted repo the GitHub-grounded Perplexity CDP lane must succeed.
-5. **Fix loop.** Synthesize only `SHIP-BLOCKING`, `FIX-LATER`, or `NO FINDINGS`.
+6. **Fix loop.** Synthesize only `SHIP-BLOCKING`, `FIX-LATER`, or `NO FINDINGS`.
    Fix every ship-blocker, rerun targeted validation, push the updated draft PR,
    rebuild the packet with the new head SHA, and repeat the external review. A
    verdict against an older head is stale and cannot clear the gate.
-6. **Handoff to SHIP.** Record the reviewed head SHA, successful lanes, synthesis
+7. **Handoff to SHIP.** Record the reviewed head SHA, successful lanes, synthesis
    artifact path, blockers fixed, and remaining FIX-LATER items. Only then may SHIP
    mark the PR ready and continue the land-on-main lifecycle.
 

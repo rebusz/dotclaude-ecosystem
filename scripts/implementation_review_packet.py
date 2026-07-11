@@ -16,6 +16,17 @@ from pathlib import Path
 
 
 DEFAULT_MAX_DIFF_CHARS = 180_000
+SENSITIVE_PATH_PATTERNS = (
+    re.compile(r"(?:^|/)\.env(?:\.|$)", re.IGNORECASE),
+    re.compile(r"\.(?:pem|key|p12|pfx)$", re.IGNORECASE),
+    re.compile(r"(?:^|/)(?:credentials?|secrets?)\.(?:json|ya?ml|toml)$", re.IGNORECASE),
+)
+HIGH_CONFIDENCE_SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bgh[oprsu]_[A-Za-z0-9]{30,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+)
 
 
 class PacketError(RuntimeError):
@@ -53,6 +64,32 @@ def _github_url_from_remote(remote: str) -> str:
     return remote
 
 
+def _changed_paths(name_status: str) -> list[str]:
+    paths: list[str] = []
+    for line in name_status.splitlines():
+        fields = line.split("\t")
+        paths.extend(field.replace("\\", "/") for field in fields[1:])
+    return paths
+
+
+def _reject_sensitive_content(name_status: str, diff: str) -> None:
+    sensitive_paths = [
+        path
+        for path in _changed_paths(name_status)
+        if any(pattern.search(path) for pattern in SENSITIVE_PATH_PATTERNS)
+    ]
+    if sensitive_paths:
+        raise PacketError(
+            "refusing external review packet for sensitive path(s): "
+            + ", ".join(sensitive_paths)
+        )
+    for pattern in HIGH_CONFIDENCE_SECRET_PATTERNS:
+        if pattern.search(diff):
+            raise PacketError(
+                f"refusing external review packet: high-confidence secret pattern {pattern.pattern!r}"
+            )
+
+
 def build_packet(
     *,
     repo: Path,
@@ -65,6 +102,7 @@ def build_packet(
     github_repo: str = "",
     validation: str = "",
     max_diff_chars: int = DEFAULT_MAX_DIFF_CHARS,
+    external_publication_approved: bool = False,
 ) -> str:
     repo = repo.resolve()
     if not (repo / ".git").exists():
@@ -83,12 +121,16 @@ def build_packet(
         "--no-ext-diff",
         "--find-renames",
         "--find-copies",
-        "--binary",
         start,
         end,
     )
     if not names or not diff:
         raise PacketError(f"review range has no changed files: {start}..{end}")
+    _reject_sensitive_content(names, diff)
+    if risk in {"R2", "R3"} and not external_publication_approved:
+        raise PacketError(
+            f"{risk} requires explicit operator approval for external publication"
+        )
 
     if not github_repo:
         try:
@@ -123,13 +165,20 @@ robustness, regression risk, and agreement with the named plan. Report only:
 - `NO FINDINGS`: only when the supplied evidence supports it.
 
 Do not review the repository default branch in place of the exact head SHA or
-draft PR. Cite file paths and changed lines for every finding.
+draft PR. Cite file paths and changed lines for every finding. End with this
+attestation; a verdict without it cannot clear the gate:
+
+```text
+REVIEWED_HEAD: <full head SHA>
+REVIEW_SOURCE: draft-pr | transmitted-packet
+TRANSMISSION_COMPLETE: yes | no | unknown
+```
 
 ## Identity
 
 - Mode: `{mode}`
 - Risk class: `{risk}`
-- Repository: `{repo}`
+- Repository label: `{repo.name}`
 - GitHub repository: {github_repo}
 - Draft PR: {pr_url}
 - Base SHA: `{start}`
@@ -137,7 +186,8 @@ draft PR. Cite file paths and changed lines for every finding.
 - Plan: `{plan_path}`
 - Changed files: {changed_count}
 - Diff characters: {original_chars}
-- Packet diff truncated: {str(truncated).lower()}
+- Local packet diff truncated: {str(truncated).lower()}
+- Transmission completeness: unverified by packet generator
 
 ## Validation evidence
 
@@ -183,6 +233,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validation-file", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-diff-chars", type=int, default=DEFAULT_MAX_DIFF_CHARS)
+    parser.add_argument(
+        "--external-publication-approved",
+        action="store_true",
+        help="Required for R2/R3 after the operator approved sending the diff to external reviewers.",
+    )
     args = parser.parse_args(argv)
 
     if args.max_diff_chars < 1:
@@ -204,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             github_repo=args.github_repo,
             validation=validation,
             max_diff_chars=args.max_diff_chars,
+            external_publication_approved=args.external_publication_approved,
         )
     except (OSError, PacketError) as exc:
         parser.exit(2, f"ERROR: {exc}\n")

@@ -51,12 +51,17 @@ class ImplementationReviewPacketTests(unittest.TestCase):
             pr_url="https://github.com/acme/repo/pull/7",
             github_repo="https://github.com/acme/repo",
             validation="pytest: 12 passed",
+            external_publication_approved=True,
         )
 
         self.assertIn(f"Base SHA: `{self.start}`", packet)
         self.assertIn(f"Head SHA: `{self.end}`", packet)
         self.assertIn("Draft PR: https://github.com/acme/repo/pull/7", packet)
         self.assertIn("pytest: 12 passed", packet)
+        self.assertIn("Repository label:", packet)
+        self.assertNotIn(str(self.repo.resolve()), packet)
+        self.assertIn("Transmission completeness: unverified", packet)
+        self.assertIn("REVIEWED_HEAD: <full head SHA>", packet)
         self.assertIn("-VALUE = 1", packet)
         self.assertIn("+VALUE = 2", packet)
 
@@ -70,8 +75,56 @@ class ImplementationReviewPacketTests(unittest.TestCase):
             max_diff_chars=20,
         )
 
-        self.assertIn("Packet diff truncated: true", packet)
+        self.assertIn("Local packet diff truncated: true", packet)
         self.assertIn("DIFF TRUNCATED IN PACKET", packet)
+
+    def test_truncation_boundary_is_exact(self) -> None:
+        raw_diff = _git(self.repo, "diff", "--no-ext-diff", "--find-renames", "--find-copies", self.start, self.end)
+
+        exact = build_packet(
+            repo=self.repo,
+            start_sha=self.start,
+            end_sha=self.end,
+            mode="IMPLEMENT",
+            risk="R1",
+            max_diff_chars=len(raw_diff),
+        )
+        over = build_packet(
+            repo=self.repo,
+            start_sha=self.start,
+            end_sha=self.end,
+            mode="IMPLEMENT",
+            risk="R1",
+            max_diff_chars=len(raw_diff) - 1,
+        )
+
+        self.assertIn("Local packet diff truncated: false", exact)
+        self.assertIn("Local packet diff truncated: true", over)
+
+    def test_r2_requires_external_publication_approval(self) -> None:
+        with self.assertRaisesRegex(PacketError, "requires explicit operator approval"):
+            build_packet(
+                repo=self.repo,
+                start_sha=self.start,
+                end_sha=self.end,
+                mode="IMPLEMENT",
+                risk="R2",
+            )
+
+    def test_sensitive_path_is_rejected(self) -> None:
+        (self.repo / ".env").write_text("TOKEN=placeholder\n", encoding="utf-8")
+        _git(self.repo, "add", ".env")
+        _git(self.repo, "commit", "-m", "sensitive")
+        sensitive_head = _git(self.repo, "rev-parse", "HEAD")
+
+        with self.assertRaisesRegex(PacketError, "sensitive path"):
+            build_packet(
+                repo=self.repo,
+                start_sha=self.end,
+                end_sha=sensitive_head,
+                mode="IMPLEMENT",
+                risk="R1",
+            )
 
     def test_empty_range_is_rejected(self) -> None:
         with self.assertRaisesRegex(PacketError, "start_sha equals end_sha"):
@@ -94,6 +147,8 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("_auditf_meta.json", text)
         self.assertIn("GitHub-grounded Perplexity CDP lane must succeed", text)
         self.assertIn("verdict against an older head is stale", text)
+        self.assertIn("external review send", text)
+        self.assertIn("TRANSMISSION_COMPLETE", text)
 
     def test_executor_delegates_external_gate_to_parent(self) -> None:
         text = (ROOT / "skills" / "executor" / "SKILL.md").read_text(encoding="utf-8")
@@ -106,10 +161,17 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         powershell = (ROOT / "install" / "install.ps1").read_text(encoding="utf-8")
         shell = (ROOT / "install" / "install.sh").read_text(encoding="utf-8")
 
-        self.assertIn("foreach ($skill in $BundledSkills)", powershell)
+        self.assertIn('$CodexSkills = @("master-agent", "executor", "ponytail-on-demand")', powershell)
         self.assertIn('Join-Path $CodexHome "skills\\$skill"', powershell)
-        self.assertIn('for skill in "${BUNDLED_SKILLS[@]}"', shell)
+        self.assertIn("CODEX_SKILLS=(master-agent executor ponytail-on-demand)", shell)
+        self.assertIn('for skill in "${CODEX_SKILLS[@]}"', shell)
         self.assertIn('$CODEX_HOME/skills/$skill', shell)
+
+    def test_global_policy_distinguishes_local_and_external_r1_review(self) -> None:
+        text = (ROOT / "agent-rules" / "core.md").read_text(encoding="utf-8")
+
+        self.assertIn("external implementation review for every non-empty code diff", text)
+        self.assertIn("push draft PR -> external review gate", text)
 
 
 if __name__ == "__main__":

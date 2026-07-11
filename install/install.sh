@@ -37,7 +37,8 @@ for skill in "${BUNDLED_SKILLS[@]}"; do
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
 done
 if [ -d "$CODEX_HOME" ]; then
-    for skill in "${BUNDLED_SKILLS[@]}"; do
+    CODEX_SKILLS=(master-agent executor ponytail-on-demand)
+    for skill in "${CODEX_SKILLS[@]}"; do
         if [ -d "$CODEX_HOME/skills/$skill" ]; then
             cp -R "$CODEX_HOME/skills/$skill" "$CODEX_HOME/skills/$skill.bak.$STAMP"
         fi

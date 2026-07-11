@@ -72,7 +72,7 @@ bash install/install.sh
 The installer:
 1. Backs up your existing `~/.claude/` and `~/.codex/` (if present)
 2. Copies scripts into `~/.claude/scripts/`
-3. Copies bundled skills into both `~/.claude/skills/` and (when present) `~/.codex/skills/`, including the shared `master-agent` and `executor` external-review contract
+3. Copies bundled skills into `~/.claude/skills/`; Codex receives the shared `master-agent` and `executor` external-review contract plus bounded `ponytail-on-demand`
 4. Merges hooks into `~/.claude/settings.json` (preserves your existing config)
 5. Appends Plan Lifecycle Hooks section to `~/.codex/AGENTS.md` (if Codex installed)
 6. Initializes empty `~/.claude/MEMORY.md` and `~/.claude/ECOSYSTEM_IDEA_BOX.md` if missing
