@@ -39,6 +39,8 @@
 
 ## Execution Defaults
 
+- Always assess whether a task can be split into multiple independent work lanes; when useful, authorized, and supported by the available tooling, run or delegate those lanes concurrently.
+- When model selection is available, prefer cheaper AI models for bounded, low-risk, easily verifiable lanes; reserve stronger models for ambiguous synthesis, high-risk decisions, and safety-critical review, and never weaken scope, risk, or validation gates to save cost.
 - When the user approves a concrete plan, slice chain, or says `ok go`, `jedziesz`, `dzialaj`, or `implementuj`, execute end-to-end.
 - Continue through approved slices until an explicit gate, live-money/production/destructive risk, repo-plan contradiction, validation blocker, or user pause appears.
 - After each meaningful slice, update status, run targeted validation, and continue without needless re-confirmation.
