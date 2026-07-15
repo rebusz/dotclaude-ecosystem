@@ -63,15 +63,13 @@ After STEP 2 completes, run the Post-Mode Epilog from master-agent SKILL.md
 using the diff range start_sha..end_sha (or git diff HEAD if uncommitted).
 The executor subagent does NOT run its own epilog — epilog runs in parent context only.
 
-The parent must run both parts of that epilog for every non-empty code diff:
+The parent must apply the authoritative **Review Workflow Routing** table in
+master-agent `SKILL.md`; do not duplicate or override its risk policy here. R2/R3
+executor work routes through `/fw close <plan>` as the single post-implementation
+owner. R1 uses `/audit` plus proportionate local verification unless explicitly
+escalated; R0 has no mandatory review workflow.
 
-1. LOCAL REVIEW against the executor payload's exact SHA range.
-2. EXTERNAL IMPLEMENTATION REVIEW GATE: push the validated executor commit to a
-   draft PR, build the review packet with
-   `~/.claude/scripts/implementation_review_packet.py --mode EXECUTOR`, and launch
-   the CDP-backed auditF panel with GitHub repository grounding.
-
-Do not emit `>> DONE`, mark the PR ready, or merge until the external verdict matches
-the current head SHA and every `SHIP-BLOCKING` finding is fixed. R0 docs/prompts skip
-the external gate; an explicit operator phrase `skip external review` is the only
-bypass and must be reported.
+Do not emit `>> DONE`, mark the PR ready, or merge until the owning workflow's
+verdict matches the current head SHA and every `SHIP-BLOCKING` finding is fixed.
+Preserve exact-head, draft-PR, external-publication consent, secret rejection, and
+stale-evidence gates from master-agent and `/fw close`.

@@ -22,7 +22,8 @@
 
 ## Codex Audit Routing
 
-- The ecosystem audit pipelines live in `D:/APPS/_shared/audit/` (shared, version-controlled). To audit a plan/design:
+- Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`. R2/R3 plans use FWF by default (FWP only when explicitly selected for R3); R2/R3 implementation closeout is owned by `/fw close <plan>`; R1 uses `/audit` plus proportionate local verification.
+- The ecosystem audit pipelines live in `D:/APPS/_shared/audit/` (shared, version-controlled). Direct `auditF` / `auditP` use is allowed only when the operator explicitly invokes it or the owning FWF/FWP/`/fw close` stage selects it. Do not launch raw auditF merely because a task is R2/R3:
   - **auditF** (free — OpenRouter 8 free models + Perplexity/Gemini CDP + a frontier auditor): `python "D:/APPS/_shared/audit/auditf.py" "<ABSOLUTE_PLAN_PATH>" --topic <topic> --synthesizer gpt`
   - **auditP** (paid OpenRouter complement basket): `python "D:/APPS/_shared/audit/multi_audit.py" "<ABSOLUTE_PLAN_PATH>" --topic <topic>`
 - **MANDATORY: Codex always passes `--synthesizer gpt` to auditF.** Codex IS the synthesizer (GPT), so this drops the GPT audit lane (no self-grading) and instead fires the Claude Opus CLI lane (`WatchF/scripts/auditcl.py`) as the external frontier auditor. Omitting it defaults to `claude` → GPT grades its own work (wasted tokens, the original reason that lane churned).

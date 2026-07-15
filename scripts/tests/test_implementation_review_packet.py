@@ -143,25 +143,30 @@ class ImplementationReviewPacketTests(unittest.TestCase):
 
 
 class ExternalReviewWorkflowContractTests(unittest.TestCase):
-    def test_master_agent_requires_exact_head_external_review(self) -> None:
+    def test_master_agent_owns_risk_aware_review_routing(self) -> None:
         text = (ROOT / "skills" / "master-agent" / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("EXTERNAL IMPLEMENTATION REVIEW GATE", text)
+        self.assertIn("## Review Workflow Routing", text)
+        self.assertIn("| R3 | FWF by default; FWP only when explicitly selected | `/fw close <plan>` |", text)
+        self.assertIn("| R2 | FWF | `/fw close <plan>` |", text)
+        self.assertIn("| R1 | `/audit` plus proportionate local verification", text)
+        self.assertIn("Raw `auditF` and `auditP` are subordinate lanes", text)
+        self.assertIn("Codex must pass `--synthesizer gpt`", text)
         self.assertIn("draft PR", text)
         self.assertIn("implementation_review_packet.py", text)
-        self.assertIn("_auditf_meta.json", text)
-        self.assertIn("GitHub-grounded Perplexity CDP lane must succeed", text)
-        self.assertIn("verdict against an older head is stale", text)
-        self.assertIn("external review send", text)
-        self.assertIn("TRANSMISSION_COMPLETE", text)
-        self.assertIn("Completeness decision table", text)
+        self.assertIn("older head is stale", text.lower())
+        self.assertIn("external-publication consent", text)
+        self.assertIn("Every `SHIP-BLOCKING` finding must be", text)
+        self.assertNotIn("Launch the external panel", text)
+        self.assertNotIn("run LOCAL REVIEW + COMPOUND", text)
 
-    def test_executor_delegates_external_gate_to_parent(self) -> None:
+    def test_executor_delegates_to_master_agent_risk_router(self) -> None:
         text = (ROOT / "skills" / "executor" / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("EXTERNAL IMPLEMENTATION REVIEW GATE", text)
-        self.assertIn("--mode EXECUTOR", text)
+        self.assertIn("Review Workflow Routing", text)
+        self.assertIn("`/fw close <plan>`", text)
         self.assertIn("every `SHIP-BLOCKING` finding is fixed", text)
+        self.assertNotIn("the CDP-backed auditF panel", text)
 
     def test_installers_copy_shared_workflow_to_codex(self) -> None:
         powershell = (ROOT / "install" / "install.ps1").read_text(encoding="utf-8")
@@ -173,11 +178,21 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn('for skill in "${CODEX_SKILLS[@]}"', shell)
         self.assertIn('$CODEX_HOME/skills/$skill', shell)
 
-    def test_global_policy_distinguishes_local_and_external_r1_review(self) -> None:
+    def test_global_policy_references_master_router_and_keeps_r1_lightweight(self) -> None:
         text = (ROOT / "agent-rules" / "core.md").read_text(encoding="utf-8")
 
-        self.assertIn("external implementation review for every non-empty code diff", text)
-        self.assertIn("push draft PR -> external review gate", text)
+        self.assertIn("Review Workflow Routing", text)
+        self.assertIn("R2/R3 post-implementation review is owned by `/fw close <plan>`", text)
+        self.assertIn("R1 uses `/audit` plus proportionate local verification", text)
+        self.assertNotIn("external implementation review for every non-empty code diff", text)
+
+    def test_codex_overlay_keeps_direct_audit_as_explicit_or_subordinate(self) -> None:
+        text = (ROOT / "agent-rules" / "overlays" / "codex-global.md").read_text(encoding="utf-8")
+
+        self.assertIn("Review Workflow Routing", text)
+        self.assertIn("Direct `auditF` / `auditP` use is allowed only", text)
+        self.assertIn("`--synthesizer gpt`", text)
+        self.assertNotIn("To audit a plan/design", text)
 
 
 if __name__ == "__main__":
