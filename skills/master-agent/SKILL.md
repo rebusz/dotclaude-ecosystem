@@ -69,6 +69,27 @@ The user invokes modes with a flexible syntax. Parse as follows:
 
 When in doubt, assume the higher risk class and ask.
 
+## Review Workflow Routing
+
+This table is the authoritative router for plan and implementation review. Other
+skills and global rules must reference it instead of restating their own routing.
+
+| Risk | Pre-implementation plan review | Post-implementation owner |
+|---|---|---|
+| R3 | FWF by default; FWP only when explicitly selected | `/fw close <plan>` |
+| R2 | FWF | `/fw close <plan>` |
+| R1 | `/audit` plus proportionate local verification; FWF is optional | `/audit` plus proportionate local verification |
+| R0 | No mandatory review workflow | No mandatory review workflow |
+
+FWF/FWP stages 1-5 are pre-implementation plan gates and always stop at the
+human GO gate. `/fw close` is Stage 6 for an already-implemented exact head; it
+must not rerun stages 1-5 or grant ready, merge, runtime, broker, or order authority.
+
+Raw `auditF` and `auditP` are subordinate lanes selected by the owning workflow,
+or direct tools only when the operator explicitly invokes them. Never launch raw
+`auditF` automatically merely because a task is R2/R3. Whenever an owning workflow
+actually selects auditF, Codex must pass `--synthesizer gpt`.
+
 ## Approval Gate (R2/R3)
 
 Unless the user said `go` (confirming prior approval), all R2/R3 work requires a **pre-code plan** before implementation:
@@ -108,102 +129,32 @@ python ~/.claude/scripts/plan_context_updater.py --plan <plan-path> [--shipped] 
 This regenerates `PLANS.md` + `VISIONS.md`, appends to vision auto-log, and marks IDEA_BOX entries DONE.
 Best-effort: log failures, do not block the closing tag.
 
-**LOCAL REVIEW scope** (by mode):
-- IMPLEMENT / EXECUTOR: REVIEW passes 1-3 (correctness, safety, robustness — skip P4 style).
-  Use diff algorithm: git diff $START_SHA..HEAD (or git diff HEAD if uncommitted).
-  Keep review concise — P1/P2 findings only, no verbose P3/P4 exposition.
+**REVIEW PREPARATION** (by mode):
+- IMPLEMENT / EXECUTOR: capture the exact diff range for the owning workflow using
+  the diff algorithm below. R2/R3 review runs inside `/fw close`; do not run a
+  duplicate parent review. R1 uses `/audit` plus proportionate local verification.
 - SHIP: COMPOUND only — no REVIEW (code was already reviewed during IMPLEMENT).
 
-**EXTERNAL IMPLEMENTATION REVIEW GATE** (IMPLEMENT / EXECUTOR, after local tests and
-LOCAL REVIEW, before COMPOUND or `>> DONE`):
+**POST-IMPLEMENTATION REVIEW HANDOFF** (IMPLEMENT / EXECUTOR, after local tests):
 
-This gate is mandatory for every non-empty code diff. R0 documentation/prompt-only
-diffs skip it. The operator may bypass it only with the explicit task phrase
-`skip external review`; record that override in the completion report. Generic
-`skip review` skips both local and external review.
+Route through **Review Workflow Routing**. For R2/R3, invoke `/fw close <plan>` as
+the single owning workflow; the parent epilog must not independently launch another
+local review or raw audit panel. For R1, use `/audit` plus proportionate local
+verification unless the operator explicitly escalates. R0 documentation/prompt-only
+diffs have no mandatory review workflow.
 
-1. **External-publication preflight.** Treat sending a diff to browser AI as an
-   irreversible external disclosure. Run the repo's secret scanner when available;
-   the packet builder also fails closed on `.env`, private-key/credential files, and
-   high-confidence secret patterns. Never override a secret finding. For R2/R3 or a
-   trading/execution repo, the approved pre-code plan must explicitly disclose the
-   external review send; otherwise obtain a separate operator GO before continuing.
-2. **Publish the exact review surface.** Commit the validated implementation, push
-   the implementation branch, and create or update a **draft PR**. Never ask a CDP
-   reviewer to inspect the repository default branch as a substitute for the exact
-   implementation head. Do not mark the PR ready yet. For a local/non-GitHub repo,
-   omit the PR URL and review the exact packet; R2/R3 still require operator GO.
-3. **Build a provider-neutral packet** containing the base/head SHA, draft PR URL,
-   plan path, risk class, validation evidence, changed-file list, diff stat, and
-   exact diff:
+The owning close workflow must preserve all existing exact-head gates: validated
+commit, draft PR, provider-neutral `implementation_review_packet.py` output when
+external publication is needed, external-publication consent, fail-closed secret
+rejection, and rejection of default-branch or stale evidence. A verdict against an
+older head is stale and cannot clear the gate. Every `SHIP-BLOCKING` finding must be
+fixed and revalidated against the new head. Review never grants PR-ready, merge,
+runtime, broker, or order authority.
 
-   ```bash
-   python ~/.claude/scripts/implementation_review_packet.py \
-     --repo "$PWD" --start-sha "$START_SHA" --end-sha HEAD \
-     --mode IMPLEMENT --risk R1 --plan-path "<plan-or-empty>" \
-     --pr-url "<draft-pr-url>" --validation-file "<test-output-file>"
-   ```
-
-   Use `--mode EXECUTOR` and the executor payload's `worktree_path` when applicable.
-   For an operator-approved R2/R3 external send, also pass
-   `--external-publication-approved`.
-   Capture the printed packet path. For large diffs the packet may truncate the
-   embedded patch; reviewers must then inspect the exact PR/head SHA before verdict.
-4. **Launch the external panel** through the canonical free audit runner. Discover
-   `auditf.py` from `AUDITF_PATH`, the ecosystem `_shared/audit` location, or the
-   installed `~/.claude/scripts` copy; block with the checked paths if none exists.
-   Pass the
-   real GitHub repository so the Perplexity CDP lane receives repository grounding;
-   every lane receives the exact packet and PR URL. Match `--synthesizer` to the
-   parent (`gpt` for Codex, `claude` for Claude); auditF then excludes the same-family
-   frontier audit lane. The independent findings come from the remaining external
-   lanes, while the parent still owns synthesis:
-
-   ```bash
-   python "<resolved-auditf-path>" "<packet-path>" \
-     --topic "implementation-review-<head-short-sha>" \
-     --output-dir "<temp>/implementation-review-audits" \
-     --synthesizer <gpt|claude> \
-     --repo-label "<repo-name>" --github-repo "<github-url>"
-   ```
-
-   CDP browsers must already be operator-started and signed in. This invocation is
-   review-only: it never grants merge, runtime, broker, or order authority. Probe
-   the configured CDP endpoints before the send and pass an explicit runner timeout
-   (normally `--lane-timeout-s 900`). Use a unique UTC run id after the head SHA in
-   `--topic` so concurrent reviews cannot share an output directory.
-5. **Verify lane evidence, then synthesize.** Read `_auditf_meta.json` and
-   `synthesis_prompt.md`; do not treat auditF's process exit alone as a passed review.
-   A reviewer that inspected only the default branch is invalid. At least one accepted
-   CDP verdict must attest the current full `REVIEWED_HEAD` and name its source as the
-   draft PR or transmitted packet. `TRANSMISSION_COMPLETE: unknown` cannot support a
-   `NO FINDINGS` verdict unless that reviewer inspected the exact draft PR.
-   Minimum evidence:
-   - R1: at least one successful CDP lane.
-   - R2/R3: at least two successful external reviewers, including at least one CDP;
-     for a GitHub-hosted repo the GitHub-grounded Perplexity CDP lane must succeed.
-
-   Completeness decision table:
-
-   | Local packet | Reviewer transmission | Eligible evidence |
-   |---|---|---|
-   | complete | `yes` | draft PR or transmitted packet |
-   | truncated | any value | exact draft PR only |
-   | any value | `no` or `unknown` | exact draft PR only |
-   | any value | missing/stale head or default branch | reject verdict |
-6. **Fix loop.** Synthesize only `SHIP-BLOCKING`, `FIX-LATER`, or `NO FINDINGS`.
-   Fix every ship-blocker, rerun targeted validation, push the updated draft PR,
-   rebuild the packet with the new head SHA, and repeat the external review. A
-   verdict against an older head is stale and cannot clear the gate.
-7. **Handoff to SHIP.** Record the reviewed head SHA, successful lanes, synthesis
-   artifact path, blockers fixed, and remaining FIX-LATER items. Only then may SHIP
-   mark the PR ready and continue the land-on-main lifecycle.
-
-If the required CDP/GitHub evidence is unavailable, emit `>> BLOCKED` with the exact
-missing lane or prerequisite. Do not silently downgrade to self-review or a default-
-branch review. The external reviewer remains advisory and cannot authorize a merge;
-the operator can explicitly invoke `skip external review` to take responsibility for
-a provider outage or urgent hotfix, but never to override a secret finding.
+The explicit task phrase `skip external review` may bypass unavailable external
+review lanes only; record the override. It never bypasses secret rejection, exact-head
+checks, local validation, or the human approval gate. Generic `skip review` skips the
+routed review workflow but must also be recorded.
 
 **COMPOUND**: read `~/.claude/skills/compound/compound.md` and execute.
 Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
@@ -216,8 +167,8 @@ Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
 
 **Skip conditions** (case-insensitive, checked in task line):
 - `bare` → skip entire epilog
-- `skip review` → skip local and external review; run COMPOUND only
-- `skip external review` → run LOCAL REVIEW + COMPOUND and record the operator override
+- `skip review` → skip the routed review workflow; run COMPOUND only and record the override
+- `skip external review` → keep local validation and any non-external stages in the owning workflow; record the operator override
 - `no compound` → run REVIEW only
 
 **Diff surface algorithm**:
@@ -228,8 +179,8 @@ Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
    c. If committed: `git diff $START_SHA..HEAD`
    d. If both: `git diff $START_SHA`
 3. If diff is empty: skip REVIEW, run COMPOUND only, note "no diff detected"
-4. If diff > 300 lines: LOCAL REVIEW may use changed files + summary; the external
-   packet still pins the exact PR/head and includes the diff up to its explicit limit
+4. If diff > 300 lines: the owning workflow may use changed files + summary for its
+   local pass; any external packet still pins the exact PR/head and states truncation
 
 ---
 

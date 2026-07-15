@@ -65,7 +65,7 @@
 ## Land-On-Main Lifecycle
 
 - When a task/plan is done and locally validated, run the WHOLE git lifecycle yourself so the change reaches `main` and the operator's main working checkout is current - the operator never hand-reconciles commits, merges, pulls, or divergence.
-- ONE clean path per change: branch -> validate -> local review -> commit -> push draft PR -> external review gate (see Post-Implementation Review Gate) -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout to `origin/main`. Report it in one line.
+- ONE clean path per change: branch -> validate -> commit -> push draft PR -> risk-routed review gate (see Post-Implementation Review Gate) -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout to `origin/main`. Report it in one line.
 - Never create avoidable divergence: do NOT cherry-pick a change onto local main AND also open a PR for it (that leaves a duplicate commit the operator must untangle). If a fix must go live immediately, still land it through the single branch->merge path, then fast-forward local main.
 - Two-checkout reality: an agent often works in a `.claude/worktrees/...` branch while the operator runs from the main `D:/APPS/<repo>` checkout; after merge, update that main checkout (fetch + fast-forward) so the change appears on main without the operator pulling.
 - Hard gate: R3 / live-money / order-path / broker-API merges need explicit operator GO; never unattended auto-merge a live or trading branch. Stop and surface only on those gates, merge conflicts needing judgment, or failed validation.
@@ -87,11 +87,13 @@
 
 ## Post-Implementation Review Gate
 
-- Stamp a grade (the R-class) on every plan/task at creation; it drives an automatic diff review before the land-on-main merge.
-- R3 and R2: ALWAYS run a local post-implementation diff review and the external implementation review gate as blocking pre-merge gates. R1: local diff review only when large (>~5 files or >~150 net lines), but external implementation review for every non-empty code diff. R0 docs/prompts: none. External-send preflight, operator approval, secret rejection, and exact-head evidence follow `skills/master-agent/SKILL.md`.
+- Stamp a grade (the R-class) on every plan/task at creation; it selects the owning workflow before the land-on-main merge.
+- Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`; do not duplicate the table here.
+- R2/R3 post-implementation review is owned by `/fw close <plan>` as a blocking pre-merge gate. R1 uses `/audit` plus proportionate local verification unless the operator explicitly escalates. R0 docs/prompts have no mandatory review workflow.
+- External-send preflight, operator approval, secret rejection, draft-PR, packet, and exact-head evidence requirements remain mandatory whenever the owning workflow selects external review.
 - Review the actual diff (Claude: `/code-review`; Codex: its review pass). SHIP-BLOCKING findings must be fixed before the merge proceeds; FIX-LATER findings are noted, not blocking.
-- R3 additionally warrants a deeper independent review before merge (Claude: `/code-review ultra` cloud; Codex: an auditF / second-model pass); recommend it - the operator triggers billed cloud reviews.
-- This review supersedes any generic epilog review for R2/R3 - do not double-review.
+- Raw auditF/auditP are subordinate lanes or explicit operator escalations, not default top-level workflows.
+- `/fw close` supersedes any generic epilog review for R2/R3 - do not double-review.
 
 ## Ship-On Default
 
