@@ -41,10 +41,8 @@
 
 - Always assess whether a task can be split into multiple independent work lanes; when useful, authorized, and supported by the available tooling, run or delegate those lanes concurrently.
 - When model selection is available, prefer cheaper AI models for bounded, low-risk, easily verifiable lanes; reserve stronger models for ambiguous synthesis, high-risk decisions, and safety-critical review, and never weaken scope, risk, or validation gates to save cost.
-- When the user approves a concrete plan, slice chain, or says `ok go`, `jedziesz`, `dzialaj`, or `implementuj`, execute end-to-end.
-- Continue through approved slices until an explicit gate, live-money/production/destructive risk, repo-plan contradiction, validation blocker, or user pause appears.
-- After each meaningful slice, update status, run targeted validation, and continue without needless re-confirmation.
-- Finish with what changed, what was validated, what remains, and whether the relevant repo is clean/pushed.
+- Approved audited plans/slice chains (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carry standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens; ask again only for scope/product expansion, unresolved failure/conflict, live-money/Combine/broker-submit/destructive action, or pause.
+- Validate each slice; final reports list changes, tests, remaining work, and repo state.
 
 ## Commit And Push Defaults
 
@@ -68,7 +66,7 @@
 - ONE clean path per change: branch -> validate -> commit -> push draft PR -> risk-routed review gate (see Post-Implementation Review Gate) -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout to `origin/main`. Report it in one line.
 - Never create avoidable divergence: do NOT cherry-pick a change onto local main AND also open a PR for it (that leaves a duplicate commit the operator must untangle). If a fix must go live immediately, still land it through the single branch->merge path, then fast-forward local main.
 - Two-checkout reality: an agent often works in a `.claude/worktrees/...` branch while the operator runs from the main `D:/APPS/<repo>` checkout; after merge, update that main checkout (fetch + fast-forward) so the change appears on main without the operator pulling.
-- Hard gate: R3 / live-money / order-path / broker-API merges need explicit operator GO; never unattended auto-merge a live or trading branch. Stop and surface only on those gates, merge conflicts needing judgment, or failed validation.
+- For R3 practice/paper, the audited plan GO covers merge. Real-money, Combine, broker-submit/arming, production deploy, and destructive actions need separate just-in-time GO.
 
 ## Repo Hygiene
 
@@ -81,8 +79,8 @@
 
 - R0: docs/prompts only; proceed freely.
 - R1: non-live tooling, tests, mirrors; proceed normally.
-- R2: contracts, persistence, ingestion; plan plus GO.
-- R3: execution/runtime/order path; plan plus GO plus rollback plus validation.
+- R2: contracts/persistence/ingestion; plan plus one standing GO.
+- R3: execution/runtime/order path; plan plus one standing GO, rollback, and validation; real-money/Combine/broker-submit remains separately gated.
 - LLM agents never touch broker API or order path. External signals stay advisory unless the operator explicitly changes that boundary.
 
 ## Post-Implementation Review Gate
@@ -90,7 +88,7 @@
 - Stamp a grade (the R-class) on every plan/task at creation; it selects the owning workflow before the land-on-main merge.
 - Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`; do not duplicate the table here.
 - R2/R3 post-implementation review is owned by `/fw close <plan>` as a blocking pre-merge gate. R1 uses `/audit` plus proportionate local verification unless the operator explicitly escalates. R0 docs/prompts have no mandatory review workflow.
-- External-send preflight, operator approval, secret rejection, draft-PR, packet, and exact-head evidence requirements remain mandatory whenever the owning workflow selects external review.
+- External review still requires preflight, secret rejection, draft PR, packet, and exact-head evidence. Standing plan GO covers configured reviewers unless marked internal-only; do not re-ask per head.
 - Review the actual diff (Claude: `/code-review`; Codex: its review pass). SHIP-BLOCKING findings must be fixed before the merge proceeds; FIX-LATER findings are noted, not blocking.
 - Raw auditF/auditP are subordinate lanes or explicit operator escalations, not default top-level workflows.
 - `/fw close` supersedes any generic epilog review for R2/R3 - do not double-review.

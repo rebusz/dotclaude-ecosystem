@@ -157,6 +157,9 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("older head is stale", text.lower())
         self.assertIn("external-publication consent", text)
         self.assertIn("Every `SHIP-BLOCKING` finding must be", text)
+        self.assertIn("standing authorization", text)
+        self.assertIn("exact-head publication token", text)
+        self.assertIn("continues through ready, CI, merge", text)
         self.assertNotIn("Launch the external panel", text)
         self.assertNotIn("run LOCAL REVIEW + COMPOUND", text)
 
@@ -166,6 +169,7 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("Review Workflow Routing", text)
         self.assertIn("`/fw close <plan>`", text)
         self.assertIn("every `SHIP-BLOCKING` finding is fixed", text)
+        self.assertIn("without another operator token", text)
         self.assertNotIn("the CDP-backed auditF panel", text)
 
     def test_installers_copy_shared_workflow_to_codex(self) -> None:

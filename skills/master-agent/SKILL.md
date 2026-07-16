@@ -64,8 +64,8 @@ The user invokes modes with a flexible syntax. Parse as follows:
 |-------|-------|------|
 | R0 | docs/prompts only | proceed freely |
 | R1 | non-live tooling, mirrors, reports | proceed normally |
-| R2 | contracts, ingestion, persistence, replay/quarantine, APIs | plan + explicit GO |
-| R3 | execution/runtime, risk controls, order-adjacent logic | plan + GO + rollback + validation |
+| R2 | contracts, ingestion, persistence, replay/quarantine, APIs | plan + one standing GO |
+| R3 | execution/runtime, risk controls, order-adjacent logic | plan + one standing GO + rollback + validation |
 
 When in doubt, assume the higher risk class and ask.
 
@@ -81,9 +81,13 @@ skills and global rules must reference it instead of restating their own routing
 | R1 | `/audit` plus proportionate local verification; FWF is optional | `/audit` plus proportionate local verification |
 | R0 | No mandatory review workflow | No mandatory review workflow |
 
-FWF/FWP stages 1-5 are pre-implementation plan gates and always stop at the
-human GO gate. `/fw close` is Stage 6 for an already-implemented exact head; it
-must not rerun stages 1-5 or grant ready, merge, runtime, broker, or order authority.
+FWF/FWP stages 1-5 are pre-implementation plan gates and stop at the one human
+GO gate unless the plan is already approved. That GO becomes standing authorization
+for the declared implementation-to-main lifecycle. `/fw close` is Stage 6 for an
+already-implemented exact head; it must not rerun stages 1-5. A PASS continues
+automatically through PR-ready, CI, merge, and checkout synchronization when those
+steps are inside the approved plan. It never authorizes real-money, Combine,
+broker-submit/arming, production deployment, destructive action, or scope expansion.
 
 Raw `auditF` and `auditP` are subordinate lanes selected by the owning workflow,
 or direct tools only when the operator explicitly invokes them. Never launch raw
@@ -102,9 +106,15 @@ Unless the user said `go` (confirming prior approval), all R2/R3 work requires a
 
 End with: `>> APPROVAL NEEDED — reply GO to proceed`
 
-After receiving GO, implement only the approved scope. No silent expansion.
+After receiving GO, implement only the approved scope. No silent expansion. The GO
+persists across all planned slices, in-scope review fixes, corrected exact heads,
+review publication, PR-ready, CI, merge, and checkout synchronization. Do not ask
+for `NEXT`, a blocker-fix token, an exact-head publication token, or a merge token
+for those transitions.
 
-**Post-implementation** (end with `>> DONE — reply NEXT to continue or flag issues`):
+**Post-implementation** (continue autonomously through the routed close and ship
+lifecycle, then end with `>> DONE` only when the approved outcome is ready for
+operator testing):
 1. Files changed and why
 2. What was implemented
 3. Tests run and results
@@ -143,13 +153,17 @@ local review or raw audit panel. For R1, use `/audit` plus proportionate local
 verification unless the operator explicitly escalates. R0 documentation/prompt-only
 diffs have no mandatory review workflow.
 
-The owning close workflow must preserve all existing exact-head gates: validated
-commit, draft PR, provider-neutral `implementation_review_packet.py` output when
-external publication is needed, external-publication consent, fail-closed secret
-rejection, and rejection of default-branch or stale evidence. A verdict against an
-older head is stale and cannot clear the gate. Every `SHIP-BLOCKING` finding must be
-fixed and revalidated against the new head. Review never grants PR-ready, merge,
-runtime, broker, or order authority.
+The owning close workflow must preserve all existing exact-head evidence gates:
+validated commit, draft PR, provider-neutral `implementation_review_packet.py`
+output when external publication is needed, fail-closed secret rejection, and
+rejection of default-branch or stale evidence. Required external-publication consent is supplied
+by standing plan authorization for the configured reviewer set unless the plan is
+marked internal-only. A verdict against an older head is stale and cannot clear the gate.
+Every `SHIP-BLOCKING` finding must be fixed, revalidated, republished, and reviewed
+against the new head without another operator token when the repair is in scope. A PASS
+then continues through ready, CI, merge, and checkout synchronization. Review never
+authorizes real-money, Combine, broker-submit/arming, production deployment,
+destructive action, or scope expansion.
 
 The explicit task phrase `skip external review` may bypass unavailable external
 review lanes only; record the override. It never bypasses secret rejection, exact-head
@@ -160,10 +174,13 @@ routed review workflow but must also be recorded.
 Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
 
 **Blocking rule**: if REVIEW finds SHIP-BLOCKING issues:
-- Do NOT emit >> DONE / >> SHIPPED
-- Output: `>> BLOCKED — [finding summary]. Fix required before marking complete.`
-- Do NOT run COMPOUND
-- Await operator input
+- Do NOT emit >> DONE / >> SHIPPED.
+- If the fix is inside the approved plan, implement it, validate it, publish the new
+  exact head, and repeat the owning review automatically.
+- Do NOT run COMPOUND until no SHIP-BLOCKING finding remains.
+- Stop for operator input only when the repair requires scope expansion, a new product
+  decision, a prohibited live/destructive action, or an unresolved failure after
+  reasonable repair attempts.
 
 **Skip conditions** (case-insensitive, checked in task line):
 - `bare` → skip entire epilog
@@ -255,7 +272,9 @@ broker/order paths, or live runtime. The operator does not need a separate flag.
 ### IMPLEMENT
 **Pre-code plan**: current state, files to change, risk class + blast radius, minimal patch plan (ordered, each testable), rollback strategy. Approval gate for R2/R3.
 
-**Post-GO**: implement only approved scope, run tests after each step, stop and ask if out-of-scope change needed.
+**Post-GO**: implement only approved scope, run tests after each step, and carry the
+standing authorization through closeout and landing. Stop and ask only if an
+out-of-scope change or other hard boundary is needed.
 
 **EPILOG_PAYLOAD — MANDATORY before `>> DONE`** (parity with /executor):
 
@@ -514,7 +533,8 @@ If you catch yourself simplifying or reducing scope, call it out:
 ## Safety Checklist (apply to every mode)
 
 - Preserve data flow direction integrity
-- Preserve manual approval for live-impacting decisions
+- Preserve just-in-time manual approval for real-money, Combine, broker-submit/arming,
+  production deployment, destructive actions, and new live-impacting product decisions
 - Preserve idempotency and replayability where applicable
 - Use atomic writes (temp file → rename) for all persistence
 - Ensure failures degrade safely
@@ -539,9 +559,9 @@ User says: mode <X> [<Y> ...] task <description> [go]
                           │
                ┌──────────┴──────────┐
                │                     │
-          R0/R1: proceed        R2/R3: approval gate
+          R0/R1: proceed        R2/R3: one approval gate
                │                     │
-               │              (skip if "go" present)
+               │        (skip if standing approval exists)
                │                     │
                ▼                     ▼
          Execute mode protocol (full structured output)

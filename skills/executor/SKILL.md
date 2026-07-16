@@ -1,7 +1,7 @@
 ---
 name: executor
 description: >
-  Launch the autonomous executor agent. Use AFTER a plan has been approved (GO given).
+  Launch the autonomous executor agent. Use AFTER a plan has been approved (standing GO given).
   Runs in an isolated worktree, implements code, runs tests, commits — with minimal
   interruption. Equivalent to invoking the executor subagent for approved R2/R3 work.
 triggers:
@@ -71,5 +71,7 @@ escalated; R0 has no mandatory review workflow.
 
 Do not emit `>> DONE`, mark the PR ready, or merge until the owning workflow's
 verdict matches the current head SHA and every `SHIP-BLOCKING` finding is fixed.
-Preserve exact-head, draft-PR, external-publication consent, secret rejection, and
-stale-evidence gates from master-agent and `/fw close`.
+Fix in-scope findings and repeat closeout without another operator token. Preserve
+exact-head, draft-PR, secret rejection, and stale-evidence gates from master-agent
+and `/fw close`; standing plan authorization covers configured external review
+publication and the approved ready/CI/merge/sync lifecycle.
