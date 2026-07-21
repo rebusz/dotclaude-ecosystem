@@ -9,9 +9,7 @@
 
 ## Claude-Only Routing
 
-- `mode auditf|audit_f`, `audytF`, `audit F` -> `~/.claude/AUDIT_F.md` (canonical free: OR-free + Perplexity/Gemini/GPT CDP).
-- `mode auditp|audit_p`, `audytP`, `audit P` -> `~/.claude/AUDIT_P.md` (canonical paid complement basket).
-- `auditq|auditai|auditpx|auditppl` are superseded; read `~/.claude/refs/audit-aliases.md` only when invoked.
+- `/fwf` and `/fwp` are the only public full-workflow commands. Claude Code passes `--synthesizer claude` to their internal audit/matrix stages so the GPT CDP frontier lane reviews the plan without self-grading.
 - `.claude/rules` = path-scoped lazy rules; `.claude/refs` = trigger-loaded procedures.
 - For cross-file impact, use actual `code-review-graph` MCP tools; never assume stale names (`get_impact_radius`, `query_graph`, `semantic_search_nodes`). If the needed operation is absent or the graph stale, run `uvx code-review-graph update --repo <repo>` then `uvx code-review-graph status --repo <repo>` before narrow `rg` fallback.
 

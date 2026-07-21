@@ -64,14 +64,13 @@ using the diff range start_sha..end_sha (or git diff HEAD if uncommitted).
 The executor subagent does NOT run its own epilog — epilog runs in parent context only.
 
 The parent must apply the authoritative **Review Workflow Routing** table in
-master-agent `SKILL.md`; do not duplicate or override its risk policy here. R2/R3
-executor work routes through `/fw close <plan>` as the single post-implementation
-owner. R1 uses `/audit` plus proportionate local verification unless explicitly
-escalated; R0 has no mandatory review workflow.
+master-agent `SKILL.md`; do not duplicate or override its risk policy here. When
+executor work belongs to `/fwf` or `/fwp`, return to that command's review stage.
+Otherwise invoke the `review` skill directly. R0 has no mandatory full workflow.
 
 Do not emit `>> DONE`, mark the PR ready, or merge until the owning workflow's
 verdict matches the current head SHA and every `SHIP-BLOCKING` finding is fixed.
 Fix in-scope findings and repeat closeout without another operator token. Preserve
-exact-head, draft-PR, secret rejection, and stale-evidence gates from master-agent
-and `/fw close`; standing plan authorization covers configured external review
+exact-head, draft-PR, secret rejection, and stale-evidence gates from master-agent;
+standing plan authorization covers configured external review
 publication and the approved ready/CI/merge/sync lifecycle.

@@ -2,7 +2,7 @@
 """Regenerate docs/SKILLS_INDEX.md.
 
 The per-agent sections are read LIVE from each agent's skill dir (name + description
-pulled from every SKILL.md frontmatter). The curated sections (mode system, fusion,
+pulled from every SKILL.md frontmatter). The curated sections (mode system, full workflow,
 built-in commands, document skills) are maintained inline in CURATED below.
 
 Run after installing/removing skills:  python scripts/skills_index.py
@@ -29,9 +29,9 @@ CURATED = """\
 - **Ops:** SHIP, QA, CSO, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN
 - **gstack aliasy:** /review /ship /qa /investigate /cso /retro /learn /office-hours /autoplan /careful /plan-ceo-review /plan-eng-review /executor
 
-## 3. Multi-model audyt & fusion
-- `/fusion` — presety cheap / breadth / quality / matrix / matrixP
-- `mode auditF` (free lanes) - `mode auditP` (paid) - auditQ/auditAI (aliasy)
+## 3. Pełny workflow planu
+- `/fwf` — R1 audit / R2-R3 matrix, OpenRouter free + CDP/frontier
+- `/fwp` — identyczny lifecycle, płatny koszyk OpenRouter + CDP/frontier
 
 ## 4. Planowanie, research, pamiec
 - whatnext - plans - deep-research - executor

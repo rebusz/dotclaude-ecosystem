@@ -20,12 +20,10 @@
 - Codex loads `AGENTS.md` hierarchically; keep repo-local files focused on local contracts and avoid duplicating global footer/execution policy.
 - For `code-review-graph` in Codex, use the MCP tools currently exposed by `mcp__code_review_graph` (for example `list_graph_stats`, `get_review_context`, `get_architecture_overview`, `get_knowledge_gaps`, `get_bridge_nodes`, and `get_suggested_questions`). Do not call stale tool names from older repo docs. If Codex MCP lacks a needed graph operation, use the local CLI (`code-review-graph status --repo <repo>`, `code-review-graph detect-changes --repo <repo>`, `code-review-graph update --repo <repo>`) before targeted `rg` fallback.
 
-## Codex Audit Routing
+## Codex Full-Workflow Routing
 
-- Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`. R2/R3 plans use FWF by default (FWP only when explicitly selected for R3); R2/R3 implementation closeout is owned by `/fw close <plan>`; R1 uses `/audit` plus proportionate local verification.
-- The ecosystem audit pipelines live in `D:/APPS/_shared/audit/` (shared, version-controlled). Direct `auditF` / `auditP` use is allowed only when the operator explicitly invokes it or the owning FWF/FWP/`/fw close` stage selects it. Do not launch raw auditF merely because a task is R2/R3:
-  - **auditF** (free — OpenRouter 8 free models + Perplexity/Gemini CDP + a frontier auditor): `python "D:/APPS/_shared/audit/auditf.py" "<ABSOLUTE_PLAN_PATH>" --topic <topic> --synthesizer gpt`
-  - **auditP** (paid OpenRouter complement basket): `python "D:/APPS/_shared/audit/multi_audit.py" "<ABSOLUTE_PLAN_PATH>" --topic <topic>`
-- **MANDATORY: Codex always passes `--synthesizer gpt` to auditF.** Codex IS the synthesizer (GPT), so this drops the GPT audit lane (no self-grading) and instead fires the Claude Opus CLI lane (`WatchF/scripts/auditcl.py`) as the external frontier auditor. Omitting it defaults to `claude` → GPT grades its own work (wasted tokens, the original reason that lane churned).
-- CDP lanes need operator-started signed-in Chrome (`chrome_te`/`chrome_ppl`); the Claude CLI lane needs `claude` on PATH. auditF is fail-soft — down lanes are skipped.
-- After the run, read `design/audits/<date>_<topic>/synthesis_prompt.md`, synthesize (consensus P1 → apply; unique valid P1/P2 → apply; discard noise / frozen-boundary violations), apply fixes to the plan. Red lines: never override frozen boundaries; never touch Tsignal exec path without R3.
+- Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`. `/fwf` and `/fwp` are the only public full-workflow commands and own R1/R2/R3 plan review, implementation, exact-head review, and landing.
+- Internal runners live in `D:/APPS/_shared/audit/`: R1 uses `auditf.py`; R2/R3 use `fuse.py`. `/fwf` passes `--mode free`; `/fwp` passes `--mode paid`. Do not expose runner presets or lane-bypass flags as operator workflows.
+- Codex always passes `--synthesizer gpt`. This excludes the GPT frontier lane and includes the isolated Claude Opus CLI lane, preventing self-grading. Claude Code uses `--synthesizer claude` and receives the GPT CDP frontier lane.
+- Perplexity and Gemini CDP lanes remain in both modes. They need operator-started signed-in Chrome (`chrome_te`/`chrome_ppl`); the Claude CLI lane needs `claude` on PATH. Down lanes remain visible in fail-soft evidence and lower confidence.
+- Read the generated synthesis prompt and apply consensus P1 plus unique valid P1/P2 inside frozen boundaries. Discard noise and boundary violations. Never touch Tsignal execution path without R3.

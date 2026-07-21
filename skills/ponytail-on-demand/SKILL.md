@@ -1,6 +1,6 @@
 ---
 name: ponytail-on-demand
-description: Find the smallest correct implementation for bounded R0/R1 coding, refactoring, dependency, or design tasks. Use when the operator explicitly invokes Ponytail, asks for a minimal/YAGNI solution, or when the owning ARCHITECT, FWF, or FWP workflow selects a Ponytail checkpoint after identifying a concrete simplification opportunity. Never apply to audits, reviews, security, QUANT, persistence/ingestion contracts, R2/R3 work, or any live trading path.
+description: Find the smallest correct implementation for bounded R0/R1 coding, refactoring, dependency, or design tasks. Use when the operator explicitly invokes Ponytail, asks for a minimal/YAGNI solution, or when ARCHITECT selects a Ponytail checkpoint after identifying a concrete simplification opportunity. Never apply to audits, full workflows, reviews, security, QUANT, persistence/ingestion contracts, R2/R3 work, or any live trading path.
 ---
 
 # Ponytail On Demand
@@ -13,7 +13,7 @@ skill.
 
 1. Classify the task before minimizing it.
 2. Continue only for R0/R1 work when either the operator explicitly requested
-   Ponytail or the owning ARCHITECT/FWF/FWP workflow selected the checkpoint.
+   Ponytail or the owning ARCHITECT workflow selected the checkpoint.
 3. Stop using this skill for audit, review, security, QUANT, R2/R3, broker,
    order-path, live-runtime, persistence, ingestion-contract, or destructive
    work. Follow the owning repo workflow instead.
@@ -21,11 +21,12 @@ skill.
 
 ## Workflow Decision
 
-ARCHITECT, FWF, and FWP must decide rather than run this skill as a ritual.
+ARCHITECT must decide rather than run this skill as a ritual. `/fwf` and `/fwp`
+do not add a Ponytail stage to their fixed lifecycle.
 Select the checkpoint only after naming at least one concrete candidate such as
 an avoidable dependency, duplicate abstraction, speculative interface, redundant
 configuration, or unnecessary file/module. Otherwise record
-`PONYTAIL: SKIPPED - no concrete simplification candidate` and continue.
+`PONYTAIL: NOT USED - no concrete simplification candidate` and continue.
 
 When selected, record `PONYTAIL: USED` plus the candidate, the simplification,
 and the constraints preserved. The owning workflow's normal architecture or Eng

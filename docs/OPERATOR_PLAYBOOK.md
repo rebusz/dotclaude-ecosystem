@@ -12,15 +12,15 @@ Prawie każda praca przechodzi przez tę pętlę — skille są przypisane do fa
 ```text
 POMYSŁ ──► WYWIAD ──► SPEC/PLAN ──► GATE'Y ──► GO ──► IMPLEMENT ──► REVIEW ──► LAND ──► RETRO
   │          │            │           │                │              │          │
-whatnext   grill-me     /spec        /fw          /executor      /code-review  land-on-  /learn
-IDEA_BOX   grilling     office-    (ceo→fusion    mode implement  /verify      main       retro
-mem-search grill-with-  hours       →eng→GO)      tdd             /simplify    lifecycle  handoff
-           docs                     /autoplan
+whatnext   grill-me     /spec      /fwf|/fwp       (ten sam       review       land-on-  /learn
+IDEA_BOX   grilling     office-   (ceo→audit/       workflow      skill        main       retro
+mem-search grill-with-  hours      matrix→eng)      implementuje)              lifecycle  handoff
+           docs
 ```
 
 Model-invoked skille (diagnosing-bugs, tsu-*, research, tdd...) triggerują się
 same z opisu — ich nie musisz pamiętać. Nawyk musisz zbudować tylko dla
-**user-invoked**: `grill-me`, `/fw`, `/spec`, `/verify`, `/handoff`, `/whatnext`.
+**user-invoked**: `grill-me`, `/fwf`, `/fwp`, `/spec`, `/verify`, `/handoff`, `/whatnext`.
 
 ## 1. Tabela nawyków IF→THEN (sedno tego manuala)
 
@@ -30,10 +30,10 @@ same z opisu — ich nie musisz pamiętać. Nawyk musisz zbudować tylko dla
 | Pomysł + istniejący kod/dokumenty do uzgodnienia | `/grill-with-docs` | grill + domain modeling na realnym repo |
 | "Co dalej? / priorytety / czy dryfujemy" | `/whatnext` | STEERING BRIEF z north-star + IDEA_BOX; nigdy nie zmyśla backlogu |
 | Pomysł doprecyzowany → trzeba go spisać | `/spec` | mgła → wykonywalna specyfikacja w 5 fazach |
-| Plan ważny (R2/R3, trading, kontrakty) | **`/fw`** | Twoja paczka: ceo-review → fusion → eng-review → GO gate; FWF=free, FWP=paid |
+| Plan R1/R2/R3 — pełny lifecycle | **`/fwf`** (free) lub **`/fwp`** (paid) | ceo-review → audit/matrix → eng-review → GO wg klasy → implementacja → review → land |
 | Plan mniejszej wagi, chcesz szybki multi-review | `/autoplan` | te same recenzje, auto-decyzje, bez przerywania Ci |
-| Chcesz tylko skrytykować plan zewnętrznymi modelami | `/audit` (auditF free / `paid`=auditP) lub `/fusion` | pamiętaj: lane'y CDP wymagają formatu P1/P2/P3 |
-| GO padło → implementacja | `/executor` albo `mode implement` | izolowany worktree, testy, commity, minimalne przerywanie |
+| Chcesz tylko strategicznie/technicznie sprawdzić plan bez pełnego lifecycle | `plan-ceo-review` lub `plan-eng-review` jako komponent | nie twórz trzeciego workflow ani surowej komendy modelowej |
+| GO padło w `/fwf` lub `/fwp` | kontynuuj ten sam workflow | ta sama komenda implementuje, uruchamia review i ląduje zmianę |
 | Coś nie działa (bug/regresja) | opisz symptom — `diagnosing-bugs` wstanie samo; twardy przypadek: `mode debug deep` | pętla diagnozy z bisekcją zamiast zgadywania |
 | Logika tradingowa: "czy to ma sens/edge?" | `mode quant` (v2); głębiej: `mode quant deep` | evidence-first, regime stress, falsyfikacja przez LAB seam |
 | Przed commitem nietrywialnej zmiany | `/verify` | przejedź flow end-to-end, nie tylko testy |
@@ -66,8 +66,8 @@ Trzy warianty, jeden silnik (`grilling`):
 - **`grilling`** — model-invoked silnik; wstaje też sam na frazy typu
   "przemagluj mnie / stress-test this plan". Nie wołasz go bezpośrednio.
 
-**Gdzie grill siedzi w Twojej pętli:** grill-me → (opcjonalnie /spec) → /fw.
-Grill NIE zastępuje gate'ów /fw — on sprawia, że plan wchodzący w /fw jest
+**Gdzie grill siedzi w Twojej pętli:** grill-me → (opcjonalnie /spec) → /fwf lub /fwp.
+Grill NIE zastępuje gate'ów pełnego workflow — on sprawia, że plan wchodzący do niego jest
 Twoim planem, a nie pierwszym strzałem modelu.
 
 **Nawyk-kotwica (jedno zdanie):** *"Nowy plan bez odbytego grilla = smell".*
@@ -75,12 +75,12 @@ Jeśli piszesz `nowy plan` / `tworzymy plan` i nie było grilla — powiedz
 "grill me first". Fizyczna kotwica istnieje też po stronie agenta: reguła
 w CLAUDE.md (patrz §5).
 
-## 3. Ściągawka: paczka /fw i tryby master-agent
+## 3. Ściągawka: `/fwf`, `/fwp` i tryby master-agent
 
-- **`/fw`** = ceo-review → fusion → apply → eng-review → GO gate.
-  `fw` (FWF) = autonomiczny + darmowa fuzja; `fw paid` (FWP) = interaktywny +
-  płatna; `fw close` = pętla po implementacji. Implement GO tylko po eng-review
-  i wypowiedziane wprost (nie klik w AskUserQuestion).
+- **`/fwf`** = free OpenRouter + CDP/frontier; **`/fwp`** = płatny koszyk
+  OpenRouter + te same CDP/frontier. Obie komendy prowadzą ten sam pełny
+  lifecycle przez implementację i `review`. R1 używa topologii audit, R2/R3
+  matrix. R3 kieruje pytania CEO do operatora; R1/R2 i eng-review rozwiązuje agent.
 - **`mode <MODE> task <opis>`**: OPERATOR (routing), ARCHITECT (projekt),
   IMPLEMENT (buduj), DEBUG [deep], AUDIT (zgodność/diff), QUANT [deep]
   (trading). Szablony wyjścia: POSTMORTEM / TEST / CONTRACT / INTEGRATE.
@@ -95,7 +95,7 @@ w CLAUDE.md (patrz §5).
 | `grill-me` vs `/office-hours` | grill = ostry wywiad o TWÓJ plan; office-hours = eksploracja YC-style gdy nie wiesz jeszcze CO budować |
 | `/spec` vs `to-spec`/`to-tickets` (Matt) | używamy `/spec` (gstack); Mattowych nie instalowaliśmy — dublowały pipeline |
 | `/research` vs `/deep-research` | research = tanie, w tle, fakty z primary sources; deep-research = raport z adversarial verify |
-| `/audit` vs `/fusion` | audit = krytyka dokumentu per-lane; fusion = panel odpowiada na pytanie/problem |
+| `/fwf` vs `/fwp` | ten sam lifecycle i CDP/frontier; różni się wyłącznie free vs paid koszyk OpenRouter |
 | `/investigate` vs `diagnosing-bugs` vs `mode debug` | opisz bug naturalnie → diagnosing-bugs; investigate = gstackowy odpowiednik; mode debug deep = pełne śledztwo z protokołem |
 | `/handoff` vs `/context-save` | handoff = dokument dla INNEGO agenta; context-save = checkpoint dla siebie |
 | `/qa` vs `/verify` | qa = systematyczny przegląd appki (browser); verify = dowód że TA zmiana działa end-to-end |

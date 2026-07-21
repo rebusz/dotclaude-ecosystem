@@ -18,7 +18,7 @@ class TestPonytailOnDemand(unittest.TestCase):
 
         self.assertIn("name: ponytail-on-demand", text)
         self.assertIn("R0/R1", text)
-        self.assertIn("ARCHITECT/FWF/FWP workflow selected the checkpoint", text)
+        self.assertIn("ARCHITECT workflow selected the checkpoint", text)
         self.assertIn("Stop using this skill for audit, review, security, QUANT", text)
         self.assertIn("Do not inject this skill into subagents", text)
 
@@ -29,7 +29,7 @@ class TestPonytailOnDemand(unittest.TestCase):
         self.assertIn("The operator does not need a separate flag", text)
         self.assertIn("ARCHITECT Ponytail decision (global)", text)
         self.assertIn("still applies when a repo-local `Prompts/master_agent.md`", text)
-        self.assertIn("`FWF <plan>` / `FWP <plan>`", text)
+        self.assertIn("`/fwf <plan>` / `/fwp <plan>`", text)
         self.assertIn("Never use this", text)
         self.assertIn("checkpoint for AUDIT, R2/R3", text)
 
@@ -49,7 +49,7 @@ class TestPonytailOnDemand(unittest.TestCase):
     def test_readme_distinguishes_orchestrator_selection_from_implicit_invocation(self) -> None:
         text = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertIn("operator or ARCHITECT/FWF/FWP selected", text)
+        self.assertIn("operator or ARCHITECT selected", text)
         self.assertNotIn("explicit-only Ponytail skill", text)
 
     def test_installers_copy_the_skill_without_registering_hooks(self) -> None:

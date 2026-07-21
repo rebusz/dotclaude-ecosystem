@@ -147,11 +147,11 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         text = (ROOT / "skills" / "master-agent" / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("## Review Workflow Routing", text)
-        self.assertIn("| R3 | FWF by default; FWP only when explicitly selected | `/fw close <plan>` |", text)
-        self.assertIn("| R2 | FWF | `/fw close <plan>` |", text)
-        self.assertIn("| R1 | `/audit` plus proportionate local verification", text)
-        self.assertIn("Raw `auditF` and `auditP` are subordinate lanes", text)
-        self.assertIn("Codex must pass `--synthesizer gpt`", text)
+        self.assertIn("| R3 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review", text)
+        self.assertIn("| R2 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review", text)
+        self.assertIn("| R1 | `/fwf` or `/fwp`: CEO -> audit -> eng -> implementation -> review", text)
+        self.assertIn("There is no separate closeout command", text)
+        self.assertIn("Codex always passes\n`--synthesizer gpt`", text)
         self.assertIn("draft PR", text)
         self.assertIn("implementation_review_packet.py", text)
         self.assertIn("older head is stale", text.lower())
@@ -160,6 +160,8 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("standing authorization", text)
         self.assertIn("exact-head publication token", text)
         self.assertIn("continues through ready, CI, merge", text)
+        self.assertNotIn("/fw close", text)
+        self.assertNotIn("`/audit`", text)
         self.assertNotIn("Launch the external panel", text)
         self.assertNotIn("run LOCAL REVIEW + COMPOUND", text)
 
@@ -167,9 +169,11 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         text = (ROOT / "skills" / "executor" / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("Review Workflow Routing", text)
-        self.assertIn("`/fw close <plan>`", text)
+        self.assertIn("executor work belongs to `/fwf` or `/fwp`", text)
+        self.assertIn("invoke the `review` skill directly", text)
         self.assertIn("every `SHIP-BLOCKING` finding is fixed", text)
         self.assertIn("without another operator token", text)
+        self.assertNotIn("/fw close", text)
         self.assertNotIn("the CDP-backed auditF panel", text)
 
     def test_installers_copy_shared_workflow_to_codex(self) -> None:
@@ -182,20 +186,25 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertIn('for skill in "${CODEX_SKILLS[@]}"', shell)
         self.assertIn('$CODEX_HOME/skills/$skill', shell)
 
-    def test_global_policy_references_master_router_and_keeps_r1_lightweight(self) -> None:
+    def test_global_policy_references_master_router_and_two_full_workflows(self) -> None:
         text = (ROOT / "agent-rules" / "core.md").read_text(encoding="utf-8")
 
         self.assertIn("Review Workflow Routing", text)
-        self.assertIn("R2/R3 post-implementation review is owned by `/fw close <plan>`", text)
-        self.assertIn("R1 uses `/audit` plus proportionate local verification", text)
+        self.assertIn("Only `/fwf` and `/fwp` own the R1/R2/R3 lifecycle", text)
+        self.assertIn("blocking `review`", text)
+        self.assertNotIn("/fw close", text)
+        self.assertNotIn("`/audit`", text)
         self.assertNotIn("external implementation review for every non-empty code diff", text)
 
-    def test_codex_overlay_keeps_direct_audit_as_explicit_or_subordinate(self) -> None:
+    def test_codex_overlay_keeps_runners_internal_to_two_workflows(self) -> None:
         text = (ROOT / "agent-rules" / "overlays" / "codex-global.md").read_text(encoding="utf-8")
 
         self.assertIn("Review Workflow Routing", text)
-        self.assertIn("Direct `auditF` / `auditP` use is allowed only", text)
+        self.assertIn("`/fwf` and `/fwp` are the only public full-workflow commands", text)
+        self.assertIn("R1 uses `auditf.py`; R2/R3 use `fuse.py`", text)
         self.assertIn("`--synthesizer gpt`", text)
+        self.assertNotIn("/fw close", text)
+        self.assertNotIn("`/audit`", text)
         self.assertNotIn("To audit a plan/design", text)
 
 
