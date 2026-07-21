@@ -61,7 +61,8 @@ Stop if the budget or no-go paths are missing.
 
 ### 2. Discovery Census
 
-Use cheap/low-effort lanes for mechanical discovery:
+Use the assigned workflow model for mechanical discovery; bound the reads, not
+the model capability:
 
 - repo root instructions: `AGENTS.md`, `CLAUDE.md`, nested agent files;
 - entry points and public commands;
@@ -102,9 +103,9 @@ Spend model quality where judgment matters:
 
 | Work | Model tier |
 |---|---|
-| Census, grep, file lists, git-log summaries | haiku or cheapest available |
-| Procedural runbooks and FACTUAL review | sonnet or standard coding model |
-| Architecture, failure archaeology, change control, doctrine, usability, fixer | opus/fable/frontier or inherited parent |
+| Census, grep, file lists, git-log summaries | inherited workflow model |
+| Procedural runbooks and FACTUAL review | inherited workflow model |
+| Architecture, failure archaeology, change control, doctrine, usability, fixer | inherited workflow model or explicitly selected frontier |
 
 Use parallel agents only for disjoint questions or disjoint write scopes. Do
 not ask two agents to author the same skill independently unless this is an

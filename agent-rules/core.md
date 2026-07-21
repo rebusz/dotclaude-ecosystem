@@ -40,7 +40,7 @@
 ## Execution Defaults
 
 - Always assess whether a task can be split into multiple independent work lanes; when useful, authorized, and supported by the available tooling, run or delegate those lanes concurrently.
-- When model selection is available, prefer cheaper AI models for bounded, low-risk, easily verifiable lanes; reserve stronger models for ambiguous synthesis, high-risk decisions, and safety-critical review, and never weaken scope, risk, or validation gates to save cost.
+- Use only the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost.
 - Approved audited plans/slice chains (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carry standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens; ask again only for scope/product expansion, unresolved failure/conflict, live-money/Combine/broker-submit/destructive action, or pause.
 - Validate each slice; final reports list changes, tests, remaining work, and repo state.
 
@@ -87,11 +87,11 @@
 
 - Stamp a grade (the R-class) on every plan/task at creation; it selects the owning workflow before the land-on-main merge.
 - Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`; do not duplicate the table here.
-- R2/R3 post-implementation review is owned by `/fw close <plan>` as a blocking pre-merge gate. R1 uses `/audit` plus proportionate local verification unless the operator explicitly escalates. R0 docs/prompts have no mandatory review workflow.
+- Only `/fwf` and `/fwp` own the R1/R2/R3 lifecycle through implementation and blocking `review`. R0 has no mandatory full workflow.
 - External review still requires preflight, secret rejection, draft PR, packet, and exact-head evidence. Standing plan GO covers configured reviewers unless marked internal-only; do not re-ask per head.
 - Review the actual diff (Claude: `/code-review`; Codex: its review pass). SHIP-BLOCKING findings must be fixed before the merge proceeds; FIX-LATER findings are noted, not blocking.
-- Raw auditF/auditP are subordinate lanes or explicit operator escalations, not default top-level workflows.
-- `/fw close` supersedes any generic epilog review for R2/R3 - do not double-review.
+- Audit and matrix runners are internal `/fwf`/`/fwp` stages, not public workflow commands.
+- Do not duplicate the `review` stage when the selected full workflow already owns it.
 
 ## Ship-On Default
 

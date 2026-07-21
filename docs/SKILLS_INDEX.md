@@ -200,9 +200,9 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - **Ops:** SHIP, QA, CSO, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN
 - **gstack aliasy:** /review /ship /qa /investigate /cso /retro /learn /office-hours /autoplan /careful /plan-ceo-review /plan-eng-review /executor
 
-## 3. Multi-model audyt & fusion
-- `/fusion` — presety cheap / breadth / quality / matrix / matrixP
-- `mode auditF` (free lanes) - `mode auditP` (paid) - auditQ/auditAI (aliasy)
+## 3. Pełny workflow planu
+- `/fwf` — R1 audit / R2-R3 matrix, OpenRouter free + CDP/frontier
+- `/fwp` — identyczny lifecycle, płatny koszyk OpenRouter + CDP/frontier
 
 ## 4. Planowanie, research, pamiec
 - whatnext - plans - deep-research - executor
@@ -215,4 +215,3 @@ code-review - simplify - verify - run - init - review - security-review - loop -
 docx - pdf - pptx - xlsx - algorithmic-art - skill-creator - consolidate-memory - setup-cowork
 
 > Komendy z dialogiem terminala (/permissions, /config, /agents, /doctor, /hooks) dzialaja tylko w interaktywnym `claude`, nie w sesji nieinteraktywnej.
-

@@ -33,7 +33,7 @@ skills/
   master-agent/SKILL.md               ← mode architect, mode implement, etc.
   executor/SKILL.md                   ← /executor with EPILOG_PAYLOAD contract
   distill-repo/SKILL.md               ← build repo-scoped skill libraries and PACKET digests
-  ponytail-on-demand/SKILL.md          ← bounded minimal R0/R1 changes; operator or ARCHITECT/FWF/FWP selected
+  ponytail-on-demand/SKILL.md          ← bounded minimal R0/R1 changes; operator or ARCHITECT selected
 
 templates/
   CLAUDE.md.template                  ← global instructions (Plan Lifecycle Hooks contract)

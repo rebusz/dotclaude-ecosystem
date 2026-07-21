@@ -1,7 +1,7 @@
 ---
 name: master-agent
 description: |
-  Master Agent mode system for structured engineering work. Invoke with "mode MODE task DESCRIPTION" to engage structured protocols. Core modes: OPERATOR, AUDIT, AUDIT_AI, ARCHITECT, IMPLEMENT, DEBUG, POSTMORTEM, QUANT, INTEGRATE, REVIEW, TEST, CONTRACT. Ops modes (from gstack): SHIP, QA, CSO, INVESTIGATE, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN. Supports multi-mode chaining (e.g., "mode audit debug task ..."), FWF/FWP plan gates, and "go" to confirm prior approval. Use this skill whenever the user types "mode" followed by any mode name, invokes FWF/FWP, or references master_agent protocols, risk classes, frozen boundaries, approval gates, or any gstack command (/review, /ship, /qa, /investigate, /cso, /retro, /learn, /office-hours, /autoplan, /careful). Also triggers on Polish equivalents like "tryb", "audyt", "implementuj", "debuguj", "wyślij", "sprawdź", "zbadaj".
+  Master Agent mode system for structured engineering work. Invoke with "mode MODE task DESCRIPTION" to engage structured protocols. Core modes: OPERATOR, AUDIT, AUDIT_AI, ARCHITECT, IMPLEMENT, DEBUG, POSTMORTEM, QUANT, INTEGRATE, REVIEW, TEST, CONTRACT. Ops modes (from gstack): SHIP, QA, CSO, INVESTIGATE, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN. Supports multi-mode chaining (e.g., "mode audit debug task ..."), the `/fwf` and `/fwp` plan lifecycles, and "go" to confirm prior approval. Use this skill whenever the user types "mode" followed by any mode name, invokes `/fwf` or `/fwp`, or references master_agent protocols, risk classes, frozen boundaries, approval gates, or any gstack command (/review, /ship, /qa, /investigate, /cso, /retro, /learn, /office-hours, /autoplan, /careful). Also triggers on Polish equivalents like "tryb", "audyt", "implementuj", "debuguj", "wyślij", "sprawdź", "zbadaj".
 ---
 
 # Master Agent Mode System
@@ -15,9 +15,9 @@ The user invokes modes with a flexible syntax. Parse as follows:
 1. **`mode <MODE> [MODE2 ...] task <description>`** — one or more modes, then `task` introduces the description of what to do
 2. **`mode <MODE> task <description> go`** — the trailing `go` means the operator already approved this work in an earlier exchange; skip the approval gate and proceed directly to execution
 3. **`go`** alone (without `mode`) — the operator is confirming a plan you presented earlier; proceed with implementation
-4. **`FWF <plan>` / `FWP <plan>`** — load the installed `fw.md` command
-   protocol (`~/.claude/commands/fw.md` or `~/.codex/prompts/fw.md`) and run
-   its free or paid lane. The operator does not need a Ponytail-specific flag.
+4. **`/fwf <plan>` / `/fwp <plan>`** — load the matching installed command
+   protocol (`fwf.md` or `fwp.md`) and run its complete risk-routed lifecycle.
+   These are the only public full-workflow commands.
 
 **Multi-mode**: when multiple modes are listed (e.g., `mode audit debug task ...`), execute them **sequentially**. Each mode produces its structured output, and the findings of the previous mode feed into the next as context. Present results under clear headers per mode.
 
@@ -52,7 +52,7 @@ The user invokes modes with a flexible syntax. Parse as follows:
    architecture, decide whether a concrete simplification candidate exists. If
    yes, explicitly invoke `ponytail-on-demand` and then run the remaining
    architecture validation. If none exists, record
-   `PONYTAIL: SKIPPED - no concrete simplification candidate`. This global rule
+   `PONYTAIL: NOT USED - no concrete simplification candidate`. This global rule
    still applies when a repo-local `Prompts/master_agent.md` supplies the mode
    protocol; that protocol may tighten the exclusions but cannot remove them.
    Never run the checkpoint for AUDIT, REVIEW, security, QUANT, R2/R3,
@@ -74,25 +74,23 @@ When in doubt, assume the higher risk class and ask.
 This table is the authoritative router for plan and implementation review. Other
 skills and global rules must reference it instead of restating their own routing.
 
-| Risk | Pre-implementation plan review | Post-implementation owner |
+| Risk | Full workflow route | Question / approval policy |
 |---|---|---|
-| R3 | FWF by default; FWP only when explicitly selected | `/fw close <plan>` |
-| R2 | FWF | `/fw close <plan>` |
-| R1 | `/audit` plus proportionate local verification; FWF is optional | `/audit` plus proportionate local verification |
-| R0 | No mandatory review workflow | No mandatory review workflow |
+| R3 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review | CEO product/risk questions go to operator; one standing GO before implementation |
+| R2 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review | CEO and eng questions auto-resolved; one standing GO before implementation |
+| R1 | `/fwf` or `/fwp`: CEO -> audit -> eng -> implementation -> review | CEO and eng questions auto-resolved; no implementation GO |
+| R0 | No mandatory full workflow | Proceed normally |
 
-FWF/FWP stages 1-5 are pre-implementation plan gates and stop at the one human
-GO gate unless the plan is already approved. That GO becomes standing authorization
-for the declared implementation-to-main lifecycle. `/fw close` is Stage 6 for an
-already-implemented exact head; it must not rerun stages 1-5. A PASS continues
-automatically through PR-ready, CI, merge, and checkout synchronization when those
-steps are inside the approved plan. It never authorizes real-money, Combine,
-broker-submit/arming, production deployment, destructive action, or scope expansion.
+`/fwf` uses the OpenRouter-free basket; `/fwp` uses the paid OpenRouter
+complement basket. Both retain Perplexity CDP, Gemini CDP, and the
+synthesizer-aware opposite frontier lane. The selected command owns the entire
+lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
+checkout synchronization. There is no separate closeout command.
 
-Raw `auditF` and `auditP` are subordinate lanes selected by the owning workflow,
-or direct tools only when the operator explicitly invokes them. Never launch raw
-`auditF` automatically merely because a task is R2/R3. Whenever an owning workflow
-actually selects auditF, Codex must pass `--synthesizer gpt`.
+The audit and matrix Python runners are internal stages, not public workflow
+entrypoints. They expose only `--mode free|paid`; model presets, lane selection,
+and CDP bypasses are not part of the workflow contract. Codex always passes
+`--synthesizer gpt`; Claude Code passes `--synthesizer claude`.
 
 ## Approval Gate (R2/R3)
 
@@ -140,20 +138,19 @@ This regenerates `PLANS.md` + `VISIONS.md`, appends to vision auto-log, and mark
 Best-effort: log failures, do not block the closing tag.
 
 **REVIEW PREPARATION** (by mode):
-- IMPLEMENT / EXECUTOR: capture the exact diff range for the owning workflow using
-  the diff algorithm below. R2/R3 review runs inside `/fw close`; do not run a
-  duplicate parent review. R1 uses `/audit` plus proportionate local verification.
+- IMPLEMENT / EXECUTOR: capture the exact diff range using the diff algorithm
+  below. When invoked by `/fwf` or `/fwp`, return to that same command's review
+  stage. Otherwise invoke the `review` skill directly.
 - SHIP: COMPOUND only — no REVIEW (code was already reviewed during IMPLEMENT).
 
 **POST-IMPLEMENTATION REVIEW HANDOFF** (IMPLEMENT / EXECUTOR, after local tests):
 
-Route through **Review Workflow Routing**. For R2/R3, invoke `/fw close <plan>` as
-the single owning workflow; the parent epilog must not independently launch another
-local review or raw audit panel. For R1, use `/audit` plus proportionate local
-verification unless the operator explicitly escalates. R0 documentation/prompt-only
-diffs have no mandatory review workflow.
+Route through **Review Workflow Routing**. `/fwf` and `/fwp` retain ownership from
+plan review through implementation review. Direct IMPLEMENT/EXECUTOR work invokes
+the `review` skill after local tests. R0 documentation/prompt-only diffs have no
+mandatory review workflow.
 
-The owning close workflow must preserve all existing exact-head evidence gates:
+The owning review stage must preserve all existing exact-head evidence gates:
 validated commit, draft PR, provider-neutral `implementation_review_packet.py`
 output when external publication is needed, fail-closed secret rejection, and
 rejection of default-branch or stale evidence. Required external-publication consent is supplied
@@ -164,11 +161,6 @@ against the new head without another operator token when the repair is in scope.
 then continues through ready, CI, merge, and checkout synchronization. Review never
 authorizes real-money, Combine, broker-submit/arming, production deployment,
 destructive action, or scope expansion.
-
-The explicit task phrase `skip external review` may bypass unavailable external
-review lanes only; record the override. It never bypasses secret rejection, exact-head
-checks, local validation, or the human approval gate. Generic `skip review` skips the
-routed review workflow but must also be recorded.
 
 **COMPOUND**: read `~/.claude/skills/compound/compound.md` and execute.
 Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
@@ -181,12 +173,6 @@ Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
 - Stop for operator input only when the repair requires scope expansion, a new product
   decision, a prohibited live/destructive action, or an unresolved failure after
   reasonable repair attempts.
-
-**Skip conditions** (case-insensitive, checked in task line):
-- `bare` → skip entire epilog
-- `skip review` → skip the routed review workflow; run COMPOUND only and record the override
-- `skip external review` → keep local validation and any non-external stages in the owning workflow; record the operator override
-- `no compound` → run REVIEW only
 
 **Diff surface algorithm**:
 1. Capture START_SHA at mode entry: `git rev-parse HEAD`
@@ -263,7 +249,7 @@ If the project defines frozen boundaries (in master_agent.md, CLAUDE.md, or simi
 concrete simplification candidate exists. If yes, invoke `ponytail-on-demand`,
 apply only changes that preserve requirements and gates, then validate the
 result through the rest of ARCHITECT. If none exists, record
-`PONYTAIL: SKIPPED - no concrete simplification candidate`. Never use this
+`PONYTAIL: NOT USED - no concrete simplification candidate`. Never use this
 checkpoint for AUDIT, R2/R3, security, QUANT, persistence/ingestion contracts,
 broker/order paths, or live runtime. The operator does not need a separate flag.
 
