@@ -1,7 +1,7 @@
 # Global `/fwf` + `/fwp` Contract Reset
 
 **Grade:** R1 — global agent workflow tooling, prompts, tests, and documentation; no trading runtime or order path.
-**Status:** IMPLEMENTED / REVIEW PASS — pending three-repo landing (2026-07-21)
+**Status:** SHIPPED / REVIEW PASS (2026-07-21)
 **Owner:** `dotclaude-ecosystem` with coordinated changes in `claude-config` and `D:/APPS/_shared`.
 **Supersedes:** the public command/routing portions of `2026-06-27_global_agent_workflow_os.md`. It does not rewrite that shipped historical record.
 
@@ -146,6 +146,12 @@ Revert in reverse dependency order: global routing, commands/deployment, engines
 - `claude-config`: `593bdd9` (the branch intentionally includes the existing local command-runtime fix that the replacement command set supersedes)
 - `dotclaude-ecosystem`: `f37d5cf`
 
+**Landed heads**
+
+- `apps-shared`: `1d855a40892aec987c02f34a5736616104762fcf` — PR #17.
+- `claude-config`: `fea0842c84374557d54df4156123f15a834d935c` — PR #6.
+- `dotclaude-ecosystem`: `c9ef8c514eb23fdc045d03ab51c25889411eeece` — PR #36.
+
 **Validation**
 
 - `apps-shared`: `python -m pytest -q audit` -> `36 passed` (exit 0).
@@ -153,6 +159,9 @@ Revert in reverse dependency order: global routing, commands/deployment, engines
 - `dotclaude-ecosystem`: `python -m pytest -q scripts/tests` -> `102 passed, 2 subtests passed` (exit 0).
 - `sync_agent_rules.py --check` -> all four global targets clean.
 - Command sync readback -> `fwf.md` and `fwp.md` clean in Claude and Codex homes; six stale workflow files removed.
+- Runtime parser readback from `D:/APPS/_shared` exposes only required `--mode {free,paid}` model selection and no preset/lane-bypass flags.
+- Operator checkouts are current. The dirty `_shared` checkout retained its pre-existing Python fallback, watchdog, runtime locks, and untracked data.
+- Final plan lifecycle updater returned exit 0 and regenerated `VISIONS.md`; its `PLANS.md` catalog subprocess timed out after 120 seconds and is recorded as a best-effort catalog failure.
 
 Pytest emitted a Windows `pytest-current` atexit cleanup `PermissionError` after the two successful Python suites; the pytest processes returned exit code 0 and all expected tests ran.
 
