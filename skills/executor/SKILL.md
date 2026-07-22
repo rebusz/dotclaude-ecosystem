@@ -55,7 +55,7 @@ python ~/.claude/scripts/plan_context_updater.py --plan <plan_path> --shipped \
     [--resolved-ideas "<slugs from payload>"]
 ```
 
-If `plan_path` is empty in payload, skip with a warning (catalogs only get regen via implicit nightly cycle, not blocking).
+If `plan_path` is empty in payload, emit a warning and continue (catalogs only get regen via implicit nightly cycle, not blocking).
 
 ## STEP 3 — Post-Mode Epilog
 
