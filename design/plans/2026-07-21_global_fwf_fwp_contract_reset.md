@@ -150,7 +150,9 @@ Revert in reverse dependency order: global routing, commands/deployment, engines
 
 - `apps-shared`: `1d855a40892aec987c02f34a5736616104762fcf` — PR #17.
 - `claude-config`: `fea0842c84374557d54df4156123f15a834d935c` — PR #6.
-- `dotclaude-ecosystem`: `c9ef8c514eb23fdc045d03ab51c25889411eeece` — PR #36.
+- `dotclaude-ecosystem`: `cd33486f7583ffee1dd8945464e1e7385b637fcd` — PRs #36–#38 (implementation, shipped readback, and removal of active `cheap`/`skip` language).
+- Tsignal repo-local cleanup: `4bcf0e7a675ff411de9495b9adf2627a0c2a296a` — PR #568 removed the orphaned `/fw`/`/fusion`/`/audit` block.
+- TSU repo-local cleanup: `db14a6608d6dce303e0816dcad566abc460b7734` — PR #649 removed the same orphaned block.
 
 **Validation**
 
@@ -160,8 +162,10 @@ Revert in reverse dependency order: global routing, commands/deployment, engines
 - `sync_agent_rules.py --check` -> all four global targets clean.
 - Command sync readback -> `fwf.md` and `fwp.md` clean in Claude and Codex homes; six stale workflow files removed.
 - Runtime parser readback from `D:/APPS/_shared` exposes only required `--mode {free,paid}` model selection and no preset/lane-bypass flags.
+- Active skill discovery exposes one `master-agent` and one `executor`; legacy backup skills were moved to `C:/Users/dszub/.codex/skill-archive/20260714-backups` so they cannot reintroduce `/fw` or review bypasses.
+- Primary-repository readback reports zero `/fw [paid|close]` remnants; active workflow/core skill files contain neither `cheap` nor `skip`.
 - Operator checkouts are current. The dirty `_shared` checkout retained its pre-existing Python fallback, watchdog, runtime locks, and untracked data.
-- Final plan lifecycle updater returned exit 0 and regenerated `VISIONS.md`; its `PLANS.md` catalog subprocess timed out after 120 seconds and is recorded as a best-effort catalog failure.
+- The first plan lifecycle updater attempt returned exit 0 but its `PLANS.md` catalog subprocess timed out after 120 seconds. The final recovery run returned exit 0 with both `PLANS.md regen: OK` and `VISIONS.md regen: OK`.
 
 Pytest emitted a Windows `pytest-current` atexit cleanup `PermissionError` after the two successful Python suites; the pytest processes returned exit code 0 and all expected tests ran.
 
