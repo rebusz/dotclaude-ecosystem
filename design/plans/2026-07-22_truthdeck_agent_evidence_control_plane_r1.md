@@ -1497,6 +1497,13 @@ so the draft-skipped workflow falsely satisfied CI. Required checks now pass onl
 `SUCCESS` (or legacy status-context `state=SUCCESS` when no conclusion exists), with regression
 coverage for skipped, neutral, failure, and contradictory payloads.
 
+The first `ready_for_review` transition on PR #41 remained `SKIPPED` because the workflow used
+GitHub's default `pull_request` activity set, which excludes `ready_for_review`. The workflow
+now declares `opened`, `synchronize`, `reopened`, and `ready_for_review` explicitly while its
+job-level draft guard remains fail-closed. A contract test pins both clauses. Because the PR
+was already ready, this repair is batched into one validated follow-up push, which supplies the
+single `synchronize` CI run and requires a new exact-head review before merge.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1506,8 +1513,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `67 passed`;
-- full `scripts/tests`: `169 passed, 2 subtests passed`;
+- focused TruthDeck suite: `68 passed`;
+- full `scripts/tests`: `170 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;

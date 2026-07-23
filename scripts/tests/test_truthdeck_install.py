@@ -13,6 +13,11 @@ from truthdeck_install import InstallError, _shim_spec, install, status, uninsta
 
 
 class InstallerTests(unittest.TestCase):
+    def test_ci_runs_once_when_draft_becomes_ready(self):
+        workflow = (ROOT / ".github" / "workflows" / "truthdeck-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", workflow)
+        self.assertIn("if: github.event.pull_request.draft == false", workflow)
+
     def test_install_status_idempotency_and_uninstall_preserve_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

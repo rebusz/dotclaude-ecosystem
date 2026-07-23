@@ -2,6 +2,7 @@ name: TruthDeck CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "scripts/truthdeck*.py"
       - "scripts/tests/test_truthdeck*.py"
