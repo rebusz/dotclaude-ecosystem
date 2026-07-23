@@ -1504,6 +1504,35 @@ job-level draft guard remains fail-closed. A contract test pins both clauses. Be
 was already ready, this repair is batched into one validated follow-up push, which supplies the
 single `synchronize` CI run and requires a new exact-head review before merge.
 
+After PR #41 merged, active-home installation correctly activated the CLI, both discovery
+skills, and both MCP registrations, but runtime readback exposed a false-positive shim state:
+the first home-owned PATH entry was an ephemeral `~/.codex/tmp/arg0/...` directory. A bounded
+R1 follow-up restricts shim installation to durable `~/.local/bin` or `~/bin` entries already
+present in PATH, reports `HOLD` when neither exists, and transactionally removes a prior owned
+shim when migrating to a durable target. Fake-home tests cover preference, migration, cleanup,
+and ephemeral-only refusal before active-home reinstall.
+
+Follow-up exact-head model attempts were fail-closed when they truncated before a verdict. One
+partial Cohere analysis identified a valid portability gap: the migration test expected the
+Windows-only `truthctl.cmd` name. The test now derives the platform shim contract, and PATH
+normalization strips surrounding whitespace/quotes before resolving durable entries. A separate
+regression covers quoted durable paths; an alleged Windows case-sensitivity issue was discarded
+because `WindowsPath` equality is already case-folded.
+
+PR #42's first ready CI run then found a Windows runner representation-only failure: the
+temporary home was expressed with the `RUNNER~1` short alias while the installer correctly
+returned the resolved long path. The product behavior was unchanged; the migration assertion
+now compares canonical `resolve()` paths. This single test-only fix is the sole follow-up push
+to the ready PR and invalidates the previous exact-head review as required.
+
+The next Gemini exact-head verdict blocked on a claimed missing rollback snapshot, but the
+claim was factually stale: `install()` already appends every manifest-owned target before
+constructing `before`, all mutations are wrapped by `_rollback(before)`, and the new manifest
+is written last. The valid conservative part was accepted anyway: stale owned-file cleanup now
+runs before Codex/Claude MCP registration, further reducing the external-config mutation window.
+The other P2s were rejected because `home` is resolved at function entry and custom bin paths
+are intentionally `HOLD` outside the v1 durable allowlist.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1513,8 +1542,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `68 passed`;
-- full `scripts/tests`: `170 passed, 2 subtests passed`;
+- focused TruthDeck suite: `71 passed`;
+- full `scripts/tests`: `173 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;

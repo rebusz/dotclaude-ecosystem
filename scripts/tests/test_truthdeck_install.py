@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -105,6 +106,43 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(name, "truthctl")
         self.assertTrue(payload.startswith(b"#!/bin/sh\n"))
         self.assertIn(b'"$@"', payload)
+
+    def test_shim_prefers_durable_path_and_migrates_owned_old_shim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            ephemeral = home / ".codex" / "tmp" / "arg0" / "session"
+            durable = home / ".local" / "bin"
+            old_bin = home / "bin"
+            for directory in (ephemeral, durable, old_bin):
+                directory.mkdir(parents=True)
+            first = install(repo_root=ROOT, home=home, path_value=str(old_bin))
+            old_shim = Path(first["shim"])
+            self.assertTrue(old_shim.exists())
+            migrated = install(
+                repo_root=ROOT, home=home,
+                path_value=os.pathsep.join((str(ephemeral), str(durable), str(old_bin))),
+            )
+            shim_name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
+            self.assertEqual(Path(migrated["shim"]), durable.resolve() / shim_name)
+            self.assertFalse(old_shim.exists())
+            self.assertTrue((durable.resolve() / shim_name).exists())
+
+    def test_ephemeral_home_path_does_not_receive_shim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            ephemeral = home / ".codex" / "tmp" / "arg0" / "session"
+            ephemeral.mkdir(parents=True)
+            result = install(repo_root=ROOT, home=home, path_value=str(ephemeral))
+            self.assertIsNone(result["shim"])
+            self.assertEqual(result["path_state"], "HOLD")
+
+    def test_durable_path_entry_normalizes_quotes_and_whitespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            durable = home / ".local" / "bin"
+            durable.mkdir(parents=True)
+            result = install(repo_root=ROOT, home=home, path_value=f'  "{durable}"  ')
+            self.assertEqual(result["path_state"], "PASS")
 
 
 if __name__ == "__main__":
