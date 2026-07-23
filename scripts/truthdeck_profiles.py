@@ -47,6 +47,14 @@ PROBES = {
         allowed_repo_ids=("rebusz/tsu",),
         tool_sha256="b213b5f263f52d76accc41362b6f72ae28aeae8940392cb169aaf46cf58c5c34",
     ),
+    "tsignal.dod_deck.v1": ProbeSpec(
+        "tsignal.dod_deck.v1",
+        (sys.executable, "{repo}/scripts/dod_deck.py", "run", "--repo", "{repo}", "--truthdeck"),
+        "tsignal_dod_deck.v1", True, ("status",), ("ok",),
+        sample_path=("sample_count",), build_path=("build",),
+        allowed_repo_ids=("rebusz/tsignal",),
+        tool_sha256="9da10fa1c29f3689c43b4d07da98dfc3020260767519a3a54467125ae85cab3d",
+    ),
 }
 
 

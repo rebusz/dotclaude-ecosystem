@@ -35,7 +35,7 @@
       "repo_names": ["Tsignal 5.0"],
       "collectors": ["git", "plan", "github", "review", "handoff", "runtime", "artifact"],
       "runtime_applicable": true,
-      "runtime_probe_ids": [],
+      "runtime_probe_ids": ["tsignal.dod_deck.v1"],
       "required_checks": [],
       "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
     }

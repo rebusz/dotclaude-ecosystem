@@ -13,10 +13,10 @@ from truthdeck_profiles import RegistryError, apply_narrowing, load_registry, re
 
 
 class ProfileTests(unittest.TestCase):
-    def test_shipped_registry_is_valid_and_tsignal_has_no_probe(self) -> None:
+    def test_shipped_registry_is_valid_and_tsignal_has_dod_deck_probe(self) -> None:
         registry, digest = load_registry(ROOT / "templates" / "truthdeck.registry.json.template")
         self.assertEqual(len(digest), 64)
-        self.assertEqual(registry["profiles"]["tsignal-5.0"]["runtime_probe_ids"], [])
+        self.assertEqual(registry["profiles"]["tsignal-5.0"]["runtime_probe_ids"], ["tsignal.dod_deck.v1"])
 
     def test_user_registry_cannot_add_argv_or_unknown_probe(self) -> None:
         raw = json.loads((ROOT / "templates" / "truthdeck.registry.json.template").read_text(encoding="utf-8"))
