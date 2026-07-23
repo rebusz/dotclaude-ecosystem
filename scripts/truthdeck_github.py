@@ -13,10 +13,16 @@ from truthdeck_model import CollectorRun, make_fact
 FIELDS = "number,isDraft,state,mergedAt,mergeCommit,headRefOid,baseRefOid,statusCheckRollup,url"
 
 
-def collect_github(repo: Path, *, pr: int, observed_at_utc: str, deadline: float, repo_id: str) -> CollectorResult:
+def collect_github(repo: Path, *, pr: int, observed_at_utc: str, deadline: float,
+                   repo_id: str, required_checks: tuple[str, ...] = (),
+                   command_timeout_s: float = 5.0, max_output_bytes: int = 1_048_576) -> CollectorResult:
     started = time.monotonic()
-    version = run_bounded(("gh", "--version"), cwd=repo, deadline=deadline)
-    result = run_bounded(("gh", "pr", "view", str(pr), "--json", FIELDS), cwd=repo, deadline=deadline)
+    command_deadline = min(deadline, time.monotonic() + command_timeout_s)
+    version = run_bounded(("gh", "--version"), cwd=repo, deadline=command_deadline,
+                          max_output_bytes=max_output_bytes)
+    result = run_bounded(("gh", "pr", "view", str(pr), "--json", FIELDS), cwd=repo,
+                         deadline=min(deadline, time.monotonic() + command_timeout_s),
+                         max_output_bytes=max_output_bytes)
     if result.returncode:
         raise CollectorError(f"gh pr view failed: {result.stderr[:200]}")
     try:
@@ -30,7 +36,7 @@ def collect_github(repo: Path, *, pr: int, observed_at_utc: str, deadline: float
     checks = raw["statusCheckRollup"]
     if not isinstance(checks, list):
         raise CollectorError("statusCheckRollup must be an array")
-    passed = bool(checks) and all(_check_passed(item) for item in checks)
+    passed = _required_checks_pass(checks, required_checks)
     merged = bool(raw["mergedAt"]) and raw["state"] == "MERGED"
     locator = f"github:pr/{int(raw['number'])}"
     facts = (
@@ -55,3 +61,16 @@ def _check_passed(item: Any) -> bool:
     conclusion = str(item.get("conclusion") or "").upper()
     state = str(item.get("state") or "").upper()
     return conclusion in {"SUCCESS", "NEUTRAL", "SKIPPED"} or state == "SUCCESS"
+
+
+def _check_name(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("name") or item.get("context") or "")
+
+
+def _required_checks_pass(checks: list[Any], required_checks: tuple[str, ...]) -> bool:
+    by_name = {_check_name(item): item for item in checks if _check_name(item)}
+    return bool(required_checks) and all(
+        name in by_name and _check_passed(by_name[name]) for name in required_checks
+    )

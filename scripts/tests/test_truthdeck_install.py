@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from truthdeck_install import InstallError, install, status, uninstall  # noqa: E402
+from truthdeck_install import InstallError, _shim_spec, install, status, uninstall  # noqa: E402
 
 
 class InstallerTests(unittest.TestCase):
@@ -23,6 +23,8 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(first["path_state"], "PASS")
             self.assertEqual(second["state"], "installed")
             self.assertEqual(status(home=home)["state"], "installed")
+            self.assertTrue((home / ".codex" / "skills" / "truthdeck" / "SKILL.md").exists())
+            self.assertTrue((home / ".claude" / "skills" / "truthdeck" / "SKILL.md").exists())
             snapshots = home / ".truthdeck" / "snapshots"
             snapshots.mkdir()
             result = uninstall(home=home)
@@ -45,10 +47,59 @@ class InstallerTests(unittest.TestCase):
             (home / ".codex" / "config.toml").write_text('[mcp_servers.keep]\ncommand="keep"\n', encoding="utf-8")
             (home / ".claude.json").write_text(json.dumps({"mcpServers": {"keep": {"command": "keep"}}}), encoding="utf-8")
             install(repo_root=ROOT, home=home, enable_mcp="both", path_value="")
+            readback = status(home=home)
+            self.assertTrue(readback["cli_installed"])
+            self.assertTrue(readback["codex_skill_installed"])
+            self.assertTrue(readback["claude_skill_installed"])
+            self.assertTrue(readback["mcp_codex_active"])
+            self.assertTrue(readback["mcp_claude_active"])
             self.assertIn("mcp_servers.keep", (home / ".codex" / "config.toml").read_text(encoding="utf-8"))
             self.assertIn("truthdeck", json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"])
             uninstall(home=home)
             self.assertIn("keep", json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"])
+
+    def test_foreign_shim_and_manifest_traversal_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            user_bin = home / "bin"
+            user_bin.mkdir()
+            shim = user_bin / "truthctl.cmd"
+            shim.write_text("foreign", encoding="utf-8")
+            with self.assertRaises(InstallError):
+                install(repo_root=ROOT, home=home, path_value=str(user_bin))
+            self.assertEqual(shim.read_text(encoding="utf-8"), "foreign")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            install(repo_root=ROOT, home=home, path_value="")
+            manifest_path = home / ".truthdeck" / "install-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"]["../victim"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(status(home=home)["state"], "invalid_manifest")
+            with self.assertRaises(InstallError):
+                uninstall(home=home)
+
+    def test_partial_failure_rolls_back_and_mode_transition_removes_registration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".claude.json").write_text(json.dumps({"mcpServers": {"truthdeck": {"command": "foreign"}}}), encoding="utf-8")
+            with self.assertRaises(InstallError):
+                install(repo_root=ROOT, home=home, enable_mcp="both", path_value="")
+            self.assertFalse((home / ".truthdeck" / "install-manifest.json").exists())
+            self.assertFalse((home / ".truthdeck" / "bin" / "truthctl.py").exists())
+            self.assertNotIn("TRUTHDECK OWNED", (home / ".codex" / "config.toml").read_text(encoding="utf-8") if (home / ".codex" / "config.toml").exists() else "")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            install(repo_root=ROOT, home=home, enable_mcp="codex", path_value="")
+            install(repo_root=ROOT, home=home, enable_mcp="none", path_value="")
+            self.assertNotIn("TRUTHDECK OWNED", (home / ".codex" / "config.toml").read_text(encoding="utf-8"))
+            uninstall(home=home)
+
+    def test_posix_shim_contract(self):
+        name, payload = _shim_spec("/usr/bin/python3", Path("/opt/truthctl.py"), "posix")
+        self.assertEqual(name, "truthctl")
+        self.assertTrue(payload.startswith(b"#!/bin/sh\n"))
+        self.assertIn(b'"$@"', payload)
 
 
 if __name__ == "__main__":

@@ -9,16 +9,18 @@
   "profiles": {
     "generic": {
       "repo_names": [],
-      "collectors": ["git", "plan", "github", "review", "handoff", "artifact"],
+      "collectors": ["git", "plan", "github", "review", "handoff", "artifact", "installation"],
       "runtime_applicable": false,
       "runtime_probe_ids": [],
+      "required_checks": [],
       "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
     },
     "dotclaude-ecosystem": {
       "repo_names": ["dotclaude-ecosystem"],
-      "collectors": ["git", "plan", "github", "review", "handoff", "artifact"],
+      "collectors": ["git", "plan", "github", "review", "handoff", "artifact", "installation"],
       "runtime_applicable": false,
       "runtime_probe_ids": [],
+      "required_checks": ["truthdeck"],
       "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
     },
     "tsu": {
@@ -26,6 +28,7 @@
       "collectors": ["git", "plan", "github", "review", "handoff", "runtime", "artifact"],
       "runtime_applicable": true,
       "runtime_probe_ids": ["tsu.remote_preflight.v1", "tsu.next_gate_status.v1"],
+      "required_checks": [],
       "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
     },
     "tsignal-5.0": {
@@ -33,6 +36,7 @@
       "collectors": ["git", "plan", "github", "review", "handoff", "runtime", "artifact"],
       "runtime_applicable": true,
       "runtime_probe_ids": [],
+      "required_checks": [],
       "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
     }
   },

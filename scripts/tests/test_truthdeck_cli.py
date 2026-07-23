@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -55,6 +57,55 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 3)
         finally:
             outside.unlink(missing_ok=True)
+
+    def test_snapshot_reports_installation_and_mcp_separately(self):
+        with tempfile.TemporaryDirectory() as install_tmp:
+            install_home = Path(install_tmp)
+            user_bin = install_home / "bin"
+            user_bin.mkdir(parents=True)
+            installer = ROOT / "scripts" / "truthdeck_install.py"
+            environment = dict(os.environ)
+            environment["PATH"] = str(user_bin)
+            installed = subprocess.run(
+                (sys.executable, str(installer), "install", "--repo-root", str(ROOT),
+                 "--home", str(install_home), "--enable-mcp", "both"),
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            result = self.run_cli(
+                "snapshot", "--repo", self.repo, "--plan", "plan.md", "--registry", REGISTRY,
+                "--profile", "generic", "--installation-home", install_home,
+                "--require", "planned,implemented,runtime_proven", "--no-store", "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            facts = {fact["key"]: fact["value"] for fact in json.loads(result.stdout)["facts"]}
+            self.assertEqual(facts["installation.state"], "installed")
+            self.assertTrue(facts["installation.cli_installed"])
+            self.assertTrue(facts["installation.codex_skill_installed"])
+            self.assertTrue(facts["installation.claude_skill_installed"])
+            self.assertTrue(facts["mcp.codex_active"])
+            self.assertTrue(facts["mcp.claude_active"])
+
+    def test_task_alias_resolves_snapshot_and_handoff_flag_is_supported(self):
+        raw = json.loads(REGISTRY.read_text(encoding="utf-8"))
+        raw["task_aliases"]["local"] = {
+            "repos": [str(self.repo.resolve())], "plan": str((self.repo / "plan.md").resolve()),
+            "profile": "generic",
+        }
+        registry = self.repo / "registry.json"
+        registry.write_text(json.dumps(raw), encoding="utf-8")
+        result = self.run_cli(
+            "snapshot", "--task", "local", "--registry", registry,
+            "--require", "planned,runtime_proven", "--no-store", "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        handoff = self.repo / "handoff.md"
+        payload = b"Base SHA: " + b"a" * 40 + b"\nHead SHA: " + b"b" * 40
+        handoff.write_bytes(payload)
+        verified = self.run_cli(
+            "verify-handoff", "--handoff", handoff, "--sha256", hashlib.sha256(payload).hexdigest(), "--json",
+        )
+        self.assertEqual(verified.returncode, 0, verified.stderr)
 
 
 if __name__ == "__main__":

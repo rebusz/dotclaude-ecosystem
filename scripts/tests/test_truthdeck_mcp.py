@@ -31,7 +31,7 @@ class McpTests(unittest.TestCase):
             subprocess.run(("git", "-C", str(repo), "commit", "-m", "base"), check=True, capture_output=True)
             registry = ROOT / "templates" / "truthdeck.registry.json.template"
             mcp_raw = create_server()._tool_manager._tools["truthdeck_snapshot"].fn(
-                str(repo), str(registry), str(plan), None, "generic"
+                [str(repo)], str(registry), str(plan), None, "generic", None, None, None, None
             )
             cli_snapshot = build_snapshot(repos=[repo], registry_path=registry, plan=plan, profile_name="generic")
             self.assertEqual(mcp_raw["snapshot_id"], cli_snapshot.snapshot_id)

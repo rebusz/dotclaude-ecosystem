@@ -1468,6 +1468,14 @@ and renderer, fixed TSU probe allowlist, explicit unavailable Tsignal runtime pr
 four-tool MCP adapter, hash-owned installer, thin skill, operator documentation, and a
 draft-skipped Windows CI workflow.
 
+The first implementation head `d2003e1` was invalidated by the blocking review gate. Three
+exact-head specialist passes found 18 unique security, correctness, and test-contract issues.
+The repair set now binds executable probes to canonical repo identities and code hashes,
+honors collector/check allowlists, preserves healthy results at deadlines, rejects stale or
+conflicting evidence, makes install/MCP changes transactional and ownership-checked, adds
+strict task aliases, and emits separate read-only installation/skill/MCP facts for the final
+self-snapshot. `d2003e1` is not accepted as reviewed evidence.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1477,12 +1485,12 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `41 passed`;
-- full `scripts/tests`: `143 passed, 2 subtests passed`;
+- focused TruthDeck suite: `64 passed`;
+- full `scripts/tests`: `166 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
-- local Git/plan snapshot benchmark over 20 runs: p95 `0.7121s`, max `0.7129s`;
-- MCP server construction over 20 runs: p95 `0.0054s`, exactly four tools.
+- local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;
+- MCP server construction over 20 runs: p95 `0.0137s`, max `0.0292s`, exactly four tools.
 
 The exact-head review, PR CI/merge, operator-checkout sync, active-home installation, and
 post-install self-snapshot remain Stage 6 evidence gates; local green status does not imply

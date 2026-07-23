@@ -1,0 +1,10 @@
+{
+  "schema_version": "tsu_next_gate_status.v1",
+  "read_only": true,
+  "status": "ready_for_operator_review",
+  "gates": {
+    "gpt_sidecar": {"status": "review_artifact_valid", "ready": true},
+    "confidence_shadow_natural_window": {"status": "clean_natural_window", "ready": true},
+    "channel_reader_shadow_window": {"status": "fresh_geometry_present", "ready": true}
+  }
+}

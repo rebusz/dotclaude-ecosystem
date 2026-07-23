@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST_SCHEMA = "truthdeck.install.v1"
+MAX_MANIFEST_BYTES = 1_048_576
 CODEX_BEGIN = "# BEGIN TRUTHDECK OWNED v1"
 CODEX_END = "# END TRUTHDECK OWNED v1"
 
@@ -27,20 +28,67 @@ def install(*, repo_root: Path, home: Path, enable_mcp: str = "none", path_value
     root = home / ".truthdeck"
     bin_dir, skill_dir = root / "bin", root / "skills" / "truthdeck"
     manifest_path = root / "install-manifest.json"
+    existing_manifest: dict[str, Any] | None = None
     if manifest_path.exists():
         current = status(home=home)
         if current["state"] != "installed":
             raise InstallError("existing TruthDeck install is not ownership-clean")
+        existing_manifest = _load_manifest(manifest_path, home)
+    sources = sorted((repo_root / "scripts").glob("truthdeck*.py")) + [repo_root / "scripts" / "truthctl.py"]
+    effective_path = path_value if path_value is not None else os.environ.get("PATH", "")
+    shim_target = _shim_candidate(home, effective_path)
+    targets = [bin_dir / source.name for source in sources]
+    discovery_skills = (home / ".codex" / "skills" / "truthdeck" / "SKILL.md",
+                        home / ".claude" / "skills" / "truthdeck" / "SKILL.md")
+    targets.extend((skill_dir / "SKILL.md", *discovery_skills, root / "registry.json",
+                    root / "registry.json.from-template", manifest_path))
+    if shim_target:
+        targets.append(shim_target)
+    previous_mcp = str((existing_manifest or {}).get("mcp", "none"))
+    config_targets = set(_selected_configs(home, enable_mcp)) | set(_selected_configs(home, previous_mcp))
+    for config in config_targets:
+        targets.append(config)
+        if config.exists():
+            targets.append(config.with_name(f"{config.name}.truthdeck-backup-{_sha(config)[:12]}"))
+    before = {target: target.read_bytes() if target.exists() else None for target in targets}
+    owned = set((existing_manifest or {}).get("files", {}))
+    try:
+        return _install_mutations(repo_root=repo_root, home=home, enable_mcp=enable_mcp,
+                                  previous_mcp=previous_mcp, sources=sources,
+                                  effective_path=effective_path, owned=owned)
+    except Exception:
+        _rollback(before)
+        for directory in (skill_dir, root / "skills", bin_dir, root,
+                          home / ".codex" / "skills" / "truthdeck",
+                          home / ".claude" / "skills" / "truthdeck", home / ".codex"):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        raise
+
+
+def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous_mcp: str,
+                       sources: list[Path], effective_path: str, owned: set[str]) -> dict[str, Any]:
+    root = home / ".truthdeck"
+    bin_dir, skill_dir = root / "bin", root / "skills" / "truthdeck"
+    manifest_path = root / "install-manifest.json"
     bin_dir.mkdir(parents=True, exist_ok=True)
     skill_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, str] = {}
-    sources = sorted((repo_root / "scripts").glob("truthdeck*.py")) + [repo_root / "scripts" / "truthctl.py"]
     for source in sources:
         target = bin_dir / source.name
         _copy_atomic(source, target)
         files[str(target.relative_to(home))] = _sha(target)
     _copy_atomic(repo_root / "skills" / "truthdeck" / "SKILL.md", skill_dir / "SKILL.md")
     files[str((skill_dir / "SKILL.md").relative_to(home))] = _sha(skill_dir / "SKILL.md")
+    for target in (home / ".codex" / "skills" / "truthdeck" / "SKILL.md",
+                   home / ".claude" / "skills" / "truthdeck" / "SKILL.md"):
+        relative = str(target.relative_to(home))
+        if target.exists() and relative not in owned:
+            raise InstallError(f"refusing to overwrite foreign skill: {target}")
+        _copy_atomic(repo_root / "skills" / "truthdeck" / "SKILL.md", target)
+        files[relative] = _sha(target)
     registry = root / "registry.json"
     template = repo_root / "templates" / "truthdeck.registry.json.template"
     if not registry.exists():
@@ -48,10 +96,14 @@ def install(*, repo_root: Path, home: Path, enable_mcp: str = "none", path_value
     elif registry.read_bytes() != template.read_bytes():
         _copy_atomic(template, root / "registry.json.from-template")
         files[str((root / "registry.json.from-template").relative_to(home))] = _sha(root / "registry.json.from-template")
-    shim = _install_shim(home, bin_dir / "truthctl.py", path_value or os.environ.get("PATH", ""))
+    shim = _install_shim(home, bin_dir / "truthctl.py", effective_path, owned)
     if shim:
         files[str(shim.relative_to(home))] = _sha(shim)
     config_backups: list[str] = []
+    if previous_mcp in {"codex", "both"} and enable_mcp not in {"codex", "both"}:
+        _remove_codex(home)
+    if previous_mcp in {"claude", "both"} and enable_mcp not in {"claude", "both"}:
+        _remove_claude(home)
     if enable_mcp in {"codex", "both"}:
         backup = _register_codex(home, bin_dir / "truthdeck_mcp.py")
         if backup:
@@ -72,20 +124,34 @@ def install(*, repo_root: Path, home: Path, enable_mcp: str = "none", path_value
 
 
 def status(*, home: Path) -> dict[str, Any]:
-    manifest_path = home.resolve() / ".truthdeck" / "install-manifest.json"
+    home = home.resolve()
+    manifest_path = home / ".truthdeck" / "install-manifest.json"
     if not manifest_path.exists():
-        return {"state": "absent"}
+        return {
+            "state": "absent", "cli_installed": False,
+            "codex_skill_installed": False, "claude_skill_installed": False,
+            "mcp_codex_active": False, "mcp_claude_active": False,
+        }
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        manifest = _load_manifest(manifest_path, home)
+    except (OSError, ValueError, InstallError):
         return {"state": "invalid_manifest"}
     drift = []
     for relative, digest in manifest.get("files", {}).items():
-        target = home / relative
+        target = _owned_target(home, relative)
         if not target.exists() or _sha(target) != digest:
             drift.append(relative)
-    return {"state": "installed" if not drift else "drifted", "drift": drift,
-            "mcp": manifest.get("mcp", "none"), "shim": manifest.get("shim")}
+    state = "installed" if not drift else "drifted"
+    owned = set(manifest["files"])
+    return {
+        "state": state, "drift": drift, "mcp": manifest.get("mcp", "none"),
+        "shim": manifest.get("shim"),
+        "cli_installed": state == "installed" and str(Path(".truthdeck/bin/truthctl.py")) in owned,
+        "codex_skill_installed": state == "installed" and str(Path(".codex/skills/truthdeck/SKILL.md")) in owned,
+        "claude_skill_installed": state == "installed" and str(Path(".claude/skills/truthdeck/SKILL.md")) in owned,
+        "mcp_codex_active": _codex_active(home, manifest),
+        "mcp_claude_active": _claude_active(home, manifest),
+    }
 
 
 def uninstall(*, home: Path) -> dict[str, Any]:
@@ -93,18 +159,21 @@ def uninstall(*, home: Path) -> dict[str, Any]:
     root, manifest_path = home / ".truthdeck", home / ".truthdeck" / "install-manifest.json"
     if not manifest_path.exists():
         return {"state": "absent"}
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = _load_manifest(manifest_path, home)
     current = status(home=home)
     if current["state"] != "installed":
         raise InstallError(f"refusing uninstall because owned files drifted: {current.get('drift')}")
+    targets = [_owned_target(home, relative) for relative in manifest["files"]]
     if manifest.get("mcp") in {"codex", "both"}:
         _remove_codex(home)
     if manifest.get("mcp") in {"claude", "both"}:
         _remove_claude(home)
-    for relative in manifest.get("files", {}):
-        (home / relative).unlink(missing_ok=True)
+    for target in targets:
+        target.unlink(missing_ok=True)
     manifest_path.unlink()
-    for directory in (root / "skills" / "truthdeck", root / "skills", root / "bin"):
+    for directory in (root / "skills" / "truthdeck", root / "skills", root / "bin",
+                      home / ".codex" / "skills" / "truthdeck",
+                      home / ".claude" / "skills" / "truthdeck"):
         try:
             directory.rmdir()
         except OSError:
@@ -112,17 +181,18 @@ def uninstall(*, home: Path) -> dict[str, Any]:
     return {"state": "uninstalled", "snapshots_preserved": (root / "snapshots").exists(), "registry_preserved": (root / "registry.json").exists()}
 
 
-def _install_shim(home: Path, cli: Path, path_value: str) -> Path | None:
-    for raw in path_value.split(os.pathsep):
-        if not raw:
-            continue
-        directory = Path(raw).resolve()
-        if directory.exists() and (directory == home or home in directory.parents):
-            target = directory / "truthctl.cmd"
-            payload = f'@echo off\r\n"{sys.executable}" "{cli}" %*\r\n'.encode()
-            _write_atomic(target, payload)
-            return target
-    return None
+def _install_shim(home: Path, cli: Path, path_value: str, owned: set[str]) -> Path | None:
+    target = _shim_candidate(home, path_value)
+    if target is None:
+        return None
+    relative = str(target.relative_to(home))
+    if target.exists() and relative not in owned:
+        raise InstallError(f"refusing to overwrite foreign shim: {target}")
+    _, payload = _shim_spec(sys.executable, cli, os.name)
+    _write_atomic(target, payload)
+    if os.name != "nt":
+        target.chmod(0o755)
+    return target
 
 
 def _register_codex(home: Path, server: Path) -> Path | None:
@@ -161,8 +231,10 @@ def _register_claude(home: Path, server: Path) -> Path | None:
     path = home / ".claude.json"
     raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     servers = raw.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise InstallError("Claude mcpServers must be an object")
     if "truthdeck" in servers:
-        if servers["truthdeck"].get("_truthdeck_owner") != MANIFEST_SCHEMA:
+        if not isinstance(servers["truthdeck"], dict) or servers["truthdeck"].get("_truthdeck_owner") != MANIFEST_SCHEMA:
             raise InstallError("foreign Claude MCP entry named truthdeck")
         return None
     backup = _backup(path) if path.exists() else None
@@ -210,6 +282,92 @@ def _write_atomic(path: Path, payload: bytes) -> None:
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _shim_candidate(home: Path, path_value: str) -> Path | None:
+    name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
+    for raw in path_value.split(os.pathsep):
+        if not raw:
+            continue
+        directory = Path(raw).resolve()
+        if directory.exists() and (directory == home or home in directory.parents):
+            return directory / name
+    return None
+
+
+def _selected_configs(home: Path, enable_mcp: str) -> tuple[Path, ...]:
+    paths = []
+    if enable_mcp in {"codex", "both"}:
+        paths.append(home / ".codex" / "config.toml")
+    if enable_mcp in {"claude", "both"}:
+        paths.append(home / ".claude.json")
+    return tuple(paths)
+
+
+def _shim_spec(python: str, cli: Path, platform: str) -> tuple[str, bytes]:
+    if platform == "nt":
+        return "truthctl.cmd", f'@echo off\r\n"{python}" "{cli}" %*\r\n'.encode()
+    return "truthctl", f'#!/bin/sh\nexec "{python}" "{cli}" "$@"\n'.encode()
+
+
+def _rollback(before: dict[Path, bytes | None]) -> None:
+    for path, payload in reversed(tuple(before.items())):
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            _write_atomic(path, payload)
+
+
+def _load_manifest(path: Path, home: Path) -> dict[str, Any]:
+    if path.stat().st_size > MAX_MANIFEST_BYTES:
+        raise InstallError("install manifest exceeds size limit")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    expected = {"schema_version", "files", "mcp", "config_backups", "canonical_command", "shim"}
+    if not isinstance(raw, dict) or set(raw) != expected or raw.get("schema_version") != MANIFEST_SCHEMA:
+        raise InstallError("invalid install manifest schema")
+    if raw.get("mcp") not in {"none", "codex", "claude", "both"} or not isinstance(raw.get("files"), dict):
+        raise InstallError("invalid install manifest values")
+    for relative, digest in raw["files"].items():
+        _owned_target(home, relative)
+        if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise InstallError("invalid owned file digest")
+    return raw
+
+
+def _codex_active(home: Path, manifest: dict[str, Any]) -> bool:
+    if manifest.get("mcp") not in {"codex", "both"}:
+        return False
+    path = home / ".codex" / "config.toml"
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        entry = raw.get("mcp_servers", {}).get("truthdeck", {})
+        expected = str(home / ".truthdeck" / "bin" / "truthdeck_mcp.py")
+        return isinstance(entry, dict) and entry.get("args") == [expected]
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _claude_active(home: Path, manifest: dict[str, Any]) -> bool:
+    if manifest.get("mcp") not in {"claude", "both"}:
+        return False
+    path = home / ".claude.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        entry = raw.get("mcpServers", {}).get("truthdeck", {})
+        expected = str(home / ".truthdeck" / "bin" / "truthdeck_mcp.py")
+        return (isinstance(entry, dict) and entry.get("_truthdeck_owner") == MANIFEST_SCHEMA
+                and entry.get("args") == [expected])
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _owned_target(home: Path, relative: str) -> Path:
+    if not isinstance(relative, str) or Path(relative).is_absolute():
+        raise InstallError("owned path must be relative")
+    target = (home / relative).resolve()
+    if target == home or home not in target.parents:
+        raise InstallError(f"owned path escapes home: {relative}")
+    return target
 
 
 def main(argv: list[str] | None = None) -> int:

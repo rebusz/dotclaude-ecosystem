@@ -1,0 +1,14 @@
+{
+  "number": 42,
+  "isDraft": false,
+  "state": "OPEN",
+  "mergedAt": null,
+  "mergeCommit": null,
+  "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "statusCheckRollup": [
+    {"name": "truthdeck", "conclusion": "SUCCESS"},
+    {"name": "optional-docs", "conclusion": "SKIPPED"}
+  ],
+  "url": "https://github.com/example/repo/pull/42"
+}

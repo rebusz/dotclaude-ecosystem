@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from truthdeck_gates import evaluate, overall_state  # noqa: E402
+from truthdeck_gates import evaluate, find_conflicts, overall_state  # noqa: E402
 from truthdeck_model import FactState, GateState, ReasonCode, STAGE_ORDER, Stage, make_fact  # noqa: E402
 
 
@@ -26,7 +26,7 @@ class TruthDeckGateTests(unittest.TestCase):
             fact("plan.parseable", True), fact("plan.risk", "R1"), fact("plan.blocked", False),
             fact("implementation.head", "abc"), fact("review.head", "abc"),
             fact("review.blocking_findings", 0), fact("ci.head", "abc"), fact("ci.passed", True),
-            fact("pr.merged", True), fact("runtime.applicable", False),
+            fact("pr.head", "abc"), fact("pr.merged", True), fact("runtime.applicable", False),
         ]
         gates, action = evaluate(facts)
         self.assertEqual(overall_state(gates, STAGE_ORDER), GateState.PASS)
@@ -51,6 +51,14 @@ class TruthDeckGateTests(unittest.TestCase):
         self.assertEqual(gate.state, GateState.UNKNOWN)
         self.assertIn(ReasonCode.EVIDENCE_STALE, gate.reason_codes)
 
+    def test_expiry_equality_is_stale(self) -> None:
+        gates, _ = evaluate([
+            fact("runtime.applicable", True), fact("runtime.expected_build", "abc"),
+            fact("runtime.build", "abc", fresh=NOW), fact("runtime.ready", True, fresh=NOW),
+            fact("runtime.sample_count", 1, fresh=NOW),
+        ], required=(Stage.RUNTIME_PROVEN,), evaluated_at=datetime(2026, 7, 22, 12, 0, tzinfo=UTC))
+        self.assertEqual(next(x for x in gates if x.stage == Stage.RUNTIME_PROVEN).state, GateState.UNKNOWN)
+
     def test_boundary_precedes_other_actions(self) -> None:
         _, action = evaluate([], boundary_violation=True)
         self.assertEqual(action.reason_codes, (ReasonCode.BOUNDARY_REFUSAL,))
@@ -71,6 +79,38 @@ class TruthDeckGateTests(unittest.TestCase):
         self.assertIn(ReasonCode.AUTHORIZATION_UNKNOWN, gate.reason_codes)
         self.assertEqual(action.risk, "R2")
         self.assertIn("broker_or_order_path", action.forbidden_actions)
+
+    def test_runtime_requires_build_identity(self) -> None:
+        gates, _ = evaluate([fact("runtime.applicable", True), fact("runtime.ready", True), fact("runtime.sample_count", 1)],
+                            required=(Stage.RUNTIME_PROVEN,))
+        self.assertEqual(next(x for x in gates if x.stage == Stage.RUNTIME_PROVEN).state, GateState.UNKNOWN)
+
+    def test_request_order_and_earliest_stage_drive_next_action(self) -> None:
+        facts = [
+            make_fact("plan.parseable", False, source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="z-first"),
+            make_fact("plan.risk", "UNKNOWN", source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="z-first"),
+            make_fact("plan.blocked", False, source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="z-first"),
+            make_fact("ci.passed", False, source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="a-second"),
+            make_fact("ci.head", "abc", source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="a-second"),
+            make_fact("implementation.head", "abc", source_type="test", source_locator="x", observed_at_utc=NOW, repo_id="a-second"),
+        ]
+        _, action = evaluate(facts, required=(Stage.PLANNED, Stage.CI), repo_order=("z-first", "a-second"))
+        self.assertEqual(action.stage, Stage.PLANNED)
+
+    def test_pr_merge_for_old_head_is_blocked(self) -> None:
+        gates, _ = evaluate([fact("implementation.head", "new"), fact("pr.head", "old"), fact("pr.merged", True)],
+                            required=(Stage.MERGED,))
+        gate = next(x for x in gates if x.stage == Stage.MERGED)
+        self.assertEqual(gate.reason_codes, (ReasonCode.PR_HEAD_MISMATCH,))
+
+    def test_conflicting_eligible_facts_force_unknown(self) -> None:
+        facts = [fact("runtime.applicable", True), fact("runtime.ready", True), fact("runtime.ready", False),
+                 fact("runtime.sample_count", 1), fact("runtime.expected_build", "abc"), fact("runtime.build", "abc")]
+        gates, _ = evaluate(facts, required=(Stage.RUNTIME_PROVEN,))
+        gate = next(x for x in gates if x.stage == Stage.RUNTIME_PROVEN)
+        self.assertEqual(gate.state, GateState.UNKNOWN)
+        self.assertIn(ReasonCode.EVIDENCE_CONFLICT, gate.reason_codes)
+        self.assertEqual(find_conflicts(facts), ("repo:runtime.ready",))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from truthdeck_profiles import RegistryError, apply_narrowing, load_registry  # noqa: E402
+from truthdeck_profiles import RegistryError, apply_narrowing, load_registry, resolve_profile  # noqa: E402
 
 
 class ProfileTests(unittest.TestCase):
@@ -34,6 +34,20 @@ class ProfileTests(unittest.TestCase):
             path.write_text('{"collectors":["git","runtime"]}', encoding="utf-8")
             with self.assertRaises(RegistryError):
                 apply_narrowing(profile, path)
+
+    def test_explicit_runtime_profile_is_bound_to_canonical_repo(self) -> None:
+        registry, _ = load_registry(ROOT / "templates" / "truthdeck.registry.json.template")
+        with self.assertRaises(RegistryError):
+            resolve_profile(registry, ROOT, "tsu", "attacker/repo")
+
+    def test_task_alias_paths_and_hash_are_strict(self) -> None:
+        raw = json.loads((ROOT / "templates" / "truthdeck.registry.json.template").read_text(encoding="utf-8"))
+        raw["task_aliases"]["bad"] = {"repos": ["relative/repo"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "registry.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaises(RegistryError):
+                load_registry(path)
 
 
 if __name__ == "__main__":

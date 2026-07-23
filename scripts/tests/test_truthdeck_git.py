@@ -32,6 +32,20 @@ class GitCollectorTests(unittest.TestCase):
             self.assertTrue(values["git.clean"])
             self.assertTrue(values["git.merged"])
 
+    def test_missing_base_is_unavailable_not_head_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git(repo, "init", "-b", "main")
+            git(repo, "config", "user.email", "test@example.com")
+            git(repo, "config", "user.name", "Test")
+            (repo / "a.txt").write_text("a", encoding="utf-8")
+            git(repo, "add", "a.txt")
+            git(repo, "commit", "-m", "base")
+            result = collect_git(repo, base_ref="origin/main", observed_at_utc="2026-07-22T12:00:00Z", deadline=time.monotonic() + 5)
+            facts = {x.key: x for x in result.facts}
+            self.assertEqual(facts["git.base"].state.value, "unavailable")
+            self.assertEqual(facts["git.merged"].state.value, "unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,7 +62,18 @@ def write_explicit(path: Path, payload: bytes) -> None:
 def _atomic_write_new(path: Path, payload: bytes) -> None:
     if path.exists():
         raise FileExistsError(path)
-    _write_and_sync(path, payload, exclusive=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            raise FileExistsError(path)
+        _replace_retry(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _atomic_replace(path: Path, payload: bytes) -> None:
@@ -76,14 +87,6 @@ def _atomic_replace(path: Path, payload: bytes) -> None:
         _replace_retry(temp, path)
     finally:
         temp.unlink(missing_ok=True)
-
-
-def _write_and_sync(path: Path, payload: bytes, *, exclusive: bool) -> None:
-    mode = "xb" if exclusive else "wb"
-    with path.open(mode) as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
 
 
 def _scope_slug(repos: tuple[str, ...]) -> str:

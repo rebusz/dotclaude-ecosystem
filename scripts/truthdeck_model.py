@@ -99,6 +99,12 @@ FACT_KEYS: dict[str, dict[str, Any]] = {
     "runtime.expected_build": {"type": "str", "producer": "profile", "freshness": "policy"},
     "runtime.ready": {"type": "bool", "producer": "runtime", "freshness": "ttl"},
     "runtime.sample_count": {"type": "int", "producer": "runtime", "freshness": "ttl"},
+    "installation.state": {"type": "str", "producer": "installation", "freshness": "live"},
+    "installation.cli_installed": {"type": "bool", "producer": "installation", "freshness": "live"},
+    "installation.codex_skill_installed": {"type": "bool", "producer": "installation", "freshness": "live"},
+    "installation.claude_skill_installed": {"type": "bool", "producer": "installation", "freshness": "live"},
+    "mcp.codex_active": {"type": "bool", "producer": "installation", "freshness": "live"},
+    "mcp.claude_active": {"type": "bool", "producer": "installation", "freshness": "live"},
     "authorization.state": {"type": "str", "producer": "operator", "freshness": "artifact"},
 }
 
@@ -183,6 +189,7 @@ class Snapshot:
         raw.pop("observed_at_utc", None)
         for fact in raw["facts"]:
             fact.pop("observed_at_utc", None)
+            fact.pop("fresh_until_utc", None)
         raw["collector_runs"] = [
             {k: v for k, v in run.items() if k not in {"elapsed_ms"}} for run in raw["collector_runs"]
         ]
@@ -226,17 +233,31 @@ def snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         raise SnapshotValidationError(f"unsupported schema_version: {raw['schema_version']!r}")
     parse_utc(str(raw["observed_at_utc"]))
     scope_raw = _mapping(raw["scope"], "scope")
+    _require_keys(scope_raw, {"repos", "plan", "pr", "task", "required_stages"}, "scope")
+    _string_array(scope_raw["repos"], "scope repos")
+    _string_array(scope_raw["required_stages"], "scope required_stages")
+    if scope_raw["pr"] is not None and type(scope_raw["pr"]) is not int:
+        raise SnapshotValidationError("scope pr must be an integer or null")
     scope = Scope(
-        repos=tuple(str(x) for x in scope_raw.get("repos", [])),
+        repos=tuple(scope_raw["repos"]),
         plan=_optional_str(scope_raw.get("plan")),
-        pr=int(scope_raw["pr"]) if scope_raw.get("pr") is not None else None,
+        pr=scope_raw["pr"],
         task=_optional_str(scope_raw.get("task")),
         required_stages=tuple(Stage(x) for x in scope_raw.get("required_stages", [s.value for s in STAGE_ORDER])),
     )
+    if not scope.repos or len(set(scope.repos)) != len(scope.repos):
+        raise SnapshotValidationError("scope repos must be non-empty and unique")
     facts = tuple(_fact_from_dict(x) for x in _sequence(raw["facts"], "facts"))
     gates = tuple(_gate_from_dict(x) for x in _sequence(raw["gates"], "gates"))
     runs = tuple(_run_from_dict(x) for x in _sequence(raw["collector_runs"], "collector_runs"))
     action_raw = _mapping(raw["next_action"], "next_action")
+    _require_keys(action_raw, {"action_id", "summary", "stage", "reason_codes", "evidence_keys",
+                               "command_preview", "authorization", "reversible", "risk",
+                               "forbidden_actions"}, "next_action")
+    for key in ("reason_codes", "evidence_keys", "command_preview", "forbidden_actions"):
+        _string_array(action_raw[key], f"next_action {key}")
+    if type(action_raw["reversible"]) is not bool:
+        raise SnapshotValidationError("next_action reversible must be boolean")
     action = NextAction(
         action_id=str(action_raw.get("action_id", "")),
         summary=str(action_raw.get("summary", "")),
@@ -245,14 +266,22 @@ def snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         evidence_keys=tuple(str(x) for x in action_raw.get("evidence_keys", [])),
         command_preview=tuple(str(x) for x in action_raw.get("command_preview", [])),
         authorization=str(action_raw.get("authorization", "not_required")),
-        reversible=bool(action_raw.get("reversible", True)),
+        reversible=action_raw["reversible"],
         risk=str(action_raw.get("risk", "UNKNOWN")),
         forbidden_actions=tuple(str(x) for x in action_raw.get("forbidden_actions", [])),
     )
+    tool_raw = _mapping(raw["tool"], "tool")
+    _require_keys(tool_raw, {"version", "policy_digest_sha256"}, "tool")
+    _require_sha(str(tool_raw["policy_digest_sha256"]), "policy_digest_sha256")
+    if not all(isinstance(value, str) for value in tool_raw.values()):
+        raise SnapshotValidationError("tool values must be strings")
+    _require_sha(str(raw["source_digest_sha256"]), "source_digest_sha256")
+    if len(str(raw["snapshot_id"])) != 24 or not _is_hex(str(raw["snapshot_id"])):
+        raise SnapshotValidationError("snapshot_id must be 24 lowercase hex characters")
     snapshot = Snapshot(
         schema_version=str(raw["schema_version"]), snapshot_id=str(raw["snapshot_id"]),
         observed_at_utc=str(raw["observed_at_utc"]), scope=scope,
-        tool={str(k): str(v) for k, v in _mapping(raw["tool"], "tool").items()},
+        tool={str(k): str(v) for k, v in tool_raw.items()},
         facts=facts, conflicts=tuple(str(x) for x in _sequence(raw["conflicts"], "conflicts")),
         gates=gates, next_action=action,
         boundaries=tuple(str(x) for x in _sequence(raw["boundaries"], "boundaries")),
@@ -280,6 +309,10 @@ def make_fact(key: str, value: Any, *, state: FactState = FactState.OBSERVED,
 
 def _fact_from_dict(value: Any) -> Fact:
     raw = _mapping(value, "fact")
+    _require_keys(raw, {"key", "value", "state", "source_type", "source_locator",
+                        "observed_at_utc", "evidence_sha256", "fresh_until_utc",
+                        "derivation", "repo_id"}, "fact")
+    _string_array(raw["derivation"], "fact derivation")
     fact = Fact(
         key=str(raw["key"]), value=raw.get("value"), state=FactState(raw["state"]),
         source_type=str(raw["source_type"]), source_locator=str(raw["source_locator"]),
@@ -289,6 +322,7 @@ def _fact_from_dict(value: Any) -> Fact:
     )
     if fact.key not in FACT_KEYS:
         raise SnapshotValidationError(f"unknown fact key: {fact.key}")
+    _require_sha(fact.evidence_sha256, "fact evidence_sha256")
     _validate_fact_type(fact.key, fact.value, fact.state)
     parse_utc(fact.observed_at_utc)
     if fact.fresh_until_utc:
@@ -298,6 +332,9 @@ def _fact_from_dict(value: Any) -> Fact:
 
 def _gate_from_dict(value: Any) -> GateResult:
     raw = _mapping(value, "gate")
+    _require_keys(raw, {"stage", "state", "reason_codes", "evidence_keys", "detail", "repo_id"}, "gate")
+    _string_array(raw["reason_codes"], "gate reason_codes")
+    _string_array(raw["evidence_keys"], "gate evidence_keys")
     return GateResult(Stage(raw["stage"]), GateState(raw["state"]),
                       tuple(ReasonCode(x) for x in raw.get("reason_codes", [])),
                       tuple(str(x) for x in raw.get("evidence_keys", [])), str(raw.get("detail", "")),
@@ -306,9 +343,17 @@ def _gate_from_dict(value: Any) -> GateResult:
 
 def _run_from_dict(value: Any) -> CollectorRun:
     raw = _mapping(value, "collector_run")
-    return CollectorRun(str(raw["collector_id"]), str(raw["version"]), int(raw["elapsed_ms"]),
-                        int(raw["exit_status"]) if raw.get("exit_status") is not None else None,
-                        bool(raw.get("timed_out", False)), tuple(str(x) for x in raw.get("diagnostics", [])),
+    _require_keys(raw, {"collector_id", "version", "elapsed_ms", "exit_status", "timed_out",
+                        "diagnostics", "repo_id"}, "collector_run")
+    _string_array(raw["diagnostics"], "collector diagnostics")
+    if type(raw["elapsed_ms"]) is not int or raw["elapsed_ms"] < 0:
+        raise SnapshotValidationError("collector elapsed_ms must be a non-negative integer")
+    if raw["exit_status"] is not None and type(raw["exit_status"]) is not int:
+        raise SnapshotValidationError("collector exit_status must be an integer or null")
+    if type(raw["timed_out"]) is not bool:
+        raise SnapshotValidationError("collector timed_out must be boolean")
+    return CollectorRun(str(raw["collector_id"]), str(raw["version"]), raw["elapsed_ms"],
+                        raw["exit_status"], raw["timed_out"], tuple(raw["diagnostics"]),
                         _optional_str(raw.get("repo_id")))
 
 
@@ -365,3 +410,17 @@ def _sequence(value: Any, label: str) -> list[Any]:
 
 def _optional_str(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _is_hex(value: str) -> bool:
+    return value == value.lower() and all(character in "0123456789abcdef" for character in value)
+
+
+def _require_sha(value: str, label: str) -> None:
+    if len(value) != 64 or not _is_hex(value):
+        raise SnapshotValidationError(f"{label} must be a lowercase SHA-256")
+
+
+def _string_array(value: Any, label: str) -> None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise SnapshotValidationError(f"{label} must be an array of strings")

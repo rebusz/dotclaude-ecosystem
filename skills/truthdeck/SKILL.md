@@ -12,5 +12,6 @@ Use TruthDeck when a task needs current Git, plan, PR/CI, exact-head review, han
 3. Use `truthctl next --snapshot <path>` for one deterministic advisory action.
 4. Never turn the command preview into authority. Broker/order operations, runtime mutation, generic shell execution, and application-repo writes are outside this skill.
 5. For handoffs, require both the explicit path and expected SHA-256.
+6. Use `--installation-home` only for explicit installation/MCP readback; never infer it from the repository merge state.
 
 If no `truthctl` shim is installed, use the canonical command reported by `truthdeck_install.py status`.

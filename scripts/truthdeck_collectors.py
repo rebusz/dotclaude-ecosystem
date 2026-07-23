@@ -111,26 +111,49 @@ def run_bounded(argv: Iterable[str], *, cwd: Path, deadline: float,
             _stop(process)
 
 
+def read_bounded(path: Path, *, deadline: float, max_bytes: int) -> bytes:
+    resolved = path.resolve(strict=True)
+    if resolved.stat().st_size > max_bytes:
+        raise CollectorOutputLimit(f"evidence file exceeded {max_bytes} bytes")
+    payload = bytearray()
+    with resolved.open("rb") as handle:
+        while chunk := handle.read(min(65_536, max_bytes + 1 - len(payload))):
+            payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise CollectorOutputLimit(f"evidence file exceeded {max_bytes} bytes")
+            if time.monotonic() >= deadline:
+                raise CollectorTimeout("evidence read deadline exceeded")
+    return bytes(payload)
+
+
 def collect_concurrently(collectors: Mapping[str, Collector], *, policy: Policy,
                          deadline: float | None = None) -> tuple[CollectorResult, ...]:
     deadline = deadline if deadline is not None else time.monotonic() + policy.total_deadline_s
     results: list[CollectorResult] = []
     workers = min(max(1, policy.max_workers), 4, max(1, len(collectors)))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {pool.submit(collector, deadline): collector_id for collector_id, collector in collectors.items()}
         for future, collector_id in sorted(futures.items(), key=lambda item: item[1]):
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 results.append(future.result(timeout=remaining))
-            except concurrent.futures.TimeoutError as exc:
-                raise CollectorTimeout(f"total deadline exceeded in {collector_id}") from exc
+            except concurrent.futures.TimeoutError:
+                results.append(CollectorResult(
+                    collector_id, (), CollectorRun(collector_id, "1", int(policy.total_deadline_s * 1000),
+                                                    None, True, (ReasonCode.COLLECTOR_TIMEOUT.value,)),
+                ))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return tuple(sorted(results, key=lambda x: (x.run.repo_id or "", x.collector_id)))
 
 
-def collect_plan(path: Path, *, observed_at_utc: str, repo_id: str) -> CollectorResult:
+def collect_plan(path: Path, *, observed_at_utc: str, repo_id: str, deadline: float | None = None,
+                 max_output_bytes: int = 1_048_576) -> CollectorResult:
     """Parse only the small canonical frontmatter contract; prose is never authority."""
     started = time.monotonic()
-    text = path.resolve(strict=True).read_text(encoding="utf-8")
+    text = read_bounded(path, deadline=deadline or time.monotonic() + 5,
+                        max_bytes=max_output_bytes).decode("utf-8").replace("\r\n", "\n")
     frontmatter: dict[str, str] = {}
     if text.startswith("---\n"):
         end = text.find("\n---", 4)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime
 from typing import Iterable
 
@@ -9,22 +10,39 @@ from truthdeck_model import Fact, FactState, GateResult, GateState, NextAction, 
 
 
 def evaluate(facts: Iterable[Fact], *, required: Iterable[Stage] = STAGE_ORDER,
-             evaluated_at: datetime | None = None, boundary_violation: bool = False) -> tuple[tuple[GateResult, ...], NextAction]:
+             evaluated_at: datetime | None = None, boundary_violation: bool = False,
+             repo_order: Iterable[str] | None = None) -> tuple[tuple[GateResult, ...], NextAction]:
     fact_list = tuple(facts)
-    repos = sorted({f.repo_id for f in fact_list if f.repo_id}) or [None]
+    observed_repos = {f.repo_id for f in fact_list if f.repo_id}
+    repos = [repo for repo in (repo_order or ()) if repo in observed_repos]
+    repos.extend(sorted(observed_repos - set(repos)))
+    repos = repos or [None]
     required_set = set(required)
     gates: list[GateResult] = []
     for repo in repos:
-        index = {f.key: _freshen(f, evaluated_at) for f in fact_list if f.repo_id in {repo, None}}
+        index = _resolve_index(tuple(_freshen(f, evaluated_at) for f in fact_list if f.repo_id in {repo, None}))
         gates.extend(_repo_gates(index, repo))
-    gates.sort(key=lambda g: ((g.repo_id or ""), STAGE_ORDER.index(g.stage)))
+    conflicts = find_conflicts(fact_list)
+    if conflicts and required_set:
+        earliest = min(required_set, key=STAGE_ORDER.index)
+        affected = {item.split(":", 1)[0] for item in conflicts}
+        for position, gate in enumerate(gates):
+            if gate.stage == earliest and ("global" in affected or (gate.repo_id or "global") in affected):
+                gates[position] = GateResult(
+                    earliest, GateState.UNKNOWN, (ReasonCode.EVIDENCE_CONFLICT,),
+                    tuple(conflicts), "Eligible evidence sources conflict.", gate.repo_id,
+                )
+    repo_rank = {repo: index for index, repo in enumerate(repos)}
+    gates.sort(key=lambda g: (repo_rank.get(g.repo_id, len(repo_rank)), STAGE_ORDER.index(g.stage)))
     risk = next((str(f.value) for f in fact_list if f.key == "plan.risk" and _eligible(f)), "UNKNOWN")
-    action = select_next_action(gates, required_set, boundary_violation=boundary_violation, risk=risk)
+    action = select_next_action(gates, required_set, boundary_violation=boundary_violation,
+                                risk=risk, repo_order=repos)
     return tuple(gates), action
 
 
 def select_next_action(gates: Iterable[GateResult], required: set[Stage], *,
-                       boundary_violation: bool = False, risk: str = "UNKNOWN") -> NextAction:
+                       boundary_violation: bool = False, risk: str = "UNKNOWN",
+                       repo_order: Iterable[str | None] = ()) -> NextAction:
     if boundary_violation:
         return NextAction("boundary_refusal", "Stop: request exceeds a declared read-only boundary.",
                           reason_codes=(ReasonCode.BOUNDARY_REFUSAL,), authorization="operator_required", risk=risk)
@@ -33,7 +51,8 @@ def select_next_action(gates: Iterable[GateResult], required: set[Stage], *,
     pending = [g for g in candidates if g.state in rank]
     if not pending:
         return NextAction("ready_for_operator_review", "All requested evidence gates pass or are explicitly not applicable.", risk=risk)
-    pending.sort(key=lambda g: (rank[g.state], STAGE_ORDER.index(g.stage), g.repo_id or ""))
+    repo_rank = {repo: index for index, repo in enumerate(repo_order)}
+    pending.sort(key=lambda g: (STAGE_ORDER.index(g.stage), repo_rank.get(g.repo_id, len(repo_rank)), rank[g.state]))
     gate = pending[0]
     return NextAction(
         f"verify_{gate.stage.value}",
@@ -64,6 +83,9 @@ def _planned(f: dict[str, Fact], repo: str | None) -> GateResult:
     missing = _missing(f, required)
     if missing:
         return _unknown(Stage.PLANNED, missing, repo, f)
+    if f["plan.parseable"].value is not True or f["plan.risk"].value not in {"R0", "R1", "R2", "R3"}:
+        return GateResult(Stage.PLANNED, GateState.UNKNOWN, (ReasonCode.COLLECTOR_OUTPUT_INVALID,),
+                          required, "Canonical plan metadata is malformed or incomplete.", repo)
     if bool(f["plan.blocked"].value):
         return GateResult(Stage.PLANNED, GateState.BLOCKED, evidence_keys=required, detail="Canonical plan is blocked.", repo_id=repo)
     if f["plan.risk"].value in {"R2", "R3"}:
@@ -114,12 +136,25 @@ def _ci(f: dict[str, Fact], repo: str | None) -> GateResult:
 
 
 def _merged(f: dict[str, Fact], repo: str | None) -> GateResult:
-    fact = f.get("pr.merged") or f.get("git.merged")
-    if not _eligible(fact):
+    candidates = [fact for key in ("pr.merged", "git.merged") if _eligible(fact := f.get(key))]
+    if not candidates:
         return _unknown(Stage.MERGED, ("pr.merged", "git.merged"), repo, f)
-    if not fact.value:
-        return GateResult(Stage.MERGED, GateState.HOLD, (ReasonCode.MERGE_NOT_PROVEN,), (fact.key,), "Merge is not proven on the declared base.", repo)
-    return GateResult(Stage.MERGED, GateState.PASS, evidence_keys=(fact.key,), repo_id=repo)
+    git_merged = f.get("git.merged")
+    if _eligible(git_merged) and git_merged.value:
+        return GateResult(Stage.MERGED, GateState.PASS, evidence_keys=(git_merged.key,), repo_id=repo)
+    pr_merged, pr_head = f.get("pr.merged"), f.get("pr.head")
+    implementation = f.get("implementation.head") or f.get("git.head")
+    if _eligible(pr_merged) and pr_merged.value:
+        if not all(_eligible(item) for item in (pr_head, implementation)) or pr_head.value != implementation.value:
+            return GateResult(Stage.MERGED, GateState.BLOCKED, (ReasonCode.PR_HEAD_MISMATCH,),
+                              ("pr.merged", "pr.head", "implementation.head"),
+                              "Merged PR head does not match the implementation head.", repo)
+        return GateResult(Stage.MERGED, GateState.PASS, evidence_keys=(pr_merged.key, pr_head.key), repo_id=repo)
+    if not any(fact.value for fact in candidates):
+        return GateResult(Stage.MERGED, GateState.HOLD, (ReasonCode.MERGE_NOT_PROVEN,),
+                          tuple(fact.key for fact in candidates), "Merge is not proven on the declared base.", repo)
+    return GateResult(Stage.MERGED, GateState.PASS,
+                      evidence_keys=tuple(fact.key for fact in candidates if fact.value), repo_id=repo)
 
 
 def _runtime(f: dict[str, Fact], repo: str | None) -> GateResult:
@@ -132,7 +167,9 @@ def _runtime(f: dict[str, Fact], repo: str | None) -> GateResult:
     if sample.value <= 0:
         return GateResult(Stage.RUNTIME_PROVEN, GateState.UNKNOWN, (ReasonCode.NO_SAMPLE,), (sample.key,), "Runtime evidence contains no sample.", repo)
     expected, actual = f.get("runtime.expected_build"), f.get("runtime.build")
-    if _eligible(expected) and (not _eligible(actual) or expected.value != actual.value):
+    if not all(_eligible(item) for item in (expected, actual)):
+        return _unknown(Stage.RUNTIME_PROVEN, ("runtime.expected_build", "runtime.build"), repo, f)
+    if expected.value != actual.value:
         return GateResult(Stage.RUNTIME_PROVEN, GateState.BLOCKED, (ReasonCode.RUNTIME_BUILD_MISMATCH,),
                           (expected.key, "runtime.build"), "Runtime build does not match expected build.", repo)
     if not ready.value:
@@ -141,9 +178,35 @@ def _runtime(f: dict[str, Fact], repo: str | None) -> GateResult:
 
 
 def _freshen(fact: Fact, evaluated_at: datetime | None) -> Fact:
-    if evaluated_at and fact.fresh_until_utc and parse_utc(fact.fresh_until_utc) < evaluated_at:
+    if evaluated_at and fact.fresh_until_utc and parse_utc(fact.fresh_until_utc) <= evaluated_at:
         return Fact(**{**fact.__dict__, "state": FactState.STALE})
     return fact
+
+
+def find_conflicts(facts: Iterable[Fact]) -> tuple[str, ...]:
+    groups: dict[tuple[str | None, str], list[Fact]] = {}
+    for fact in facts:
+        if _eligible(fact):
+            groups.setdefault((fact.repo_id, fact.key), []).append(fact)
+    return tuple(
+        f"{repo or 'global'}:{key}"
+        for (repo, key), group in sorted(groups.items(), key=lambda item: str(item[0]))
+        if len({(fact.evidence_sha256, repr(fact.value)) for fact in group}) > 1
+    )
+
+
+def _resolve_index(facts: tuple[Fact, ...]) -> dict[str, Fact]:
+    groups: dict[str, list[Fact]] = {}
+    for fact in facts:
+        groups.setdefault(fact.key, []).append(fact)
+    resolved = {}
+    for key, group in groups.items():
+        eligible = [fact for fact in group if _eligible(fact)]
+        if len({(fact.evidence_sha256, repr(fact.value)) for fact in eligible}) > 1:
+            resolved[key] = dataclasses.replace(eligible[0], value=None, state=FactState.CONFLICT)
+        else:
+            resolved[key] = eligible[0] if eligible else group[-1]
+    return resolved
 
 
 def _eligible(fact: Fact | None) -> bool:

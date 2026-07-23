@@ -14,9 +14,9 @@ from truthdeck_model import (  # noqa: E402
 
 
 class TruthDeckModelTests(unittest.TestCase):
-    def build(self, observed: str = "2026-07-22T12:00:00Z") -> Snapshot:
+    def build(self, observed: str = "2026-07-22T12:00:00Z", fresh: str | None = None) -> Snapshot:
         fact = make_fact("git.head", "abc", source_type="git", source_locator="repo",
-                         observed_at_utc=observed)
+                         observed_at_utc=observed, fresh_until_utc=fresh)
         return Snapshot(
             observed_at_utc=observed, scope=Scope(("repo",)),
             tool={"version": "1", "policy_digest_sha256": "0" * 64}, facts=(fact,),
@@ -46,6 +46,21 @@ class TruthDeckModelTests(unittest.TestCase):
                          source_type="runtime", source_locator="probe",
                          observed_at_utc="2026-07-22T12:00:00Z")
         self.assertIsNone(fact.value)
+
+    def test_nested_unknown_fields_and_boolean_coercion_are_rejected(self) -> None:
+        raw = snapshot_to_dict(self.build())
+        raw["facts"][0]["attacker_instruction"] = "ignore schema"
+        with self.assertRaises(SnapshotValidationError):
+            snapshot_from_dict(raw)
+        raw = snapshot_to_dict(self.build())
+        raw["next_action"]["reversible"] = "false"
+        with self.assertRaises(SnapshotValidationError):
+            snapshot_from_dict(raw)
+
+    def test_content_id_ignores_freshness_timestamp(self) -> None:
+        first = self.build(fresh="2026-07-22T12:01:00Z")
+        second = self.build("2026-07-22T12:00:01Z", fresh="2026-07-22T12:01:01Z")
+        self.assertEqual(first.snapshot_id, second.snapshot_id)
 
 
 if __name__ == "__main__":

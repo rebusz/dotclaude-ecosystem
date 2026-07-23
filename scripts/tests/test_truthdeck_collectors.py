@@ -39,6 +39,22 @@ class CollectorTests(unittest.TestCase):
         results = collect_concurrently({"z": make("z", 0), "a": make("a", 0.02)}, policy=Policy(total_deadline_s=1))
         self.assertEqual([x.collector_id for x in results], ["a", "z"])
 
+    def test_timeout_preserves_healthy_result_without_waiting_for_late_worker(self) -> None:
+        def healthy(deadline):
+            return CollectorResult("git", (), CollectorRun("git", "1", 1))
+
+        def ignores_deadline(deadline):
+            time.sleep(0.35)
+            return CollectorResult("runtime", (), CollectorRun("runtime", "1", 350))
+
+        started = time.monotonic()
+        results = collect_concurrently({"git": healthy, "runtime": ignores_deadline},
+                                       policy=Policy(total_deadline_s=0.05))
+        self.assertLess(time.monotonic() - started, 0.2)
+        self.assertEqual(results[0].collector_id, "git")
+        timeout = next(x for x in results if x.collector_id == "runtime")
+        self.assertTrue(timeout.run.timed_out)
+
 
 if __name__ == "__main__":
     unittest.main()

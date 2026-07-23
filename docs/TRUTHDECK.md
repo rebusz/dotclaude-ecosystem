@@ -14,6 +14,8 @@ Use `--no-store` only for tests. The default append-only store is `~/.truthdeck/
 
 Add `--pr N`, `--review-packet PATH`, and `--review-result PATH` only when those explicit sources are in scope. `--require planned,implemented` controls readiness without hiding the other reported stages.
 
+Registry `task_aliases` can bind a name to absolute repo/plan paths (and, optionally, an exact handoff path plus SHA-256). Use `snapshot --task NAME` or `verify-handoff --task NAME`; aliases cannot be mixed with explicit scope arguments.
+
 Verify a handoff with both integrity and live Git reference checks:
 
 ```powershell
@@ -39,6 +41,8 @@ Runtime execution is possible only through code-owned probe IDs. TSU v1 includes
 ## Optional MCP
 
 Install `requirements-truthdeck-mcp.txt`, then activate with `truthdeck_install.py install --enable-mcp codex`, `claude`, or `both`. The stdio server exposes exactly four tools: snapshot, next, verify handoff, and diff. Installer edits are marker/ownership checked and backed up.
+
+For an explicit self-readback, add `--installation-home <home>` to `snapshot`. This emits separate facts for CLI installation, Codex/Claude skill discovery, and each host's MCP registration; these facts do not change lifecycle gates.
 
 ## Rollback
 
