@@ -1,10 +1,10 @@
 ---
 title: TruthDeck / truthctl - Agent Evidence Control Plane
 date: 2026-07-22
-status: in-progress
-status_detail: r1-fwf-implemented-local-green-awaiting-exact-head-review
+status: shipped
+status_detail: r1-fwf-shipped-active-home-verified
 risk: R1
-phase: r1-fwf-exact-head-review
+phase: shipped
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, evidence, truth, cli, mcp]
 related: [design/plans/2026-06-27_global_agent_workflow_os.md, design/plans/2026-07-21_global_fwf_fwp_contract_reset.md]
@@ -1150,7 +1150,7 @@ PowerShell and agent context.
   - Surfaced by: deployment/security review.
   - Files: skill, MCP adapter, requirements, installers, installer tests.
   - Verify: parity, schema-discovery hold, backup/round-trip/ownership mismatch tests.
-- [ ] **T6 (P1, human ~1h / Codex ~10m)** - closeout - run full validation, exact-head
+- [x] **T6 (P1, human ~1h / Codex ~10m)** - closeout - run full validation, exact-head
   independent review, single paid CI transition, merge/sync, and post-install self-snapshot.
   - Surfaced by: deployment and Definition of Done.
   - Files: evidence artifacts and terminal plan status only.
@@ -1438,7 +1438,7 @@ keeps schema/core ownership in Lane A and validates each merge point. Do not spl
   hash-owned installer with fake-home rollback tests and non-mutating status.
 - [x] **E5 (P1, human ~1h / Codex ~10m)** - add the draft-skipped Windows CI gate and prove
   focused/full/scoped-lint/compile/diff checks locally before readying once.
-- [ ] **E6 (P1, human ~1h / Codex ~10m)** - exact-head review, fixes, merge/sync, active-home
+- [x] **E6 (P1, human ~1h / Codex ~10m)** - exact-head review, fixes, merge/sync, active-home
   install/readback, and TruthDeck self-snapshot.
 
 No new TODO is created. Package publication, GUI, signing, daemon/cache, and workflow
@@ -1549,22 +1549,52 @@ Local evidence at implementation checkpoint:
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;
 - MCP server construction over 20 runs: p95 `0.0137s`, max `0.0292s`, exactly four tools.
 
-The exact-head review, PR CI/merge, operator-checkout sync, active-home installation, and
-post-install self-snapshot remain Stage 6 evidence gates; local green status does not imply
-any of them.
+Stage 6 closed through three squash-merged PRs. PR #41 delivered the R1 implementation at
+merge `ee3768ce8dd34be67cae4abc7e79fb07b76d55a7`; PR #42 corrected durable shim selection and
+merged as `9649de6d023cf8b8a70fe4c14433d00fbe1649ba`; PR #43 fixed semantic recognition of an
+already-owned Windows TOML MCP block and merged as
+`27179a168b48f514fb90e14b148dc21b1f26747f`. Local `main` and `origin/main` were then
+identical at the final merge head.
+
+Final PR #43 evidence is bound to exact pre-squash head
+`2a9d2f3361eb818fde2e20677a5b434530fbee06`. Kimi K3 Swarm Max received the complete
+provider-neutral packet, observed the end-of-packet canary, confirmed the two earlier P2
+findings were resolved, and returned no ship-blocking findings. Its four P3 observations
+(Python-floor documentation, guided interpreter-drift recovery, extra-field freshness, and
+whole-file TOML troubleshooting) are recorded as non-blocking FIX-LATER notes. GitHub check
+`truthdeck` passed in run `29977964060` before merge.
+
+Final local evidence on that exact implementation head:
+
+- installer suite: `12 passed`;
+- full `scripts/tests`: `175 passed, 2 subtests passed`;
+- scoped Ruff, `compileall`, and `git diff --check`: PASS.
+
+The active-home reinstall from merged `main` reports `state=installed`, `path_state=PASS`,
+`drift=[]`, both discovery skills installed, and both Codex/Claude MCP registrations active.
+The durable shim is `C:/Users/dszub/.local/bin/truthctl.cmd`; the prior ephemeral owned shim
+was removed. Both the canonical command and shim report TruthDeck `1.0.0`.
+
+Post-install self-snapshot `12ffb8205b1cfce4a376a6b5` is stored at
+`C:/Users/dszub/.truthdeck/snapshots/rebusz-dotclaude-ecosystem/20260723T035510Z-12ffb8205b1cfce4a376a6b5-34464-dk6x7jyo.json`.
+Its requested gates are `planned=PASS`, `implemented=PASS`, `merged=PASS`, and
+`runtime_proven=NOT_APPLICABLE`; installation and both MCP-active facts are observed. The
+bounded GitHub collector timed out in this self-snapshot, so `ci` and `exact_head_reviewed`
+remain UNKNOWN there rather than being falsely promoted; the independent exact-head artifact
+and GitHub run above are their separate authoritative evidence.
 
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | HOLD_SCOPE, 0 critical gaps |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | PENDING | exact-head implementation review pending |
+| Codex Review | `/codex review` | Independent 2nd opinion | 3 | CLEAR | Poolside/Gemini/Kimi exact-head passes across final implementation/follow-ups; final head 0 ship-blocking findings |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 12 issues/gaps resolved, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | not required by R1 workflow |
 
 - **CROSS-MODEL:** R1 audit completed with 2/5 lanes; 10 valid contract amendments applied,
   stale/duplicative findings discarded, and no boundary-breaking P1 remained.
-- **VERDICT:** IMPLEMENTED + LOCAL VALIDATION PASS - exact-head review and landing pending.
+- **VERDICT:** SHIPPED - exact-head review CLEAR, CI PASS, all PRs merged, active-home install and self-snapshot verified.
 
 NO UNRESOLVED DECISIONS
