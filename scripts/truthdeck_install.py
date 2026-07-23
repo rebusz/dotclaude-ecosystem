@@ -104,6 +104,13 @@ def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous
     shim = _install_shim(home, bin_dir / "truthctl.py", effective_path, set(existing_files))
     if shim:
         files[str(shim.relative_to(home))] = _sha(shim)
+    for relative, digest in existing_files.items():
+        if relative in files:
+            continue
+        stale = _owned_target(home, relative)
+        if stale.exists() and _sha(stale) != digest:
+            raise InstallError(f"refusing to remove drifted owned file: {stale}")
+        stale.unlink(missing_ok=True)
     config_backups: list[str] = []
     if previous_mcp in {"codex", "both"} and enable_mcp not in {"codex", "both"}:
         _remove_codex(home)
@@ -117,13 +124,6 @@ def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous
         backup = _register_claude(home, bin_dir / "truthdeck_mcp.py")
         if backup:
             config_backups.append(str(backup.relative_to(home)))
-    for relative, digest in existing_files.items():
-        if relative in files:
-            continue
-        stale = _owned_target(home, relative)
-        if stale.exists() and _sha(stale) != digest:
-            raise InstallError(f"refusing to remove drifted owned file: {stale}")
-        stale.unlink(missing_ok=True)
     manifest = {
         "schema_version": MANIFEST_SCHEMA, "files": files, "mcp": enable_mcp,
         "config_backups": config_backups,

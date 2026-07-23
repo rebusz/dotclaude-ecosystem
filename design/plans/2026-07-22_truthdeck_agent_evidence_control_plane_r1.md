@@ -1525,6 +1525,14 @@ returned the resolved long path. The product behavior was unchanged; the migrati
 now compares canonical `resolve()` paths. This single test-only fix is the sole follow-up push
 to the ready PR and invalidates the previous exact-head review as required.
 
+The next Gemini exact-head verdict blocked on a claimed missing rollback snapshot, but the
+claim was factually stale: `install()` already appends every manifest-owned target before
+constructing `before`, all mutations are wrapped by `_rollback(before)`, and the new manifest
+is written last. The valid conservative part was accepted anyway: stale owned-file cleanup now
+runs before Codex/Claude MCP registration, further reducing the external-config mutation window.
+The other P2s were rejected because `home` is resolved at function entry and custom bin paths
+are intentionally `HOLD` outside the v1 durable allowlist.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
