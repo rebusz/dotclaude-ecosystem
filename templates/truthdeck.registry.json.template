@@ -1,0 +1,40 @@
+{
+  "schema_version": "truthdeck.registry.v1",
+  "defaults": {
+    "base_ref": "origin/main",
+    "command_timeout_s": 5.0,
+    "total_deadline_s": 15.0,
+    "max_output_bytes": 1048576
+  },
+  "profiles": {
+    "generic": {
+      "repo_names": [],
+      "collectors": ["git", "plan", "github", "review", "handoff", "artifact"],
+      "runtime_applicable": false,
+      "runtime_probe_ids": [],
+      "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
+    },
+    "dotclaude-ecosystem": {
+      "repo_names": ["dotclaude-ecosystem"],
+      "collectors": ["git", "plan", "github", "review", "handoff", "artifact"],
+      "runtime_applicable": false,
+      "runtime_probe_ids": [],
+      "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
+    },
+    "tsu": {
+      "repo_names": ["TSU"],
+      "collectors": ["git", "plan", "github", "review", "handoff", "runtime", "artifact"],
+      "runtime_applicable": true,
+      "runtime_probe_ids": ["tsu.remote_preflight.v1", "tsu.next_gate_status.v1"],
+      "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
+    },
+    "tsignal-5.0": {
+      "repo_names": ["Tsignal 5.0"],
+      "collectors": ["git", "plan", "github", "review", "handoff", "runtime", "artifact"],
+      "runtime_applicable": true,
+      "runtime_probe_ids": [],
+      "required_stages": ["planned", "implemented", "exact_head_reviewed", "ci", "merged", "runtime_proven"]
+    }
+  },
+  "task_aliases": {}
+}

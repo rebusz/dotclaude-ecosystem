@@ -1,0 +1,25 @@
+name: TruthDeck CI
+
+on:
+  pull_request:
+    paths:
+      - "scripts/truthdeck*.py"
+      - "scripts/tests/test_truthdeck*.py"
+      - "skills/truthdeck/**"
+      - "templates/truthdeck.registry.json.template"
+      - "requirements-truthdeck-mcp.txt"
+      - ".github/workflows/truthdeck-ci.yml"
+
+jobs:
+  truthdeck:
+    if: github.event.pull_request.draft == false
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest ruff -r requirements-truthdeck-mcp.txt
+      - run: python -m pytest -q scripts/tests/test_truthdeck_model.py scripts/tests/test_truthdeck_collectors.py scripts/tests/test_truthdeck_git.py scripts/tests/test_truthdeck_github.py scripts/tests/test_truthdeck_handoff.py scripts/tests/test_truthdeck_storage.py scripts/tests/test_truthdeck_render.py scripts/tests/test_truthdeck_gates.py scripts/tests/test_truthdeck_cli.py scripts/tests/test_truthdeck_profiles.py scripts/tests/test_truthdeck_runtime.py scripts/tests/test_truthdeck_mcp.py scripts/tests/test_truthdeck_install.py
+      - run: python -m ruff check scripts/truthdeck*.py scripts/tests/test_truthdeck*.py
+      - run: python -m compileall -q scripts

@@ -2,9 +2,9 @@
 title: TruthDeck / truthctl - Agent Evidence Control Plane
 date: 2026-07-22
 status: in-progress
-status_detail: r1-fwf-eng-reviewed-ready-to-implement
+status_detail: r1-fwf-implemented-local-green-awaiting-exact-head-review
 risk: R1
-phase: r1-fwf-implementation
+phase: r1-fwf-exact-head-review
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, evidence, truth, cli, mcp]
 related: [design/plans/2026-06-27_global_agent_workflow_os.md, design/plans/2026-07-21_global_fwf_fwp_contract_reset.md]
@@ -757,22 +757,22 @@ Snapshot deletion is outside rollback and requires a separate explicit destructi
 
 ## Definition of Done
 
-- [ ] Canonical `truthdeck.snapshot.v1` schema and reason-code registry are documented and tested.
-- [ ] Core/CLI are dependency-free, deterministic, concurrent-safe, and Windows-first.
-- [ ] Git, plan, GitHub, review, handoff, artifact, and allowlisted runtime collectors exist.
-- [ ] Unknown/stale/conflict/timeout evidence cannot pass any required gate.
-- [ ] Planned, implemented, exact-head reviewed, CI, merged, and runtime states remain distinct.
-- [ ] One deterministic next action includes risk, reversibility, authorization, evidence,
+- [x] Canonical `truthdeck.snapshot.v1` schema and reason-code registry are documented and tested.
+- [x] Core/CLI are dependency-free, deterministic, concurrent-safe, and Windows-first.
+- [x] Git, plan, GitHub, review, handoff, artifact, and allowlisted runtime collectors exist.
+- [x] Unknown/stale/conflict/timeout evidence cannot pass any required gate.
+- [x] Planned, implemented, exact-head reviewed, CI, merged, and runtime states remain distinct.
+- [x] One deterministic next action includes risk, reversibility, authorization, evidence,
       and forbidden actions.
-- [ ] Handoff verification separates hash integrity from live freshness and permission.
-- [ ] TSU/Tsignal profiles are read-only and prove no broker/order-path access.
-- [ ] CLI and four-tool MCP adapter produce identical normalized results.
-- [ ] Installer is idempotent, backs up host config, and removes only owned entries.
-- [ ] Focused tests, full `scripts/tests`, scoped Ruff, compileall, and diff-check pass.
+- [x] Handoff verification separates hash integrity from live freshness and permission.
+- [x] TSU/Tsignal profiles are read-only and prove no broker/order-path access.
+- [x] CLI and four-tool MCP adapter produce identical normalized results.
+- [x] Installer is idempotent, backs up host config, and removes only owned entries.
+- [x] Focused tests, full `scripts/tests`, scoped Ruff, compileall, and diff-check pass.
 - [ ] Exact-head independent review has no unresolved ship-blocking findings.
 - [ ] Draft PR is readied once, merged, and the operator checkout is fast-forwarded.
 - [ ] A self-snapshot truthfully distinguishes repository merge from installed/MCP-active state.
-- [ ] Documentation enables a new agent to produce its first snapshot in under five minutes.
+- [x] Documentation enables a new agent to produce its first snapshot in under five minutes.
 
 ## Author pre-mortem
 
@@ -1125,27 +1125,27 @@ PowerShell and agent context.
 
 ### Implementation tasks synthesized from CEO review
 
-- [ ] **T1 (P1, human ~2h / Codex ~15m)** - core contract - implement canonical model,
+- [x] **T1 (P1, human ~2h / Codex ~15m)** - core contract - implement canonical model,
   injectable clock, strict validation, stable reason codes, and independent gates.
   - Surfaced by: architecture/data-flow review.
   - Files: `scripts/truthdeck_model.py`, `scripts/truthdeck_gates.py`, tests.
   - Verify: canonical/TTL/state-transition unit matrix.
-- [ ] **T2 (P1, human ~3h / Codex ~20m)** - collector boundary - implement byte/time/path
+- [x] **T2 (P1, human ~3h / Codex ~20m)** - collector boundary - implement byte/time/path
   bounds, fixed argv/probe IDs, redaction, and named failure mapping.
   - Surfaced by: error/security review.
   - Files: collector, Git, GitHub, handoff, profile/runtime modules, tests.
   - Verify: hostile fake-executable and no-write contract suite.
-- [ ] **T3 (P1, human ~2h / Codex ~15m)** - storage/render - make concurrent immutable
+- [x] **T3 (P1, human ~2h / Codex ~15m)** - storage/render - make concurrent immutable
   artifacts, atomic latest degradation, safe bounded Markdown, and deterministic diff.
   - Surfaced by: storage collision and hostile rendering findings.
   - Files: `scripts/truthdeck_storage.py`, `scripts/truthdeck_render.py`, tests.
   - Verify: concurrent writers, replace failure, digest and hostile-text tests.
-- [ ] **T4 (P1, human ~2h / Codex ~15m)** - CLI/profile integration - implement commands,
+- [x] **T4 (P1, human ~2h / Codex ~15m)** - CLI/profile integration - implement commands,
   repo namespaces, one-action selection, and read-only TSU/Tsignal profile contracts.
   - Surfaced by: interaction/multi-repo review.
   - Files: `scripts/truthctl.py`, profile fixtures, docs, tests.
   - Verify: temporary-repo E2E and DISARMED/no-order boundary tests.
-- [ ] **T5 (P2, human ~2h / Codex ~15m)** - host adapters - add thin skill, exact four-tool
+- [x] **T5 (P2, human ~2h / Codex ~15m)** - host adapters - add thin skill, exact four-tool
   MCP parity, and ownership-checked idempotent install/uninstall.
   - Surfaced by: deployment/security review.
   - Files: skill, MCP adapter, requirements, installers, installer tests.
@@ -1428,15 +1428,15 @@ keeps schema/core ownership in Lane A and validates each merge point. Do not spl
 
 ### Engineering implementation tasks
 
-- [ ] **E1 (P1, human ~2h / Codex ~15m)** - freeze schemas, fact/probe registries,
+- [x] **E1 (P1, human ~2h / Codex ~15m)** - freeze schemas, fact/probe registries,
   canonicalization, clock, and golden hostile fixtures before production collectors.
-- [ ] **E2 (P1, human ~4h / Codex ~30m)** - build model, bounded runner, adapters, storage,
+- [x] **E2 (P1, human ~4h / Codex ~30m)** - build model, bounded runner, adapters, storage,
   renderer, gates, and CLI with the full branch matrix above.
-- [ ] **E3 (P1, human ~2h / Codex ~15m)** - add read-only TSU/Tsignal candidate probes only
+- [x] **E3 (P1, human ~2h / Codex ~15m)** - add read-only TSU/Tsignal candidate probes only
   when existing commands satisfy the static contract; otherwise emit unavailable facts.
-- [ ] **E4 (P1, human ~3h / Codex ~20m)** - build four-tool MCP adapter and dedicated
+- [x] **E4 (P1, human ~3h / Codex ~20m)** - build four-tool MCP adapter and dedicated
   hash-owned installer with fake-home rollback tests and non-mutating status.
-- [ ] **E5 (P1, human ~1h / Codex ~10m)** - add the draft-skipped Windows CI gate and prove
+- [x] **E5 (P1, human ~1h / Codex ~10m)** - add the draft-skipped Windows CI gate and prove
   focused/full/scoped-lint/compile/diff checks locally before readying once.
 - [ ] **E6 (P1, human ~1h / Codex ~10m)** - exact-head review, fixes, merge/sync, active-home
   install/readback, and TruthDeck self-snapshot.
@@ -1459,18 +1459,47 @@ local gstack project directory; JSONL aggregation was skipped because `jq` is un
 | Outside voice | Stage 2 audit already supplied; no duplicate panel |
 | Unresolved decisions | 0 |
 
+## Implementation record - Stage 4 `/fwf`
+
+Implementation completed on `codex/truthdeck-r1` against base
+`185163d47bc4bba61b89a23ecf9e43ddbd0128e3`. The delivered surface contains the
+stdlib-only model/CLI, bounded concurrent collectors, immutable store, deterministic gates
+and renderer, fixed TSU probe allowlist, explicit unavailable Tsignal runtime profile,
+four-tool MCP adapter, hash-owned installer, thin skill, operator documentation, and a
+draft-skipped Windows CI workflow.
+
+Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
+Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
+TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
+stdout-only readback exists. The TSU allowlist contains only the existing
+`tsu_remote_preflight.py --json` and `tsu_next_gate_status.py --json` tools, whose source
+contracts are explicitly read-only and broker/order-path free.
+
+Local evidence at implementation checkpoint:
+
+- focused TruthDeck suite: `41 passed`;
+- full `scripts/tests`: `143 passed, 2 subtests passed`;
+- 50 consecutive concurrent-storage stress runs: PASS;
+- scoped Ruff, `compileall`, and `git diff --check`: PASS;
+- local Git/plan snapshot benchmark over 20 runs: p95 `0.7121s`, max `0.7129s`;
+- MCP server construction over 20 runs: p95 `0.0054s`, exactly four tools.
+
+The exact-head review, PR CI/merge, operator-checkout sync, active-home installation, and
+post-install self-snapshot remain Stage 6 evidence gates; local green status does not imply
+any of them.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | HOLD_SCOPE, 0 critical gaps |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | exact-head implementation review pending |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | PENDING | exact-head implementation review pending |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 12 issues/gaps resolved, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | not required by R1 workflow |
 
 - **CROSS-MODEL:** R1 audit completed with 2/5 lanes; 10 valid contract amendments applied,
   stale/duplicative findings discarded, and no boundary-breaking P1 remained.
-- **VERDICT:** CEO + R1 AUDIT + ENG CLEARED - ready to implement under `/fwf`.
+- **VERDICT:** IMPLEMENTED + LOCAL VALIDATION PASS - exact-head review and landing pending.
 
 NO UNRESOLVED DECISIONS
