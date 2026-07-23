@@ -212,8 +212,14 @@ def _register_codex(home: Path, server: Path) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     if CODEX_BEGIN in original:
-        block = original[original.index(CODEX_BEGIN):original.index(CODEX_END) + len(CODEX_END)]
-        if str(server) not in block:
+        try:
+            parsed = tomllib.loads(original)
+        except tomllib.TOMLDecodeError as exc:
+            raise InstallError("malformed Codex config with TruthDeck ownership marker") from exc
+        servers = parsed.get("mcp_servers", {})
+        entry = servers.get("truthdeck", {}) if isinstance(servers, dict) else {}
+        expected = {"command": sys.executable, "args": [str(server)]}
+        if not isinstance(entry, dict) or any(entry.get(key) != value for key, value in expected.items()):
             raise InstallError("foreign or stale TruthDeck Codex MCP block")
         return None
     backup = _backup(path) if path.exists() else None
