@@ -2,9 +2,9 @@
 title: TruthDeck / truthctl - Agent Evidence Control Plane
 date: 2026-07-22
 status: in-progress
-status_detail: r1-fwf-ceo-reviewed-hold-scope
+status_detail: r1-fwf-eng-reviewed-ready-to-implement
 risk: R1
-phase: owner-plan
+phase: r1-fwf-implementation
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, evidence, truth, cli, mcp]
 related: [design/plans/2026-06-27_global_agent_workflow_os.md, design/plans/2026-07-21_global_fwf_fwp_contract_reset.md]
@@ -220,11 +220,13 @@ scripts/truthdeck_storage.py        canonical JSON, atomic append-only storage, 
 scripts/truthdeck_render.py         bounded Markdown and diff rendering
 scripts/truthctl.py                 CLI entry point
 scripts/truthdeck_mcp.py            optional FastMCP adapter only
+scripts/truthdeck_install.py        surgical install/status/uninstall + host registration
 scripts/tests/test_truthdeck_*.py   unit, integration, contract, security tests
 skills/truthdeck/SKILL.md           thin routing/usage skill; no duplicate policy table
 templates/truthdeck.registry.json.template
 docs/TRUTHDECK.md
 requirements-truthdeck-mcp.txt
+.github/workflows/truthdeck-ci.yml  one draft-skipped Windows CI gate
 ```
 
 `truthdeck_model.py` owns a versioned `FACT_KEYS` registry (key, JSON type, producer,
@@ -369,6 +371,12 @@ Every collector implements the same boundary:
 ```text
 collect(scope, policy, deadline) -> CollectorResult(facts, diagnostics, elapsed_ms)
 ```
+
+Independent collectors run in a bounded stdlib thread pool (`max_workers <= 4`) against one
+shared monotonic deadline. Results are validated and sorted by canonical repo order plus
+collector ID before resolution, so completion order cannot affect the snapshot. A collector
+that misses its remaining deadline is terminated and contributes an ineligible timeout fact;
+it cannot delay sealing past the total deadline.
 
 Requirements:
 
@@ -595,13 +603,19 @@ repo-specific contract becomes a separate owner-repo task, not an inline workaro
 
 ### S5 - Skill, MCP adapter, and installation
 
-**Files:** `skills/truthdeck/SKILL.md`, `truthdeck_mcp.py`, requirements pin, installers,
-installer/MCP tests.
+**Files:** `skills/truthdeck/SKILL.md`, `truthdeck_mcp.py`, `truthdeck_install.py`,
+requirements pin, bootstrap installers, installer/MCP tests.
 
 - keep the skill thin: invoke CLI/MCP, preserve reason codes, never duplicate the global
   risk/workflow table;
 - expose exactly four MCP tools over the tested core;
 - copy the skill to Claude and Codex and install the shared CLI modules;
+- use the dedicated TruthDeck installer for activation. The repository bootstrap installers
+  may include TruthDeck for future full installs, but activation must not run their broad
+  whole-home backup/copy flow;
+- install a `truthctl` shim only into an existing user-owned directory already on `PATH`;
+  otherwise report the canonical `python <installed>/truthctl.py` invocation and `HOLD` the
+  bare-command smoke instead of mutating `PATH`;
 - add idempotent MCP registration with config backup, ownership marker, round-trip readback,
   and a removal path that deletes only TruthDeck-owned entries;
 - discover and fixture-test the exact active Claude/Codex configuration schemas before the
@@ -619,6 +633,8 @@ POSIX installer contract tests pass without requiring the operator's Windows pat
 - generate the provider-neutral implementation review packet;
 - obtain independent review of the exact current head and fix ship-blocking findings;
 - batch the final push, ready the PR once, merge, and fast-forward the operator checkout;
+- add/run the draft-skipped Windows TruthDeck CI workflow; no-checks is not a pass for this
+  profile;
 - run one post-install self-snapshot proving TruthDeck can truthfully report its own merged
   versus installed state.
 
@@ -651,8 +667,15 @@ Implementation must end with exit-code evidence for:
 ```powershell
 python -m pytest -q scripts/tests/test_truthdeck_model.py `
   scripts/tests/test_truthdeck_collectors.py `
+  scripts/tests/test_truthdeck_git.py `
+  scripts/tests/test_truthdeck_github.py `
+  scripts/tests/test_truthdeck_handoff.py `
+  scripts/tests/test_truthdeck_storage.py `
+  scripts/tests/test_truthdeck_render.py `
   scripts/tests/test_truthdeck_gates.py `
   scripts/tests/test_truthdeck_cli.py `
+  scripts/tests/test_truthdeck_profiles.py `
+  scripts/tests/test_truthdeck_runtime.py `
   scripts/tests/test_truthdeck_mcp.py `
   scripts/tests/test_truthdeck_install.py
 
@@ -1236,18 +1259,218 @@ and Kimi CDP succeeded; Perplexity CDP, Gemini CDP, and Claude CLI failed visibl
 - Import-time `sys.modules` policing is brittle. Static AST/import contract tests and the
   absence of application-repo paths from production modules enforce the intended boundary.
 
+## Engineering review record - Stage 3 `/fwf`
+
+Review date: 2026-07-22. Mode: **FULL_REVIEW**. The `/fwf` contract auto-resolves R1
+engineering questions. The prior CEO complexity decision is upheld: proceed with the modular
+compiler, but keep one core model/evaluator and no generic plugin framework.
+
+### Step 0 scope and distribution decision
+
+- Existing stdlib-only surfaces were verified directly: `_catalog_common.py`,
+  `git_hygiene.py`, `terminal_evidence.py`, and `implementation_review_packet.py` import only
+  Python standard-library modules.
+- More than eight files is justified by trust-boundary separation and focused tests. Reducing
+  to a monolith would couple subprocess security, policy, storage, gates, and host config.
+- TruthDeck is distributed as tracked Python files plus a dedicated installer, not a package
+  index artifact or compiled binary. Windows is the activation platform; POSIX receives
+  contract-tested CLI/skill installation without active-home assumptions.
+- Official recheck: MCP Python SDK v1 remains stable and v2 remains pre-release; latest v1 is
+  `1.27.2`, while the workstation has `1.27.0`. The existing `mcp>=1.27,<2` range remains the
+  correct compatibility contract.
+
+### Architecture findings and decisions
+
+1. **[P1] (confidence 10/10) No CI gate exists for a plan whose lifecycle requires CI.**
+   Motivating plan text: `design/plans/...r1.md:1051` says `ready once -> CI -> squash merge`,
+   while the repository has no `.github/` directory. Decision: add
+   `.github/workflows/truthdeck-ci.yml`, run only on non-draft PRs and TruthDeck-relevant
+   paths, use Windows + Python 3.12, install pytest/Ruff/MCP v1, run the full `scripts/tests`
+   suite plus scoped TruthDeck Ruff/compileall. No push-to-main duplicate run.
+2. **[P1] (confidence 10/10) The broad bootstrap installer is unsafe as the activation
+   path.** `install/install.ps1:19` and `install/install.sh:20` copy the whole Claude home to
+   a timestamped backup; lines 27/28 then copy every Python script. Decision: implement
+   `truthdeck_install.py` with `status/install/uninstall`, a TruthDeck-only manifest, per-file
+   hash ownership, targeted backups, atomic host-config edits, and rollback on partial failure.
+   The broad installers only learn the new tracked skill for future full bootstrap use.
+3. **[P1] (confidence 9/10) The documented `truthctl` command had no distribution path.**
+   The plan invokes `truthctl snapshot` at line 134, but existing installers only copy `.py`
+   files. Decision: the dedicated installer places a tiny hash-owned shim only in an existing
+   user directory already on `PATH`; otherwise docs/readback use the explicit Python entry
+   point and report bare-command activation as `HOLD`.
+4. **[P2] (confidence 9/10) Independent collectors need bounded concurrency to meet the
+   stated latency.** The plan requires GitHub-inclusive p95 <=10 seconds while multiple
+   external collectors each allow five seconds. Decision: one `ThreadPoolExecutor`, maximum
+   four workers, shared monotonic deadline, deterministic result sorting, no async/event loop.
+5. **[P2] (confidence 9/10) MCP registration must use host-specific ownership seams.** Live
+   schema inspection found Codex TOML `mcp_servers` entries with command/args shapes and Claude
+   CLI support for user-scoped `mcp add/get/remove`. Decision: Claude registration uses its
+   official CLI plus readback; Codex uses a closed, marker-delimited TOML block only after
+   `tomllib` validation and absence/ownership checks. Unknown shape or existing foreign
+   `truthdeck` entry is a hard hold. Each mutation has a targeted backup and post-write parse.
+
+### Code quality findings and decisions
+
+1. **[P1] (confidence 10/10) `git_hygiene.py` mixes read and mutation functions.** The file
+   contains `analyze` plus `do_apply` and `do_deploy`; importing its high-level surface would
+   make the boundary review-dependent. Decision: copy/extract only the small Git read
+   primitives into `truthdeck_git.py`, with AST tests that reject mutation symbols and
+   application-repo imports.
+2. **[P2] (confidence 8/10) Optional MCP must not infect core imports.** Decision:
+   `truthdeck_mcp.py` is the only module allowed to import `mcp`; every core/CLI test runs when
+   MCP is absent, while parity/host-smoke tests install the bounded optional requirement.
+3. **No further issue:** frozen dataclasses, plain functions, code-owned fact/probe registries,
+   and one evaluator are right-sized. No class hierarchy, package build, daemon, cache, or DB.
+
+### Test coverage diagram
+
+```text
+ENTRY / MODULE                         REQUIRED BEHAVIOR COVERAGE
+truthdeck_model.py
+  +-- registry/fact/snapshot parse     [PLANNED ***] valid + nil + empty + unknown + wrong type
+  +-- canonical JSON/digests           [PLANNED ***] order/path/time exclusion + golden fixtures
+  `-- freshness replay                 [PLANNED ***] before/at/after TTL + pinned --at
+
+truthdeck_collectors.py
+  +-- bounded process success          [PLANNED ***] stdout/stderr/env/provenance
+  +-- missing/nonzero/malformed        [PLANNED ***] named non-PASS reason
+  +-- timeout/output cap               [PLANNED ***] Windows terminate/kill + no orphan
+  `-- shared deadline/concurrency       [PLANNED ***] stable order + late result ineligible
+
+git/github/review/handoff/runtime
+  +-- clean/dirty/worktrees/identity    [PLANNED ***] local + remote + common-dir worktrees
+  +-- PR/check exact head               [PLANNED ***] draft/null/offline/rate/stale/no checks
+  +-- packet + reviewer result          [PLANNED ***] missing/token/vocabulary/head mismatch
+  +-- handoff digest/references          [PLANNED ***] independent hash + stale base + inert text
+  `-- code-owned probes                 [PLANNED ***] strict JSON + no broker/order/app writes
+
+truthdeck_storage/render/gates
+  +-- temp/fsync/replace/readback        [PLANNED ***] crash residue + pointer degradation
+  +-- concurrent writers                [PLANNED ***] two artifacts + one valid latest pointer
+  +-- safe bounded Markdown/diff         [PLANNED ***] Unicode/control/hostile/cross-version
+  `-- lifecycle and next action          [PLANNED ***] all 5 states/reasons + repo/stage ordering
+
+truthctl.py
+  +-- six command surfaces              [PLANNED ***] human/JSON/output/no-store/require
+  `-- exit contract                     [PLANNED ***] 0/2/3/10/11/12/124
+
+MCP/install/CI
+  +-- exactly four MCP tools             [PLANNED ***] CLI/core parity + missing SDK
+  +-- install/status/uninstall           [PLANNED ***] idempotent/backup/foreign ownership/rollback
+  +-- Claude/Codex schemas               [PLANNED ***] fixture + live readback without secrets
+  `-- non-draft Windows CI               [PLANNED ***] expected suite actually runs on PR head
+
+USER FLOWS
+  snapshot -> next                       [PLANNED -> INTEGRATION]
+  verify handoff -> stale-base hold       [PLANNED -> INTEGRATION]
+  stale review/check -> exact-head block  [PLANNED -> INTEGRATION]
+  install -> status -> self-snapshot      [PLANNED -> SYSTEM]
+  install partial failure -> rollback     [PLANNED -> SYSTEM]
+```
+
+No implementation exists yet, so coverage is planned rather than claimed. Every branch above
+must have behavior + edge + named failure coverage. No LLM eval is needed; prompt files and
+model behavior are not changed. The existing `unittest`-style tests collected by pytest remain
+the house style.
+
+### Test findings and decisions
+
+1. **[P1] (confidence 10/10) The original focused command omitted first-class modules.** The
+   module layout names Git, GitHub, handoff, storage, render, profiles, and runtime modules,
+   while the command listed only model/collectors/gates/CLI/MCP/install tests. Decision: add
+   explicit test files for every module to the focused command and keep full
+   `python -m pytest -q scripts/tests` as the regression gate.
+2. **[P1] (confidence 9/10) CI must prove the expected target ran.** Decision: tests assert
+   schema/fact/reason registries are non-empty and enumerate the four MCP tool names; CI logs
+   the exact pytest target and uses a check name required by the dotclaude profile.
+3. **[P2] (confidence 8/10) Host config tests cannot touch active homes.** Decision: all
+   mutation tests use temporary fake Claude/Codex homes. Exactly one post-merge smoke may use
+   active homes, after status/readback and backup, under the approved installation scope.
+
+### Performance findings and decisions
+
+1. **[P2] (confidence 8/10) Output caps must be memory-safe, not post-capture checks.** Use
+   `Popen` with same-host temporary output files, poll size plus monotonic deadline, terminate
+   on cap, then read only the bounded prefix. This avoids unbounded `capture_output=True`.
+2. **[P2] (confidence 8/10) GitHub calls must be bounded.** One `gh pr view --json` call per
+   repo collects PR identity and `statusCheckRollup`; no polling and no automatic retry in a
+   snapshot. Rate/auth/schema failure remains visible and non-green.
+3. **No cache:** repeated collection may cost another `gh` call, but cache-derived current
+   truth is a larger correctness risk. The immutable prior snapshot remains available for
+   explicit offline inspection, never as a current PASS.
+
+### Failure modes and user visibility
+
+All production failures map to the CEO error/failure registries. Engineering review adds:
+
+| Failure | Test | Handling | User visibility |
+|---|---:|---|---|
+| CI workflow absent/not triggered | yes | PR cannot satisfy CI gate | missing check / UNKNOWN |
+| foreign MCP entry named truthdeck | yes | installer hard hold, no overwrite | owner mismatch |
+| host CLI unavailable/denied | yes | CLI/skill install may proceed; MCP hold | host and command named |
+| shim target not already on PATH | yes | no PATH mutation; Python entry remains | activation HOLD |
+| output temp file exceeds cap | yes | terminate, discard raw temp, seal non-green fact | OUTPUT_LIMIT |
+| collector finishes after deadline | yes | ignore late eligible facts | TIMEOUT/deadline |
+
+Critical silent gaps: **0**.
+
+### Worktree parallelization strategy
+
+| Lane | Work | Depends on | Conflict note |
+|---|---|---|---|
+| A | S0 fixtures -> S1 model/storage/render -> S3 gates/CLI | none | owns shared schemas/core |
+| B | collector runner -> Git/GitHub/review/handoff adapters | S0 fact/reason contract | merges into A before CLI E2E |
+| C | profile discovery/runtime contracts -> skill/MCP/dedicated installer/CI | S0 registry contract; MCP waits for core API | installer lists all final modules |
+
+Lanes B and early C discovery can proceed independently after S0, but the main implementation
+keeps schema/core ownership in Lane A and validates each merge point. Do not split edits to
+`truthdeck_model.py`, `truthdeck_profiles.py`, or installer manifests across concurrent lanes.
+
+### Engineering implementation tasks
+
+- [ ] **E1 (P1, human ~2h / Codex ~15m)** - freeze schemas, fact/probe registries,
+  canonicalization, clock, and golden hostile fixtures before production collectors.
+- [ ] **E2 (P1, human ~4h / Codex ~30m)** - build model, bounded runner, adapters, storage,
+  renderer, gates, and CLI with the full branch matrix above.
+- [ ] **E3 (P1, human ~2h / Codex ~15m)** - add read-only TSU/Tsignal candidate probes only
+  when existing commands satisfy the static contract; otherwise emit unavailable facts.
+- [ ] **E4 (P1, human ~3h / Codex ~20m)** - build four-tool MCP adapter and dedicated
+  hash-owned installer with fake-home rollback tests and non-mutating status.
+- [ ] **E5 (P1, human ~1h / Codex ~10m)** - add the draft-skipped Windows CI gate and prove
+  focused/full/scoped-lint/compile/diff checks locally before readying once.
+- [ ] **E6 (P1, human ~1h / Codex ~10m)** - exact-head review, fixes, merge/sync, active-home
+  install/readback, and TruthDeck self-snapshot.
+
+No new TODO is created. Package publication, GUI, signing, daemon/cache, and workflow
+integration remain explicit non-goals. The engineering test-plan artifact is stored under the
+local gstack project directory; JSONL aggregation was skipped because `jq` is unavailable.
+
+### Engineering completion summary
+
+| Area | Result |
+|---|---|
+| Scope | accepted as-is; modular trust boundaries retained |
+| Architecture | 5 issues found and resolved; dedicated installer + CI added |
+| Code quality | 2 issues resolved; optional dependency isolated |
+| Tests | full path diagram; 3 gaps resolved in plan |
+| Performance | 2 issues resolved; no cache accepted |
+| Failure modes | 6 additions; 0 critical silent gaps |
+| Parallelization | 3 dependency-gated lanes; shared core kept single-owner |
+| Outside voice | Stage 2 audit already supplied; no duplicate panel |
+| Unresolved decisions | 0 |
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | HOLD_SCOPE, 0 critical gaps |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | exact-head implementation review pending |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | REQUIRED | Stage 3 of `/fwf` pending |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 12 issues/gaps resolved, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | not required by R1 workflow |
 
 - **CROSS-MODEL:** R1 audit completed with 2/5 lanes; 10 valid contract amendments applied,
   stale/duplicative findings discarded, and no boundary-breaking P1 remained.
-- **VERDICT:** CEO + R1 AUDIT CLEARED - required engineering review is next.
+- **VERDICT:** CEO + R1 AUDIT + ENG CLEARED - ready to implement under `/fwf`.
 
 NO UNRESOLVED DECISIONS
