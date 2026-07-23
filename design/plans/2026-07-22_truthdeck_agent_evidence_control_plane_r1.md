@@ -1519,6 +1519,12 @@ normalization strips surrounding whitespace/quotes before resolving durable entr
 regression covers quoted durable paths; an alleged Windows case-sensitivity issue was discarded
 because `WindowsPath` equality is already case-folded.
 
+PR #42's first ready CI run then found a Windows runner representation-only failure: the
+temporary home was expressed with the `RUNNER~1` short alias while the installer correctly
+returned the resolved long path. The product behavior was unchanged; the migration assertion
+now compares canonical `resolve()` paths. This single test-only fix is the sole follow-up push
+to the ready PR and invalidates the previous exact-head review as required.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed

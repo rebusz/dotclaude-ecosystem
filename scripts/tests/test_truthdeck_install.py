@@ -123,9 +123,9 @@ class InstallerTests(unittest.TestCase):
                 path_value=os.pathsep.join((str(ephemeral), str(durable), str(old_bin))),
             )
             shim_name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
-            self.assertEqual(Path(migrated["shim"]), durable / shim_name)
+            self.assertEqual(Path(migrated["shim"]), durable.resolve() / shim_name)
             self.assertFalse(old_shim.exists())
-            self.assertTrue((durable / shim_name).exists())
+            self.assertTrue((durable.resolve() / shim_name).exists())
 
     def test_ephemeral_home_path_does_not_receive_shim(self):
         with tempfile.TemporaryDirectory() as tmp:
