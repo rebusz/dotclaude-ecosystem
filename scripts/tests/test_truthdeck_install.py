@@ -122,9 +122,10 @@ class InstallerTests(unittest.TestCase):
                 repo_root=ROOT, home=home,
                 path_value=os.pathsep.join((str(ephemeral), str(durable), str(old_bin))),
             )
-            self.assertEqual(Path(migrated["shim"]), durable / "truthctl.cmd")
+            shim_name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
+            self.assertEqual(Path(migrated["shim"]), durable / shim_name)
             self.assertFalse(old_shim.exists())
-            self.assertTrue((durable / "truthctl.cmd").exists())
+            self.assertTrue((durable / shim_name).exists())
 
     def test_ephemeral_home_path_does_not_receive_shim(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -134,6 +135,14 @@ class InstallerTests(unittest.TestCase):
             result = install(repo_root=ROOT, home=home, path_value=str(ephemeral))
             self.assertIsNone(result["shim"])
             self.assertEqual(result["path_state"], "HOLD")
+
+    def test_durable_path_entry_normalizes_quotes_and_whitespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            durable = home / ".local" / "bin"
+            durable.mkdir(parents=True)
+            result = install(repo_root=ROOT, home=home, path_value=f'  "{durable}"  ')
+            self.assertEqual(result["path_state"], "PASS")
 
 
 if __name__ == "__main__":

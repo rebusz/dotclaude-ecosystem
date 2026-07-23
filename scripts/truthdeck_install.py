@@ -298,7 +298,8 @@ def _sha(path: Path) -> str:
 
 def _shim_candidate(home: Path, path_value: str) -> Path | None:
     name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
-    path_directories = {Path(raw).resolve() for raw in path_value.split(os.pathsep) if raw}
+    entries = (raw.strip().strip('"') for raw in path_value.split(os.pathsep))
+    path_directories = {Path(raw).resolve() for raw in entries if raw}
     for directory in (home / ".local" / "bin", home / "bin"):
         resolved = directory.resolve()
         if resolved in path_directories and resolved.is_dir():

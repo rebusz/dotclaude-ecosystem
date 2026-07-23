@@ -1512,6 +1512,13 @@ present in PATH, reports `HOLD` when neither exists, and transactionally removes
 shim when migrating to a durable target. Fake-home tests cover preference, migration, cleanup,
 and ephemeral-only refusal before active-home reinstall.
 
+Follow-up exact-head model attempts were fail-closed when they truncated before a verdict. One
+partial Cohere analysis identified a valid portability gap: the migration test expected the
+Windows-only `truthctl.cmd` name. The test now derives the platform shim contract, and PATH
+normalization strips surrounding whitespace/quotes before resolving durable entries. A separate
+regression covers quoted durable paths; an alleged Windows case-sensitivity issue was discarded
+because `WindowsPath` equality is already case-folded.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1521,8 +1528,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `70 passed`;
-- full `scripts/tests`: `172 passed, 2 subtests passed`;
+- focused TruthDeck suite: `71 passed`;
+- full `scripts/tests`: `173 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;
