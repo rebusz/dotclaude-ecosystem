@@ -50,12 +50,16 @@ def install(*, repo_root: Path, home: Path, enable_mcp: str = "none", path_value
         targets.append(config)
         if config.exists():
             targets.append(config.with_name(f"{config.name}.truthdeck-backup-{_sha(config)[:12]}"))
+    existing_files = dict((existing_manifest or {}).get("files", {}))
+    for relative in existing_files:
+        target = _owned_target(home, relative)
+        if target not in targets:
+            targets.append(target)
     before = {target: target.read_bytes() if target.exists() else None for target in targets}
-    owned = set((existing_manifest or {}).get("files", {}))
     try:
         return _install_mutations(repo_root=repo_root, home=home, enable_mcp=enable_mcp,
                                   previous_mcp=previous_mcp, sources=sources,
-                                  effective_path=effective_path, owned=owned)
+                                  effective_path=effective_path, existing_files=existing_files)
     except Exception:
         _rollback(before)
         for directory in (skill_dir, root / "skills", bin_dir, root,
@@ -69,7 +73,8 @@ def install(*, repo_root: Path, home: Path, enable_mcp: str = "none", path_value
 
 
 def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous_mcp: str,
-                       sources: list[Path], effective_path: str, owned: set[str]) -> dict[str, Any]:
+                       sources: list[Path], effective_path: str,
+                       existing_files: dict[str, str]) -> dict[str, Any]:
     root = home / ".truthdeck"
     bin_dir, skill_dir = root / "bin", root / "skills" / "truthdeck"
     manifest_path = root / "install-manifest.json"
@@ -85,7 +90,7 @@ def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous
     for target in (home / ".codex" / "skills" / "truthdeck" / "SKILL.md",
                    home / ".claude" / "skills" / "truthdeck" / "SKILL.md"):
         relative = str(target.relative_to(home))
-        if target.exists() and relative not in owned:
+        if target.exists() and relative not in existing_files:
             raise InstallError(f"refusing to overwrite foreign skill: {target}")
         _copy_atomic(repo_root / "skills" / "truthdeck" / "SKILL.md", target)
         files[relative] = _sha(target)
@@ -96,7 +101,7 @@ def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous
     elif registry.read_bytes() != template.read_bytes():
         _copy_atomic(template, root / "registry.json.from-template")
         files[str((root / "registry.json.from-template").relative_to(home))] = _sha(root / "registry.json.from-template")
-    shim = _install_shim(home, bin_dir / "truthctl.py", effective_path, owned)
+    shim = _install_shim(home, bin_dir / "truthctl.py", effective_path, set(existing_files))
     if shim:
         files[str(shim.relative_to(home))] = _sha(shim)
     config_backups: list[str] = []
@@ -112,6 +117,13 @@ def _install_mutations(*, repo_root: Path, home: Path, enable_mcp: str, previous
         backup = _register_claude(home, bin_dir / "truthdeck_mcp.py")
         if backup:
             config_backups.append(str(backup.relative_to(home)))
+    for relative, digest in existing_files.items():
+        if relative in files:
+            continue
+        stale = _owned_target(home, relative)
+        if stale.exists() and _sha(stale) != digest:
+            raise InstallError(f"refusing to remove drifted owned file: {stale}")
+        stale.unlink(missing_ok=True)
     manifest = {
         "schema_version": MANIFEST_SCHEMA, "files": files, "mcp": enable_mcp,
         "config_backups": config_backups,
@@ -286,12 +298,11 @@ def _sha(path: Path) -> str:
 
 def _shim_candidate(home: Path, path_value: str) -> Path | None:
     name, _ = _shim_spec(sys.executable, Path("truthctl.py"), os.name)
-    for raw in path_value.split(os.pathsep):
-        if not raw:
-            continue
-        directory = Path(raw).resolve()
-        if directory.exists() and (directory == home or home in directory.parents):
-            return directory / name
+    path_directories = {Path(raw).resolve() for raw in path_value.split(os.pathsep) if raw}
+    for directory in (home / ".local" / "bin", home / "bin"):
+        resolved = directory.resolve()
+        if resolved in path_directories and resolved.is_dir():
+            return resolved / name
     return None
 
 

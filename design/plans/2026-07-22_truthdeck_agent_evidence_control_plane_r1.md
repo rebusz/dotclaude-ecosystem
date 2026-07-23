@@ -1504,6 +1504,14 @@ job-level draft guard remains fail-closed. A contract test pins both clauses. Be
 was already ready, this repair is batched into one validated follow-up push, which supplies the
 single `synchronize` CI run and requires a new exact-head review before merge.
 
+After PR #41 merged, active-home installation correctly activated the CLI, both discovery
+skills, and both MCP registrations, but runtime readback exposed a false-positive shim state:
+the first home-owned PATH entry was an ephemeral `~/.codex/tmp/arg0/...` directory. A bounded
+R1 follow-up restricts shim installation to durable `~/.local/bin` or `~/bin` entries already
+present in PATH, reports `HOLD` when neither exists, and transactionally removes a prior owned
+shim when migrating to a durable target. Fake-home tests cover preference, migration, cleanup,
+and ephemeral-only refusal before active-home reinstall.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1513,8 +1521,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `68 passed`;
-- full `scripts/tests`: `170 passed, 2 subtests passed`;
+- focused TruthDeck suite: `70 passed`;
+- full `scripts/tests`: `172 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;
