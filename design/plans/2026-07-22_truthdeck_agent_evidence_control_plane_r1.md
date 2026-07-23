@@ -227,6 +227,10 @@ docs/TRUTHDECK.md
 requirements-truthdeck-mcp.txt
 ```
 
+`truthdeck_model.py` owns a versioned `FACT_KEYS` registry (key, JSON type, producer,
+freshness class, eligibility semantics). Collectors and gates share it; registry policy may
+reference only those keys.
+
 No module may import an application repo. Runtime integration is data-driven through
 registered argv plus a named JSON parser contract.
 
@@ -423,7 +427,9 @@ Registry rules:
 - installer preserves existing user configuration and writes a `.from-template` candidate
   when the template version advances;
 - snapshot records the registry/policy digest;
-- repo-local files may narrow collection but cannot enable mutation or broker/order access.
+- the only optional repo-local narrowing file is `.truthdeck-policy.json`; its closed schema
+  can intersect collector/probe sets, reduce TTLs/timeouts/deadlines, or add required stages,
+  but cannot enable mutation, broker/order access, new fact keys, or arbitrary commands.
 
 Initial profiles:
 
@@ -469,7 +475,8 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | requested gates `PASS`/`NOT_APPLICABLE`, or a non-gating validation succeeded |
-| 2 | invalid input, registry error, or security/boundary refusal |
+| 2 | invalid input, registry error, or unsupported schema/version |
+| 3 | security or application-boundary refusal |
 | 10 | overall state `HOLD` |
 | 11 | overall state `BLOCKED` |
 | 12 | overall state `UNKNOWN`/incomplete collection |
@@ -478,13 +485,22 @@ Exit codes:
 MCP returns the same state and reason codes as structured content instead of translating
 them into a second status model.
 
+When `next` or `diff` consumes stored snapshots, it re-evaluates freshness and gates in
+memory at one explicit evaluation time. It never overwrites the sealed snapshot and never
+replays an expired `PASS` as current truth.
+
 ## Storage and concurrency
 
 - State root: `~/.truthdeck/` (neutral between Claude and Codex).
 - Snapshots: `snapshots/<scope-slug>/<UTC>-<content-id>.json`.
 - Human view: generated on demand; JSON is canonical.
-- Each snapshot is immutable and created with exclusive-create semantics.
-- A `latest.json` pointer is replaced atomically only after the snapshot validates.
+- Each snapshot is immutable: write/flush/`fsync` a unique same-directory temporary file,
+  validate its readback, then `os.replace` it to a process-unique final name. Readers ignore
+  temporary files.
+- `latest.json` records the target plus digest and is written with the same same-directory
+  flush/replace/readback sequence only after the snapshot validates. Pointer failure leaves
+  the sealed snapshot usable and the previous valid pointer intact when the filesystem
+  honors same-directory atomic replacement.
 - Concurrent agents never append to a shared mutable JSON document.
 - Snapshot IDs derive from canonical content excluding observation timestamp and local
   output path; identical evidence can therefore be recognized without overwriting history.
@@ -656,6 +672,8 @@ S0 records the machine baseline. Initial budgets, adjustable only with recorded 
 - local Git/plan snapshot: <= 2 seconds at p95 over 20 fixture runs;
 - GitHub-inclusive snapshot: <= 10 seconds when `gh` is healthy;
 - individual external collector timeout: <= 5 seconds by default;
+- total collection deadline: 15 seconds for one repo and 30 seconds for a bounded multi-repo
+  request; profile and repo policy may only reduce these defaults;
 - rendered agent summary: <= 4,000 characters unless `--verbose`;
 - MCP exposes exactly four tools and no large static resources at startup.
 
@@ -1138,16 +1156,98 @@ all rejected expansions are explicit non-goals rather than deferred commitments.
 | Scope proposals | 0 proposed, 0 accepted, 0 deferred |
 | Unresolved decisions | 0 |
 
+## R1 audit synthesis - Stage 2 `/fwf`
+
+Audit topology completed on 2026-07-22 in `free` mode with GPT synthesis. OpenRouter free
+and Kimi CDP succeeded; Perplexity CDP, Gemini CDP, and Claude CLI failed visibly in
+`_auditf_meta.json`. The reduced panel lowers confidence but does not hide missing lanes.
+
+### Findings applied
+
+1. **Snapshot replay freshness (consensus P2).** `truthctl next --snapshot` never replays a
+   sealed `PASS` as current truth. It re-derives fact eligibility, gates, and next action in
+   memory at `evaluated_at_utc` (default: current injected clock), without mutating the sealed
+   file. Human/JSON output carries both `sealed_at_utc` and `evaluated_at_utc`. Tests may pin
+   `--at <RFC3339>` for deterministic replay. `truthctl diff` compares sealed values and also
+   reports freshness transitions after evaluating both snapshots at one common `--at` time.
+2. **Review-attestation input (unique valid P2).** V1 does not claim that the current review
+   workflow automatically persists an attestation. The review collector accepts only two
+   explicit caller-supplied paths: the existing `implementation-review/v1` packet and the raw
+   reviewer result. The S0 fixture freezes required reviewer tokens, verdict vocabulary, and
+   `REVIEWED_HEAD`; there is no directory scan or synthetic authority file. Missing either
+   path makes `exact_head_reviewed=UNKNOWN`. S6 persists the exact external result as workflow
+   evidence before invoking TruthDeck.
+3. **Governed fact keys and source normalization (consensus P2).** Add a code-owned,
+   versioned fact-key registry containing key, JSON type, producer, freshness class, and
+   eligibility semantics. Gates may reference only registered keys; unknown policy keys are
+   `REGISTRY_INVALID`. S0 golden fixtures freeze the per-collector field selection, null
+   handling, ordering, path normalization, and canonical JSON used for `evidence_sha256`.
+4. **Registry and policy schema (consensus P2).** The stdlib validator has explicit required
+   fields, closed objects, enum/value bounds, unknown-major refusal, and zero-subprocess
+   behavior on failure. `policy_digest_sha256` covers the effective registry schema version,
+   profile ID, enabled collectors, code-owned probe IDs, TTLs/timeouts/deadline, required
+   stages, optional repo narrowing file, and fact-key registry version. It excludes local
+   output paths and observation/timing fields.
+5. **Stable repository identity (consensus P2).** `repo_id` is the profile ID plus normalized
+   origin owner/repo when available; otherwise it is `local:` plus a digest of the canonical
+   Git common directory. Worktrees share `repo_id` and carry a separate local `checkout_id`.
+   Windows casing, separators, spaces, Unicode, and reparse resolution are fixture-tested.
+6. **GitHub compatibility (consensus P2/P3).** Record `gh --version`; request an explicit
+   field list; missing/null required fields are `COLLECTOR_OUTPUT_INVALID`, never false-y
+   values. Bound GitHub calls per snapshot and fail closed on auth, rate, version, or schema
+   drift.
+7. **Storage atomicity precision (valid P2).** Write a unique temporary file in the target
+   snapshot directory, flush and `fsync`, validate by readback, then `os.replace` it to the
+   unique final name. Readers ignore temporary files. The latest pointer uses the same-dir
+   temp/flush/replace/readback sequence and stores target plus digest. Concurrent writers are
+   last-valid-pointer-wins; pointer failure never invalidates a sealed snapshot. No lock or
+   cross-filesystem rename is required or permitted.
+8. **Read-only Git reuse boundary (valid P2).** TruthDeck reuses `git_hygiene` behavior, not
+   the mutation-capable module surface. `truthdeck_git.py` contains a narrow read-only adapter
+   for status, ancestry, common-dir, worktrees, locks, and unique commits. Static contract
+   tests reject imports/references to `do_apply`, `do_deploy`, mutation-capable application
+   modules, dynamic imports, or shell execution.
+9. **Total deadline and machine-visible refusal (valid P3).** Default total collection
+   deadline is 15 seconds for a single repo and 30 seconds for a bounded multi-repo request;
+   profiles may only narrow it. Local-only p95 remains a performance acceptance target, not
+   a forced 2-second kill. Exit code `3` is reserved for `BOUNDARY_REFUSAL`; code `2` remains
+   invalid input/registry/schema. Exit `124` means no valid snapshot could be sealed before
+   the total deadline.
+10. **Version and context edges (valid P3).** Cross-major snapshot diff/replay hard-refuses;
+    collector-run timing/duration and observation timestamps are excluded from semantic
+    content IDs; a caller-supplied handoff digest is described as meaningful integrity proof
+    only when sourced independently from the handoff author; and the only optional repo-local
+    narrowing path is `.truthdeck-policy.json`, with closed schema and deterministic
+    intersection/minimum-only merge semantics.
+
+### Findings discarded
+
+- Concurrent-writer corruption, missing multi-repo ordering, missing path normalization, and
+  ambiguous timeout/output reason mapping were based on pre-CEO-plan content; the reviewed
+  plan already defines writer suffixes, atomic pointer degradation, explicit repo ordering,
+  containment rules, and named reason mapping.
+- A base class/plugin interface for collectors is rejected. A typed `Protocol` plus result
+  validation is sufficient and does not create a dynamic extension surface.
+- Automatic cache reuse, circuit breakers, a daemon performance monitor, network-home special
+  behavior, and filesystem scanning for recovery are out of scope. Fail-closed diagnostics
+  and a new explicit snapshot are the v1 recovery path.
+- Fixing `plan_context_loader.py` for `D:/dotclaude` is unrelated; TruthDeck receives explicit
+  repo/plan paths and implements its own bounded scope resolver.
+- Import-time `sys.modules` policing is brittle. Static AST/import contract tests and the
+  absence of application-repo paths from production modules enforce the intended boundary.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | HOLD_SCOPE, 0 critical gaps |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | not yet run |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | exact-head implementation review pending |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | REQUIRED | Stage 3 of `/fwf` pending |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | not required by R1 workflow |
 
-- **VERDICT:** CEO CLEARED - continue to R1 audit, then required engineering review.
+- **CROSS-MODEL:** R1 audit completed with 2/5 lanes; 10 valid contract amendments applied,
+  stale/duplicative findings discarded, and no boundary-breaking P1 remained.
+- **VERDICT:** CEO + R1 AUDIT CLEARED - required engineering review is next.
 
 NO UNRESOLVED DECISIONS
