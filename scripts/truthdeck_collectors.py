@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -84,8 +85,12 @@ def run_bounded(argv: Iterable[str], *, cwd: Path, deadline: float,
                     return
 
     try:
-        process = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+        process = subprocess.Popen(
+            args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
         readers = (
             threading.Thread(target=consume, args=(process.stdout, stdout), daemon=True),
             threading.Thread(target=consume, args=(process.stderr, stderr), daemon=True),
@@ -179,9 +184,35 @@ def collect_plan(path: Path, *, observed_at_utc: str, repo_id: str, deadline: fl
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
-    process.terminate()
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
+        taskkill = system_root / "System32" / "taskkill.exe"
+        if taskkill.is_file():
+            try:
+                subprocess.run(
+                    (str(taskkill), "/PID", str(process.pid), "/T", "/F"),
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=2, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if process.poll() is None:
+            process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     try:
         process.wait(timeout=0.5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         process.wait(timeout=0.5)

@@ -1476,6 +1476,14 @@ conflicting evidence, makes install/MCP changes transactional and ownership-chec
 strict task aliases, and emits separate read-only installation/skill/MCP facts for the final
 self-snapshot. `d2003e1` is not accepted as reviewed evidence.
 
+The next candidate `b9f31f5` was also invalidated: a fail-soft external `/fwf` panel had one
+complete Gemini lane and three partial OpenRouter model artifacts while Claude, Perplexity,
+Kimi, and one OpenRouter aggregate lane failed or timed out. Triage rejected path/type false
+positives but confirmed one P2: timeout cleanup terminated only the direct process despite the
+plan requiring no orphaned descendant. The repair creates a process group/session, terminates
+the Windows/POSIX process tree, and proves a grandchild cannot write after timeout. External
+output for `b9f31f5` is diagnostic only and is not accepted as a PASS attestation.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1485,8 +1493,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `64 passed`;
-- full `scripts/tests`: `166 passed, 2 subtests passed`;
+- focused TruthDeck suite: `66 passed`;
+- full `scripts/tests`: `168 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;

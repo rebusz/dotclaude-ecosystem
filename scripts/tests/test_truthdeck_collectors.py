@@ -26,6 +26,23 @@ class CollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(CollectorTimeout):
             run_bounded((sys.executable, "-c", "import time; time.sleep(5)"), cwd=Path(tmp), deadline=time.monotonic() + 0.05)
 
+    def test_timeout_terminates_descendant_process_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "orphan.txt"
+            child_code = (
+                "import pathlib,time; time.sleep(0.8); "
+                f"pathlib.Path({str(marker)!r}).write_text('orphan', encoding='utf-8')"
+            )
+            parent_code = (
+                "import subprocess,sys,time; "
+                f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); time.sleep(5)"
+            )
+            with self.assertRaises(CollectorTimeout):
+                run_bounded((sys.executable, "-c", parent_code), cwd=Path(tmp),
+                            deadline=time.monotonic() + 0.1)
+            time.sleep(1.0)
+            self.assertFalse(marker.exists(), "timed-out collector left a live descendant")
+
     def test_output_limit_terminates_child(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(CollectorOutputLimit):
             run_bounded((sys.executable, "-c", "print('x'*10000)"), cwd=Path(tmp), deadline=time.monotonic() + 2, max_output_bytes=100)

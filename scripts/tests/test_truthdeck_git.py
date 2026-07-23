@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,16 @@ def git(repo, *args):
 
 
 class GitCollectorTests(unittest.TestCase):
+    def test_adapter_cannot_import_git_hygiene_mutation_surface(self) -> None:
+        tree = ast.parse((ROOT / "scripts" / "truthdeck_git.py").read_text(encoding="utf-8"))
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
+        self.assertFalse(any("git_hygiene" in name for name in imports))
+
     def test_collects_live_head_cleanliness_and_ancestry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

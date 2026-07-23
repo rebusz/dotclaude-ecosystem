@@ -1,5 +1,7 @@
 # TruthDeck
 
+TruthDeck requires Python 3.12 or newer; CI and the supported Windows installation path use Python 3.12.
+
 TruthDeck compiles current evidence into an immutable `truthdeck.snapshot.v1` JSON artifact. It reports six independent stages—planned, implemented, exact-head reviewed, CI, merged, and runtime proven—and selects one advisory next action. It never repairs state, starts applications, or touches broker/order paths.
 
 ## First snapshot
