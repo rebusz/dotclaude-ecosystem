@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from truthdeck_install import InstallError, _shim_spec, install, status, uninstall  # noqa: E402
+from truthdeck_install import InstallError, _register_codex, _shim_spec, install, status, uninstall  # noqa: E402
 
 
 class InstallerTests(unittest.TestCase):
@@ -53,6 +53,7 @@ class InstallerTests(unittest.TestCase):
             (home / ".codex" / "config.toml").write_text('[mcp_servers.keep]\ncommand="keep"\n', encoding="utf-8")
             (home / ".claude.json").write_text(json.dumps({"mcpServers": {"keep": {"command": "keep"}}}), encoding="utf-8")
             install(repo_root=ROOT, home=home, enable_mcp="both", path_value="")
+            install(repo_root=ROOT, home=home, enable_mcp="both", path_value="")
             readback = status(home=home)
             self.assertTrue(readback["cli_installed"])
             self.assertTrue(readback["codex_skill_installed"])
@@ -63,6 +64,30 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("truthdeck", json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"])
             uninstall(home=home)
             self.assertIn("keep", json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"])
+
+    def test_codex_mcp_reinstall_parses_escaped_path_and_rejects_command_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            server = home / "dir\\truthdeck_mcp.py"
+            _register_codex(home, server)
+            self.assertIsNone(_register_codex(home, server))
+
+            config = home / ".codex" / "config.toml"
+            config.write_text(
+                config.read_text(encoding="utf-8").replace(json.dumps(sys.executable), json.dumps("foreign"), 1),
+                encoding="utf-8",
+            )
+            with self.assertRaises(InstallError):
+                _register_codex(home, server)
+
+    def test_codex_mcp_reinstall_classifies_malformed_toml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".codex" / "config.toml"
+            config.parent.mkdir()
+            config.write_text("# BEGIN TRUTHDECK OWNED v1\n[broken", encoding="utf-8")
+            with self.assertRaisesRegex(InstallError, "malformed Codex config"):
+                _register_codex(home, home / "truthdeck_mcp.py")
 
     def test_foreign_shim_and_manifest_traversal_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
