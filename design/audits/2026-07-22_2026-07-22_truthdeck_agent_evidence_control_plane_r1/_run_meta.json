@@ -1,0 +1,10 @@
+[
+  {
+    "label": "Kimi K3 Swarm Max (CDP)",
+    "latency_s": 155.0,
+    "model_id": "kimi/k3-swarm-max",
+    "slug": "01_kimi_k3_swarm_max",
+    "source": "kimi_cdp",
+    "success": true
+  }
+]

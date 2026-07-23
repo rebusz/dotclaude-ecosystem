@@ -1,0 +1,42 @@
+[
+  {
+    "lane": "openrouter_free",
+    "ok": true,
+    "returncode": 0,
+    "elapsed_s": 114.7,
+    "stdout_tail": "vidence_control_plane_r1\nModels   : 5 (parallel)\nPackets  : none (0 tok est.)\nRetry    : 3x with 10s backoff on 429\n\n  [02] Nemotron 3 Super 120B (free) -> starting...\n  [04] Poolside Laguna M.1 (free) -> starting...\n  [06] Gemma 4 31B (free) -> starting...\n  [07] Cohere North Mini Code (free) -> starting...\n    429 rate-limit \u2014 retrying in 10s (attempt 1/3)\n    429 rate-limit \u2014 retrying in 20s (attempt 2/3)\n  [02] Nemotron 3 Super 120B (free) DEGN  17,597 tok  36.2s  [cot_leak, truncated_mid_sentence]\n  [08] Nemotron 3 Nano Omni 30B reasoning (free) -> starting...\n  [06] Gemma 4 31B (free) FAIL  Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations', 'provider_name': 'Google AI Studio', 'is_byok': False, 'provider_error_code': '429'}}, 'user_id': 'user_3BQ8WbvAg5j46bXfPqq86hgwp5z'}\n  [07] Cohere North Mini Code (free) DEGN  16,573 tok  73.1s  [truncated_mid_sentence]\n  [04] Poolside Laguna M.1 (free) OK  15,429 tok  92.0s\n  [08] Nemotron 3 Nano Omni 30B reasoning (free) OK  17,932 tok  74.8s\n\n-- Audit Summary -------------------------------------------\n  DEGN Nemotron 3 Super 120B (free)     17,597 tok   36.2s\n  OK   Poolside Laguna M.1 (free)       15,429 tok   92.0s\n  FAIL Gemma 4 31B (free)                 FAILED   37.4s\n  DEGN Cohere North Mini Code (free)    16,573 tok   73.2s\n  OK   Nemotron 3 Nano Omni 30B reasoning (free) 17,932 tok   74.8s\n\n4/5 succeeded (2 degenerate)  |  67,531 total tokens\nDegenerate: Nemotron 3 Super 120B (free) [cot_leak, truncated_mid_sentence], Cohere North Mini Code (free) [truncated_mid_sentence]\nFailed: Gemma 4 31B (free)\n\nOutput -> D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\n  - 4 audit file(s)\n  - synthesis_prompt.md\n  - _run_meta.json\n",
+    "stderr_tail": "Preflight skipped unavailable models: GPT OSS 120B (free) (openai/gpt-oss-120b:free), Qwen3 Coder 480B (free) (qwen/qwen3-coder:free), Llama 3.3 70B (free) (meta-llama/llama-3.3-70b-instruct:free)\n"
+  },
+  {
+    "lane": "perplexity_cdp",
+    "ok": false,
+    "returncode": 1,
+    "elapsed_s": 8.6,
+    "stdout_tail": "  [chrome_ppl] CDP endpoint 9224 unreachable \u2014 auto-launching Chrome via cdp_watchdog...\n\n-- AUDITPX RESULT -----------------------------------------\nStatus     : BLOCKED\nReason     : BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9224\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9224\n\nOperator   : Start/open signed-in chrome_ppl on 127.0.0.1:9224, then rerun this command.\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "gemini_cdp",
+    "ok": false,
+    "returncode": 1,
+    "elapsed_s": 22.4,
+    "stdout_tail": "\n-- AUDITG RESULT ------------------------------------------\nTarget     : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-22_truthdeck_agent_evidence_control_plane_r1.md\nOutput     : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\nAudit      : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\01_gemini_current_ERROR.md\nSynthesis  : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\synthesis_prompt.md\nMeta       : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\_run_meta.json\nStatus     : FAILED\nReason     : BrowserType.connect_over_cdp: Timeout 20000ms exceeded.\nCall log:\n  - <ws preparing> retrieving websocket url from http://127.0.0.1:9223\n  - <ws connecting> ws://127.0.0.1:9223/devtools/browser/078db227-57c4-4502-a864-74add37e7dc5\n  - <ws connected> ws://127.0.0.1:9223/devtools/browser/078db227-57c4-4502-a864-74add37e7dc5\n\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "kimi_cdp",
+    "ok": true,
+    "returncode": 0,
+    "elapsed_s": 156.3,
+    "stdout_tail": "\n-- AUDITKIMI RESULT ---------------------------------------\nTarget     : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-22_truthdeck_agent_evidence_control_plane_r1.md\nOutput     : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\nAudit      : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\01_kimi_k3_swarm_max.md\nSynthesis  : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\synthesis_prompt.md\nMeta       : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-22_2026-07-22_truthdeck_agent_evidence_control_plane_r1\\_run_meta.json\nStatus     : OK\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "claude_cli",
+    "ok": false,
+    "returncode": 1,
+    "elapsed_s": 9.8,
+    "stdout_tail": "",
+    "stderr_tail": ""
+  }
+]

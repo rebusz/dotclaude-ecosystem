@@ -1,0 +1,6 @@
+{
+  "schema_version": "tsu_remote_preflight.v1",
+  "read_only": true,
+  "status": "ready_for_operator_connect",
+  "next_actions": []
+}

@@ -1,0 +1,8 @@
+{
+  "error": "claude opus -p exit 1: ",
+  "latency_s": 9.36,
+  "model": "opus",
+  "source": "claude_cli_shared",
+  "success": false,
+  "target": "D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-22_truthdeck_agent_evidence_control_plane_r1.md"
+}
