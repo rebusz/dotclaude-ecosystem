@@ -1,8 +1,8 @@
 ---
 title: TruthDeck / truthctl - Agent Evidence Control Plane
 date: 2026-07-22
-status: draft
-status_detail: owner-plan-ready-for-r1-fwf
+status: in-progress
+status_detail: r1-fwf-ceo-reviewed-hold-scope
 risk: R1
 phase: owner-plan
 repos: [dotclaude-ecosystem]
@@ -88,9 +88,11 @@ Existing components to reuse rather than duplicate:
 
 ### Invariants
 
-1. **Read-only by default and by construction.** Collectors use explicit argv arrays,
-   `shell=False`, bounded timeouts, and a command allowlist. No generic shell-command tool
-   exists.
+1. **Application observation is read-only by default and by construction.** Collectors use
+   explicit argv arrays, `shell=False`, bounded timeouts/output, and a command allowlist. No
+   generic shell-command tool exists. TruthDeck may write only its own immutable snapshot
+   store and installer-owned user-home entries; those writes are explicit, ownership-checked,
+   reversible, and never occur inside an observed application repository.
 2. **Unknown fails closed.** Timeout, missing command, malformed JSON, stale evidence, or
    conflicting sources can never become `PASS`.
 3. **Every assertion carries provenance.** A fact without source, observation time, and
@@ -276,6 +278,9 @@ Stable reason codes include at least:
 ```text
 COLLECTOR_TIMEOUT
 COLLECTOR_UNAVAILABLE
+COLLECTOR_OUTPUT_LIMIT
+COLLECTOR_OUTPUT_INVALID
+COLLECTOR_INTERNAL_ERROR
 EVIDENCE_STALE
 EVIDENCE_CONFLICT
 GIT_HEAD_DRIFT
@@ -294,6 +299,9 @@ NO_SAMPLE
 AUTHORIZATION_REQUIRED
 AUTHORIZATION_UNKNOWN
 BOUNDARY_REFUSAL
+REGISTRY_INVALID
+SNAPSHOT_INVALID
+STORAGE_CONFLICT
 ```
 
 ### Stage model
@@ -363,12 +371,17 @@ Requirements:
 - explicit argv list; never `shell=True`;
 - per-command and total deadlines from policy, with timeout preserved as evidence;
 - bounded stdout/stderr; secrets redacted before persistence;
+- subprocesses receive only a documented environment allowlist; environment values are
+  never persisted, and an output-size breach terminates the collector with
+  `COLLECTOR_OUTPUT_LIMIT`;
 - no `.env`, credential-store, keychain, environment-dump, or broker endpoint reads;
 - parser rejects unknown top-level schema when the profile marks it strict;
 - nonzero exit, partial JSON, and missing expected target remain visible;
 - collectors cannot write into application repos;
 - runtime commands must be named in the registry and independently marked `read_only`;
 - path placeholders are resolved without command substitution or glob execution.
+- resolved repo, handoff, output, and tool paths are containment-checked after symlink/reparse
+  resolution; a path escaping its declared root is a `BOUNDARY_REFUSAL`.
 
 Initial collectors:
 
@@ -475,6 +488,10 @@ them into a second status model.
 - Concurrent agents never append to a shared mutable JSON document.
 - Snapshot IDs derive from canonical content excluding observation timestamp and local
   output path; identical evidence can therefore be recognized without overwriting history.
+- Artifact filenames add a process-unique, non-authoritative writer suffix after the UTC and
+  content ID. Concurrent identical observations therefore keep two immutable artifacts while
+  retaining the same semantic `snapshot_id`; the atomic latest pointer may select either
+  digest-identical artifact.
 - Retention is report-only in v1. No automatic deletion or pruning.
 
 ## MCP dependency decision
@@ -741,3 +758,396 @@ This owner plan is ready for the R1 workflow when all are true:
 - `plan_context_updater.py` has been run and its inability to catalog this non-`D:/APPS`
   repo is reported truthfully;
 - the operator chooses `/fwf` or `/fwp` for implementation review and execution.
+
+## CEO review record - Stage 1 `/fwf`
+
+Review date: 2026-07-22. Mode: **HOLD SCOPE**. The R1 `/fwf` contract assigns
+product/mechanical questions in this stage to the agent; the decisions below are therefore
+resolved and binding for implementation. No product expansion was accepted.
+
+### System audit and premise verdict
+
+- Review baseline: `main == origin/main == 185163d47bc4bba61b89a23ecf9e43ddbd0128e3`;
+  clean worktree; one unrelated pre-existing stash (`park generated operator playbook pdf`)
+  remains untouched.
+- The optional code-review graph is empty (`0` nodes, `0` files, never updated), so the
+  review used bounded source reads of the exact existing scripts and workflow plans.
+- No prior TruthDeck implementation, branch, handoff, or competing plan exists. The closest
+  surfaces are `steer_context.py`, `/whatnext`, `git_hygiene.py`,
+  `implementation_review_packet.py`, and `terminal_evidence.py`.
+- The actual pain is repeated reconciliation of independently authoritative evidence. Doing
+  nothing preserves stale-head, merged-versus-runtime, and handoff-freshness mistakes.
+- Verdict: solve the problem as an evidence compiler, not as a workflow/database/agent
+  runtime. TruthDeck must remain downstream of existing authorities.
+
+Landscape check:
+
+- Supply-chain systems such as [SLSA verification](https://slsa.dev/spec/v1.2/verifying-artifacts)
+  and [in-toto attestations](https://in-toto.io/docs/specs/) confirm the useful pattern of
+  claims plus provenance plus policy verification, but their package/build focus does not
+  cover local Git/worktree/runtime/operator gates.
+- [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/) are a strong model
+  for correlated observations, but adopting a collector/backend/telemetry stack would violate
+  the local-first, no-daemon MVP.
+- [MCP security guidance](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)
+  reinforces the decision to expose a fixed, static four-tool surface with no dynamic tool
+  registration or generic execution.
+
+### Approach decision
+
+| Approach | Shape | Effort | Risk | Completeness | Decision |
+|---|---|---:|---:|---:|---|
+| A - CLI-only minimum | Git/plan/GitHub snapshot and `next`; defer profiles, MCP, installer | M | Low | 6/10 | Reject: does not prove cross-host parity or runtime separation |
+| B - Modular compiler | Current plan: deterministic core, bounded collectors, CLI, thin skill, optional MCP | L | Medium | 9/10 | **Approved** |
+| C - Evidence platform | daemon, plugin SDK, database, push events, UI | XL | High | 10/10 | Reject: creates a competing authority and runtime |
+
+Approach B is intentionally modular even though it touches more than 15 files. The module
+count separates trust boundaries (model, subprocess collection, profiles, gates, storage,
+rendering, CLI, MCP); it is not permission to create one class per file or a generic plugin
+framework. Keep data structures simple and collapse helpers when separation adds no security,
+testability, or ownership value.
+
+### Dream-state delta
+
+```text
+CURRENT                         THIS R1 PLAN                     12-MONTH IDEAL
+manual evidence joins    ->     deterministic local compiler ->  shared stable evidence
+stale claims possible           provenance + fail-closed         contract consumed by agents
+workflow-specific prose         CLI + optional MCP parity         without a new authority
+```
+
+The plan reaches the durable contract and first three profiles. It deliberately does not
+reach signed operator authorization, automatic remediation, UI, or a live aggregation
+service.
+
+### What already exists and must be reused
+
+| Sub-problem | Existing surface | Reuse rule |
+|---|---|---|
+| plan frontmatter | `_catalog_common.parse_yaml_block` | reuse bounded parsing pattern; add strict TruthDeck validation |
+| Git/worktrees | `git_hygiene` read functions | reuse reads only; never import/call apply/deploy paths |
+| exact-head identity | `implementation_review_packet` | consume packet fields and digest; do not mint a second review authority |
+| timeout/redaction/atomicity | `terminal_evidence` | reuse semantics or narrowly extracted helpers; no sensitive command execution |
+| steering | `steer_context` and `/whatnext` | consume compact TruthDeck output later; no steering-policy duplication in v1 |
+| workflow/risk routing | `master-agent` and `/fwf`/`/fwp` | observe persisted evidence only; never reproduce routing tables |
+| installation | `install/install.ps1` and `install/install.sh` | extend existing copy flow and add surgical TruthDeck-owned config handling |
+
+### Architecture review
+
+```text
+CLI or four fixed MCP tools
+          |
+          v
+validated request + profile registry
+          |
+          +--> fixed generic collectors --> normalized facts
+          +--> code-owned probe ID ------> normalized facts
+                                             |
+                                             v
+                                  freshness/conflict resolver
+                                             |
+                                             v
+                                  independent lifecycle gates
+                                             |
+                                  +----------+----------+
+                                  v                     v
+                          one next action       immutable snapshot
+
+Forbidden dependency edges:
+  observed repo --X--> TruthDeck writes
+  handoff prose --X--> policy/authorization
+  MCP input -----X--> arbitrary argv/tool registration
+  merged Git ----X--> inferred runtime proof
+```
+
+State transitions are computed, not mutated:
+
+```text
+planned -> implemented -> exact_head_reviewed -> ci -> merged -> runtime_proven
+   |            |                 |               |       |             |
+   +------------+-----------------+---------------+-------+-------------+
+        each stage independently yields PASS/HOLD/BLOCKED/UNKNOWN/N_A
+
+Invalid shortcut: any earlier PASS => later PASS
+Prevention: later predicates require their own eligible exact-identity facts.
+```
+
+For multi-repo requests, each fact and gate is namespaced by canonical repo ID. The overall
+next action is the first failing required gate in the request's explicit repo order. No gate
+in repo A can satisfy repo B, and cross-repo aggregation creates no new authorization.
+
+Single points of failure are `gh`, local Git, registered runtime probes, the registry, and
+the snapshot store. Failure of any one is represented as evidence; it is never converted to
+a green fallback. Rollback is a Git revert plus ownership-checked uninstall, normally under
+five minutes, with snapshots retained.
+
+### Four-path data flow
+
+```text
+HAPPY: request -> validate -> collect -> normalize -> gate -> seal -> render
+NIL:   missing optional input -> explicit N_A/default from profile, never inferred PASS
+EMPTY: command succeeds with empty target -> NO_SAMPLE / OUTPUT_INVALID -> UNKNOWN
+ERROR: timeout/nonzero/malformed/conflict -> diagnostic fact -> non-PASS gate -> safe next check
+
+INPUT -> schema/type/path validation -> allowlisted collection -> normalized facts
+  |             |                         |                    |
+  | nil/type    | escape/reparse          | timeout/limit      | conflict/stale
+  v             v                         v                    v
+reject/N_A   BOUNDARY_REFUSAL      collector reason code  UNKNOWN + provenance
+```
+
+Binding edge decisions:
+
+- Use an injectable UTC clock in tests; freshness at exactly `fresh_until_utc` is stale.
+- Canonical JSON uses UTF-8, sorted keys, compact separators, finite JSON values only, and no
+  platform-dependent path casing in digests after canonical path normalization.
+- `--require` rejects unknown, empty, duplicate-after-normalization, and out-of-order stage
+  tokens; omitted stages remain visible.
+- A valid empty result is distinct from missing output. Profile predicates decide whether an
+  empty collection is `NO_SAMPLE` or an expected zero-value observation.
+- Raw untrusted Markdown/JSON fields never enter rendered Markdown without length bounding
+  and control-character escaping.
+
+### Error and rescue registry
+
+| Codepath | Failure | Specific boundary/result | Rescue action | User sees |
+|---|---|---|---|---|
+| request/registry parse | invalid JSON/schema/type | `RegistryError` / `REGISTRY_INVALID` | stop before collectors | invalid field and safe correction |
+| path resolution | traversal, symlink/reparse escape | `BoundaryError` / `BOUNDARY_REFUSAL` | refuse request | declared root and rejected path |
+| bounded subprocess | missing executable | `FileNotFoundError` / `COLLECTOR_UNAVAILABLE` | preserve other facts | unavailable collector |
+| bounded subprocess | deadline exceeded | `subprocess.TimeoutExpired` / `COLLECTOR_TIMEOUT` | terminate process, retain bounded diagnostic | timeout and probe ID |
+| bounded subprocess | stdout/stderr cap exceeded | `OutputLimitError` / `COLLECTOR_OUTPUT_LIMIT` | terminate process | limit and collector ID |
+| collector parser | nonzero, empty, malformed or wrong schema | `CollectorOutputError` / `COLLECTOR_OUTPUT_INVALID` | mark required facts ineligible | exact parser reason |
+| fact resolver | eligible sources disagree | `EVIDENCE_CONFLICT` result | retain both digests | conflict, never winner-by-convenience |
+| snapshot validation | invariant/schema violation | `SnapshotValidationError` / `SNAPSHOT_INVALID` | do not persist/latest | invalid invariant |
+| immutable create | filename collision or partial write | `FileExistsError`/`OSError` / `STORAGE_CONFLICT` | retry writer suffix; otherwise fail closed | storage failure |
+| latest pointer | atomic replace fails | `OSError` / `STORAGE_CONFLICT` | keep sealed snapshot, leave prior pointer | snapshot path plus pointer warning |
+| GitHub | auth/offline/rate/unknown JSON | collector-specific unavailable/invalid | no implicit cached pass | GitHub evidence unknown |
+| handoff | hash/reference mismatch | explicit mismatch reason | no continuation verdict | expected/actual digest or stale ref |
+| top-level CLI/MCP | unexpected internal defect | `COLLECTOR_INTERNAL_ERROR` at narrow boundary | no traceback in normal output; diagnostic ID and nonzero status | internal error, never green |
+
+Unexpected exceptions may be caught only at the CLI/MCP isolation boundary to prevent a host
+crash; tests and verbose local mode retain the exception chain. Collector implementations
+must catch only named operational exceptions and add collector/scope context.
+
+### Failure modes registry
+
+| Codepath | Failure mode | Rescued? | Test? | User sees? | Logged/persisted? |
+|---|---|---:|---:|---:|---:|
+| registry | user injects arbitrary argv | yes/refused | required | `BOUNDARY_REFUSAL` | yes |
+| subprocess | child hangs or floods output | yes/terminated | required | timeout/output-limit | yes, bounded |
+| resolver | fresh sources conflict | yes/unknown | required | both sources/digests | yes |
+| review/CI | evidence belongs to prior head | yes/non-pass | required | stale-head reason | yes |
+| runtime | merged head but no build/sample | yes/non-pass | required | mismatch/`NO_SAMPLE` | yes |
+| handoff | valid hash but stale base | yes/hold | required | integrity pass + freshness hold | yes |
+| storage | concurrent identical writers | yes/unique artifacts | required | valid path | yes |
+| latest pointer | replacement fails after seal | yes/degraded | required | warning + sealed artifact | yes |
+| rendering | hostile Markdown/control text | yes/escaped | required | inert bounded text | yes |
+| MCP | adapter/core result drift | yes/gate failure | required | parity failure | test artifact |
+
+No accepted row remains with `Rescued=no`, `Test=no`, and silent user impact.
+
+### Security and threat review
+
+| Threat | Likelihood | Impact | Required mitigation |
+|---|---:|---:|---|
+| registry/CLI command injection | Medium | High | probe IDs only, fixed argv, `shell=False`, reject unknown keys |
+| path traversal/symlink escape | Medium | High | post-resolution root containment on every read/write path |
+| prompt injection in handoff/PR/log | High | High | inert data model, escaping, no semantic permission extraction |
+| secret persistence | Medium | High | source allowlist, redact before store, bounded diagnostic fixtures |
+| output-memory exhaustion | Low | High | streaming byte cap plus deadline and child termination |
+| app-repo mutation by collector | Low | High | no collector output path in app repo; before/after dirty-state contract tests |
+| host config damage | Low | Medium | schema discovery, backup, ownership marker, atomic replace, surgical removal |
+| dynamic MCP surface drift | Low | Medium | exactly four static tools, no `tools/list_changed`, no network listener |
+| self-issued authorization | Medium | High | v1 never emits `VERIFIED`; authorisation stays independent |
+
+There are no new credentials. GitHub uses the operator's existing `gh` session without
+reading or persisting credential material. TSU/Tsignal probes remain DISARMED-safe and may
+not connect to broker/order surfaces.
+
+### Code quality review
+
+- Preserve one public model and one evaluator path shared by CLI and MCP; adapters may not
+  translate reason codes or recompute readiness.
+- Do not import mutation-capable `git_hygiene.main`, `do_apply`, or `do_deploy`; reuse only
+  pure read helpers or extract a narrow read-only helper with regression tests.
+- Prefer frozen dataclasses/enums and plain functions. No repository class hierarchy, event
+  bus, service locator, dynamic import, or plugin base class.
+- New functions with more than five decision branches must be split around validation,
+  collection, normalization, and evaluation phases rather than suppressed from lint.
+- Version schema and policy separately. Unknown major versions fail closed; additive unknown
+  fields are accepted only where the schema explicitly allows them.
+
+### Test review
+
+```text
+NEW UX: CLI snapshot/next/verify-handoff/diff/validate/version; four MCP calls
+NEW DATA: request -> collectors -> facts -> resolver -> gates -> snapshot/render
+NEW BRANCHES: five gate states; stale/conflict/timeout/empty/mismatch/N_A
+ASYNC: none; concurrent filesystem writers only
+EXTERNAL: git, gh, code-owned JSON probes, local filesystem
+ERRORS: every row in Error and rescue registry
+```
+
+Required additions beyond the original matrix:
+
+- exact TTL boundary with injectable clock and timezone/naive timestamp rejection;
+- huge output terminates at the byte cap; child cleanup is proven on Windows;
+- symlink/reparse and Unicode path containment; reserved-device/path traversal rejection;
+- `latest.json` replace failure leaves the sealed snapshot valid and prior pointer intact;
+- canonical digest remains stable across key order and Windows separator/case normalization;
+- malformed/unknown registry major version runs zero subprocesses;
+- multi-repo gate namespaces cannot cross-satisfy and request order determines one action;
+- hostile Markdown/control characters render inertly under 4,000 characters;
+- no app-repo writes, before/after status identical, for every shipped profile fixture;
+- installer rollback refuses an ownership-hash mismatch;
+- hostile QA test: fake `gh` returns success plus wrong-head checks and a command-looking PR
+  body; result is stale/unknown and executes nothing;
+- chaos test: simultaneous timeout, stale GitHub fact, pointer replace failure, and one healthy
+  Git fact still yields a valid non-green sealed snapshot when storage itself is usable.
+
+Test pyramid: many deterministic units, bounded fake-executable integration tests, a few CLI
+and host-launch smokes, and no network-dependent test in the required local suite.
+
+### Performance review
+
+Likely slow paths are Git worktree enumeration, `gh` JSON calls, and runtime probes. They run
+under a shared total deadline with per-collector deadlines; deterministic output order must
+not depend on completion order. Bound repository count, fact count, diagnostic bytes,
+subprocess output, and rendered characters in policy. Do not add cache-derived PASS in v1.
+The existing p95 budgets remain acceptance gates; report the machine and sample count with
+the measurements.
+
+### Observability and debuggability review
+
+The immutable snapshot is the operational trace. Every collector record includes start/end
+timing, code-owned ID/version, exit/timeout/output-limit state, eligible fact count, and
+redacted digest. CLI `--verbose` may expose bounded diagnostics, but normal output gives a
+diagnostic ID, exact snapshot path, and reason codes. No daemon means no alert/dashboard is
+required; a runbook table in `docs/TRUTHDECK.md` maps every stable reason code to a safe
+verification step.
+
+### Deployment, rollback, and interaction sequence
+
+```text
+branch -> local tests -> draft PR -> exact-head review -> ready once -> CI -> squash merge
+   -> fast-forward operator checkout -> ownership-checked install -> self-snapshot
+
+rollback decision
+   +-- adapter only wrong -> remove owned MCP entry -> CLI remains
+   +-- install wrong -----> restore timestamped host-config backup
+   +-- core wrong --------> revert merged PR -> reinstall prior tracked version
+   `-- snapshots ---------> retain for diagnosis (deletion needs separate explicit request)
+```
+
+Old and new code do not run simultaneously as a service. Activation writes only TruthDeck's
+own user-home files after repository merge. MCP registration remains opt-in if startup/tool
+description measurement breaches the plan budget. Post-install proof must report repository
+merged, CLI installed, skill installed, MCP registered/disabled, and runtime profile evidence
+as separate facts.
+
+### Long-term trajectory
+
+Reversibility: **5/5**. The main path dependency is the snapshot schema, so golden fixtures
+and explicit version negotiation are mandatory. A future signing/authorization verifier,
+UI, or shared store must consume snapshots as a separate project; none is anticipated inside
+v1 abstractions. The architecture becomes a platform only through a stable evidence contract,
+not through dynamic collectors.
+
+### Design and UX review
+
+Skipped: no graphical UI scope. CLI information order is deliberate: overall non-green
+state, scope/identity, stage table, conflicts/staleness, one next action, authorization and
+forbidden actions, then artifact identity. Markdown output must remain useful in both plain
+PowerShell and agent context.
+
+### NOT in scope
+
+- signed operator identity/GO verifier - separate trust and key-management design;
+- automatic repair or workflow execution - would violate advisory ownership;
+- daemon/database/event bus/cloud sync - no demonstrated MVP need;
+- GUI/EcosystemControl panel - wait for repeated operator demand after CLI use;
+- generic collector plugins or repo-executed code - unacceptable command surface;
+- global plan-loader path refactor - useful but unrelated to evidence compiler delivery;
+- automatic snapshot retention/deletion - destructive policy needs separate approval;
+- OpenTelemetry, SLSA, or in-toto dependency adoption - patterns inform the schema, not MVP dependencies.
+
+### Temporal decisions resolved before implementation
+
+| Phase | Decision now frozen |
+|---|---|
+| foundation | schema, clock, canonical JSON, exception/reason mapping, byte/time/path bounds first |
+| core | gates consume eligible normalized facts only; no collector-specific truth logic |
+| integration | fake executables and code-owned probe IDs; no app imports or config writes |
+| polish | install/MCP are adapters over proven CLI core and can be disabled independently |
+| closeout | self-snapshot is evidence of install state, not proof of app runtime or permission |
+
+### Implementation tasks synthesized from CEO review
+
+- [ ] **T1 (P1, human ~2h / Codex ~15m)** - core contract - implement canonical model,
+  injectable clock, strict validation, stable reason codes, and independent gates.
+  - Surfaced by: architecture/data-flow review.
+  - Files: `scripts/truthdeck_model.py`, `scripts/truthdeck_gates.py`, tests.
+  - Verify: canonical/TTL/state-transition unit matrix.
+- [ ] **T2 (P1, human ~3h / Codex ~20m)** - collector boundary - implement byte/time/path
+  bounds, fixed argv/probe IDs, redaction, and named failure mapping.
+  - Surfaced by: error/security review.
+  - Files: collector, Git, GitHub, handoff, profile/runtime modules, tests.
+  - Verify: hostile fake-executable and no-write contract suite.
+- [ ] **T3 (P1, human ~2h / Codex ~15m)** - storage/render - make concurrent immutable
+  artifacts, atomic latest degradation, safe bounded Markdown, and deterministic diff.
+  - Surfaced by: storage collision and hostile rendering findings.
+  - Files: `scripts/truthdeck_storage.py`, `scripts/truthdeck_render.py`, tests.
+  - Verify: concurrent writers, replace failure, digest and hostile-text tests.
+- [ ] **T4 (P1, human ~2h / Codex ~15m)** - CLI/profile integration - implement commands,
+  repo namespaces, one-action selection, and read-only TSU/Tsignal profile contracts.
+  - Surfaced by: interaction/multi-repo review.
+  - Files: `scripts/truthctl.py`, profile fixtures, docs, tests.
+  - Verify: temporary-repo E2E and DISARMED/no-order boundary tests.
+- [ ] **T5 (P2, human ~2h / Codex ~15m)** - host adapters - add thin skill, exact four-tool
+  MCP parity, and ownership-checked idempotent install/uninstall.
+  - Surfaced by: deployment/security review.
+  - Files: skill, MCP adapter, requirements, installers, installer tests.
+  - Verify: parity, schema-discovery hold, backup/round-trip/ownership mismatch tests.
+- [ ] **T6 (P1, human ~1h / Codex ~10m)** - closeout - run full validation, exact-head
+  independent review, single paid CI transition, merge/sync, and post-install self-snapshot.
+  - Surfaced by: deployment and Definition of Done.
+  - Files: evidence artifacts and terminal plan status only.
+  - Verify: commands in the validation section plus exact SHA/readback evidence.
+
+No new `TODOS.md` item is created: all P1/P2 findings are necessary in-scope controls, and
+all rejected expansions are explicit non-goals rather than deferred commitments.
+
+### CEO completion summary
+
+| Review area | Result |
+|---|---|
+| Mode and approach | HOLD SCOPE; modular compiler approved |
+| System audit | clean baseline; no implementation collision; graph unavailable/empty |
+| Architecture | downstream evidence compiler; forbidden edges explicit |
+| Errors | 12 codepath classes mapped; 0 critical silent gaps |
+| Security | 9 threats mapped; no broker/order/app mutation capability |
+| Data/edge cases | four paths plus clock/path/concurrency/multi-repo rules frozen |
+| Code quality | simple modules; no plugin/service hierarchy |
+| Tests | hostile, chaos, Windows, parity, no-write additions required |
+| Performance | bounded time/output/counts; original p95 budgets retained |
+| Observability | immutable snapshot plus reason-code runbook |
+| Deployment | draft/one-ready/CI/merge/install/self-snapshot; surgical rollback |
+| Long term | reversible 5/5; schema is the only intentional platform seam |
+| Design | skipped; no UI scope |
+| Scope proposals | 0 proposed, 0 accepted, 0 deferred |
+| Unresolved decisions | 0 |
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | HOLD_SCOPE, 0 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | not yet run |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | REQUIRED | Stage 3 of `/fwf` pending |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | no UI scope |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | not required by R1 workflow |
+
+- **VERDICT:** CEO CLEARED - continue to R1 audit, then required engineering review.
+
+NO UNRESOLVED DECISIONS
