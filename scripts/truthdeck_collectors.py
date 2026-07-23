@@ -15,7 +15,10 @@ from typing import Callable, Iterable, Mapping
 from truthdeck_model import CollectorRun, Fact, ReasonCode
 from truthdeck_model import make_fact
 
-ENV_ALLOWLIST = ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE")
+ENV_ALLOWLIST = (
+    "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "HOME",
+    "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "GH_CONFIG_DIR",
+)
 
 
 class CollectorError(RuntimeError):

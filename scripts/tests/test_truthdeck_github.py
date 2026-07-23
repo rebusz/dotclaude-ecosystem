@@ -15,7 +15,10 @@ class GithubCollectorTests(unittest.TestCase):
     def test_empty_or_unknown_check_never_passes(self) -> None:
         self.assertFalse(_check_passed({}))
         self.assertTrue(_check_passed({"conclusion": "SUCCESS"}))
-        self.assertTrue(_check_passed({"conclusion": "SKIPPED"}))
+        self.assertFalse(_check_passed({"conclusion": "SKIPPED"}))
+        self.assertFalse(_check_passed({"conclusion": "NEUTRAL"}))
+        self.assertTrue(_check_passed({"state": "SUCCESS"}))
+        self.assertFalse(_check_passed({"conclusion": "SKIPPED", "state": "SUCCESS"}))
         self.assertFalse(_check_passed({"conclusion": "FAILURE"}))
 
     def test_only_named_required_checks_can_pass_ci(self) -> None:

@@ -1484,6 +1484,19 @@ plan requiring no orphaned descendant. The repair creates a process group/sessio
 the Windows/POSIX process tree, and proves a grandchild cannot write after timeout. External
 output for `b9f31f5` is diagnostic only and is not accepted as a PASS attestation.
 
+Candidate `d08353f` received a complete independent Poolside Laguna M.1 exact-head PASS with
+zero ship-blocking findings, and TruthDeck's own review gate accepted that packet/result pair.
+The same self-check then exposed a separate integration blocker before CI: the bounded Windows
+environment omitted non-secret host config paths (`APPDATA`/`LOCALAPPDATA`), so a child `gh`
+process could not find the already-authenticated GitHub CLI keyring. `d08353f` is therefore
+superseded despite the review PASS. The repair allows only config-location variables (including
+portable `HOME`/`XDG_CONFIG_HOME`/`GH_CONFIG_DIR`) while a regression proves unrelated secret
+environment variables remain absent. The repaired live collector then exposed a second fail-open
+bug before readying: required checks treated GitHub `SKIPPED` and `NEUTRAL` conclusions as passing,
+so the draft-skipped workflow falsely satisfied CI. Required checks now pass only on conclusion
+`SUCCESS` (or legacy status-context `state=SUCCESS` when no conclusion exists), with regression
+coverage for skipped, neutral, failure, and contradictory payloads.
+
 Boundary decision: `tools/autotrader_live_runtime_port_readback.py` was rejected as a
 Tsignal runtime probe because its CLI writes JSON and Markdown into the application repo.
 TruthDeck therefore reports Tsignal runtime evidence unavailable until a separately reviewed
@@ -1493,8 +1506,8 @@ contracts are explicitly read-only and broker/order-path free.
 
 Local evidence at implementation checkpoint:
 
-- focused TruthDeck suite: `66 passed`;
-- full `scripts/tests`: `168 passed, 2 subtests passed`;
+- focused TruthDeck suite: `67 passed`;
+- full `scripts/tests`: `169 passed, 2 subtests passed`;
 - 50 consecutive concurrent-storage stress runs: PASS;
 - scoped Ruff, `compileall`, and `git diff --check`: PASS;
 - local Git/plan snapshot benchmark over 20 runs: p95 `1.9281s`, max `2.1221s`;

@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -21,6 +22,17 @@ class CollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_bounded((sys.executable, "-c", "print('ok')"), cwd=Path(tmp), deadline=time.monotonic() + 2)
         self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_subprocess_keeps_config_paths_but_not_secret_environment(self) -> None:
+        code = (
+            "import os; print(os.getenv('APPDATA', 'missing')); "
+            "print(os.getenv('TRUTHDECK_SECRET_SHOULD_NOT_LEAK', 'missing'))"
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+                "os.environ", {"APPDATA": "truthdeck-config", "TRUTHDECK_SECRET_SHOULD_NOT_LEAK": "secret"}):
+            result = run_bounded((sys.executable, "-c", code), cwd=Path(tmp),
+                                 deadline=time.monotonic() + 2)
+        self.assertEqual(result.stdout.splitlines(), ["truthdeck-config", "missing"])
 
     def test_timeout_terminates_child(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(CollectorTimeout):

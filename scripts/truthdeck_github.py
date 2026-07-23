@@ -60,7 +60,7 @@ def _check_passed(item: Any) -> bool:
         return False
     conclusion = str(item.get("conclusion") or "").upper()
     state = str(item.get("state") or "").upper()
-    return conclusion in {"SUCCESS", "NEUTRAL", "SKIPPED"} or state == "SUCCESS"
+    return conclusion == "SUCCESS" or (not conclusion and state == "SUCCESS")
 
 
 def _check_name(item: Any) -> str:
