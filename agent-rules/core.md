@@ -48,7 +48,7 @@
 
 - Commit coherent, tested units of approved implementation when it preserves progress or prepares handoff.
 - Push when the branch tracks a remote and validation was run or the reason it was skipped is stated.
-- Before reporting an implementation task as finished, commit and push the completed work when the repo has a tracked remote; if commit or push is blocked, state the exact blocker and leave the finished work staged only when that is safer than leaving it mixed with unrelated dirt.
+- Before reporting a task finished, commit and push completed work when a remote is tracked; if blocked, state the exact blocker and leave it staged only when safer than mixing with unrelated dirt.
 - Never stage unrelated user changes; in dirty trees, stage only files intentionally changed for the current task.
 - Do not auto-commit secrets, local env files, generated junk, logs, large binaries, live-money path changes, or work the user marked audit/proposal/read-only.
 
@@ -92,6 +92,7 @@
 - Review the actual diff (Claude: `/code-review`; Codex: its review pass). SHIP-BLOCKING findings must be fixed before the merge proceeds; FIX-LATER findings are noted, not blocking.
 - Audit and matrix runners are internal `/fwf`/`/fwp` stages, not public workflow commands.
 - Do not duplicate the `review` stage when the selected full workflow already owns it.
+- Any platform, R2/R3: draft PR + review gate, never direct-push/self-merge to `main`. `agent-rules/refs/delegated-execution-protocol.md`.
 
 ## Ship-On Default
 
