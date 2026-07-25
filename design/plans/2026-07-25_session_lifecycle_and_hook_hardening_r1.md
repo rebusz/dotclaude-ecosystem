@@ -1305,8 +1305,12 @@ Synthesized from this review's findings. Each task derives from a specific findi
   Perplexity web product the CDP lanes drive - Kimi K2.6 described its input as "compacted
   away", not truncated. The harness sends the whole plan; the browser-side consumer does not
   honour it. The exact downstream mechanism is not pinned down, only our harness ruled out.
-- **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED. Plan cut to core by operator
-  decision; two hooks, four modules, one skill. Eng review required.
+- **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED + **ENG CLEARED**. Plan cut to
+  core by operator decision and reconciled with its own record by the eng review; two hooks,
+  **five modules**, one skill. Seven eng-review issues resolved, zero critical gaps, twelve test
+  gaps closed. Cleared to implement. One caveat carried openly: no independent frontier
+  reviewer graded this review's own findings, for the reason recorded under
+  `## Eng Review Record - Stage 3`.
 
 **UNRESOLVED DECISIONS:**
 - ~~The Codex CLI frontier lane has not returned.~~ **Resolved 2026-07-25:** the lane hangs in
@@ -1315,4 +1319,5 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - CDP web-UI lanes silently degrade long plan input, which cost two of three Perplexity lanes
   in this run. The cause is downstream of `_shared/audit`, so it cannot be fixed by editing the
   runner; the available lever is lane selection - prefer CLI lanes for plans past a size the
-  web UI mishandles. Out of scope here, recorded so the next panel does not repeat it.
+  web UI mishandles. Out of scope here, recorded so the next panel does not repeat it. This
+  plan grew during the review and will hit the same wall on any future panel.
