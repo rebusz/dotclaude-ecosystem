@@ -418,6 +418,12 @@ passed", "committed Y") and confront each with repository evidence: `git log`, `
 recorded exit codes, file mtimes. Every claim emits `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
 The handoff is always written; unverified claims appear as unverified.
 
+The transcript is located by reading **`transcript_path`** from the scratch file (S1), never by
+globbing a directory or taking the most recently modified file. Most-recent is not most-correct:
+with concurrent sessions that resolves to another session's transcript, and Finding 3.1
+established that a transcript can hold pasted credentials and environment dumps. A missing or
+dangling path yields `UNVERIFIED` claims and a line in `hook_errors.log`.
+
 Redaction walks the **parsed structure**, not lines. A session transcript is nested JSONL -
 message objects containing content arrays containing tool-result blocks - and flat-string
 regexes would miss a secret nested one level down. The patterns come from
