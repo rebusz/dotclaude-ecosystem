@@ -430,11 +430,26 @@ regexes would miss a secret nested one level down. The patterns come from
 `terminal_evidence.py`; its line-oriented driver does not.
 
 `/curator` also renders any persisted SessionEnd verdict, which is one of the two delivery
-paths that replaced the channel `SessionEnd` does not have.
+paths that replaced the channel `SessionEnd` does not have. Rendering a verdict stamps its
+`consumed_at`, which is what makes it reapable (S3).
+
+**Hook-wiring check** (eng review, issue 2). `/curator` reports which of this plan's two hook
+entries are present in `settings.json` and names any that are absent. Stage 2's A9 put this
+check in `session_router.py`; Stage 2b's K3 correctly killed that, because the router is
+delivered *by* the hook whose absence it was meant to detect, so in the exact failure state it
+never runs. K3 re-homed the check to "the installer or a status command" - neither of which any
+slice builds, which would have left an applied finding owned by nobody. `/curator` is
+operator-invoked and therefore runs whether or not a single hook is wired, which makes it the
+one existing surface where the check actually executes in the failure case. It buys detection,
+not prevention: the underlying cause - hook entries are hand-edited config outside version
+control - is recorded in `IDEA_BOX.md` and is not solved here.
 
 **Gate:** a fixture session claiming an unmade fix yields `REFUTED`; a genuine fix yields
 `VERIFIED`; an unrunnable check or a stale snapshot yields `UNVERIFIED` and never `VERIFIED`;
-a secret nested inside a tool-result content array does not survive redaction.
+a secret nested inside a tool-result content array does not survive redaction; a missing or
+dangling `transcript_path` yields `UNVERIFIED` and never resolves to another session's
+transcript; with zero, one, and both hook entries present the wiring check names exactly the
+absent ones and is silent when fully wired.
 
 ### S5 - Exact-head review and landing
 
