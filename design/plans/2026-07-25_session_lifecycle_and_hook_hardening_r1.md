@@ -968,7 +968,7 @@ character breaks that lane's stdout echo on Windows. The review itself was intac
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | mode: HOLD_SCOPE, 11 findings, 1 critical gap, all resolved |
 | Audit Panel (CDP) | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes, 8 returned, frontier lane failed `captcha_detected`; 10 applied, 11 discarded |
 | Frontier CLI (Kimi K3) | `auditkimi_cli.py` | Independent frontier, full plan | 1 | issues_found | 10 findings; 2 mechanism errors, 1 self-contradiction, 1 scope cut, 1 debt |
-| Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 0 | **pending** | launched, no output at time of writing |
+| Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 0 | **failed** | hung in `codex-windows-sandbox-setup`; not re-run, defect filed against `_shared/audit` |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | - | pending Stage 3 |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
