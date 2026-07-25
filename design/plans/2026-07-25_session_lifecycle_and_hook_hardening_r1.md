@@ -525,11 +525,13 @@ actually ran.
 
 The hooks are a permanent tax on every session, so budgets are acceptance criteria.
 
-- SessionStart, full run: <= 2,000 characters injected; p95 wall time <= 400 ms;
+- SessionStart, full run: <= 2,000 characters injected; p95 wall time **set from the S1
+  measurement**, not from the original 400 ms (see below);
 - SessionStart, compact re-injection: <= 1,500 characters (the scratch file plus its
   `updated_at` stamp, so a stale plan reads as stale);
 - SessionStart, outside the registry: <= 120 characters; p95 wall time <= 150 ms;
-- SessionStart opportunistic reap: <= 200 files per invocation, <= 150 ms, never blocking;
+- SessionStart opportunistic reap: <= 200 files per invocation, <= 150 ms, **budgeted
+  separately from the injection and run after it is emitted**, never blocking;
 - **curator claim extraction: <= 20,000 characters of redacted transcript window
   (the most recent turns), one model call per invocation, no retry on timeout.**
   This is the plan's only model call and therefore the only place a cost ceiling has to
