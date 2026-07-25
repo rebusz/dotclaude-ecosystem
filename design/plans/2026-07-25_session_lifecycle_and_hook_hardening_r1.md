@@ -949,17 +949,22 @@ character breaks that lane's stdout echo on Windows. The review itself was intac
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
 
 - **CROSS-MODEL:** the CDP panel and the CLI frontier lane disagree sharply in value, and the
-  reason is input fidelity rather than model quality. Lanes fed a truncated paste produced
-  absence claims about sections that were present; the lane given `--repo` access read the
-  plan and found two errors that invalidated a slice. **The lesson is about the harness, not
-  the models:** `auditf.py` truncates at 30 KB, and a plan carrying its own review records
-  now exceeds that. Every future `/fwf` and `/fwp` panel on a mature plan will hit this.
+  reason is input fidelity rather than model quality. Lanes whose input arrived compacted
+  produced absence claims about sections that were present; the lane given `--repo` access
+  read the plan and found two errors that invalidated a slice. **Corrected 2026-07-25:** an
+  earlier draft of this report blamed a 30 KB truncation in `auditf.py`. That is wrong.
+  `auditf.py` reads the plan with a plain `read_text()` and truncates nothing, and no
+  truncation exists anywhere in `_shared/audit`. The degradation happened downstream, in the
+  Perplexity web product the CDP lanes drive - Kimi K2.6 described its input as "compacted
+  away", not truncated. The harness sends the whole plan; the browser-side consumer does not
+  honour it. The exact downstream mechanism is not pinned down, only our harness ruled out.
 - **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED. Plan cut to core by operator
   decision; two hooks, four modules, one skill. Eng review required.
 
 **UNRESOLVED DECISIONS:**
 - The Codex CLI frontier lane has not returned. Fold its findings in when it does, or proceed
   to Stage 3 on the strength of the Kimi lane alone.
-- `auditf.py` truncates plan input at 30 KB, which silently degraded two of three CDP lanes in
-  this run. Fixing it is out of scope here and belongs to the audit runner; recorded so the
-  next panel does not repeat it.
+- CDP web-UI lanes silently degrade long plan input, which cost two of three Perplexity lanes
+  in this run. The cause is downstream of `_shared/audit`, so it cannot be fixed by editing the
+  runner; the available lever is lane selection - prefer CLI lanes for plans past a size the
+  web UI mishandles. Out of scope here, recorded so the next panel does not repeat it.
