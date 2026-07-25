@@ -377,6 +377,18 @@ variable that never changed the outcome.
 excludes its own `session_id`, anything modified inside the retention window, and any session
 the harness reports as live. **Age is never sufficient authority to delete.**
 
+**A verdict is a message, and an unread message is not garbage** (eng review, issue 1). The
+exclusion list above is about liveness, and being *unread* is not liveness - so as originally
+written, a verdict written in a repository the operator visits less often than the retention
+window would be swept up before its only delivery trigger ever fired. That is headline goal 2
+failing silently, and failing hardest in exactly the repositories where a forgotten session is
+most likely. **Resolved:** a verdict file carries a `consumed_at` stamp, set by whichever
+delivery path renders it first - the next `SessionStart` in that repository (S2) or `/curator`
+(S4). The reaper deletes a verdict only when it is consumed, or when it passes a hard outer
+bound that exists solely so nothing leaks forever. This is Finding 2.1's rule - age alone never
+authorises a delete - applied to a second file family rather than a new principle invented for
+one.
+
 **The reaper cannot rely on `SessionEnd`.** A killed session, an IDE crash, or a closed
 terminal never fires it - and on Windows that is the ordinary exit, which is precisely why
 1,944 `turn_counter_*` files accumulated in the first place. A janitor triggered only by clean
