@@ -335,12 +335,19 @@ open `IDEA_BOX` entries, the most recent unconsumed handoff, **any unconsumed Se
 verdict from the previous session in this repository**, and a proposed skill chain from a
 routing table that includes the design chain settled in D5. Outside the registry: one line.
 
+On `startup` and `clear` the router records **`transcript_path`** into the scratch file from its
+own event payload, which is the only place that value is available for free (eng review,
+issue 3).
+
 The router also performs an **opportunistic bounded reap** (see S3) because `SessionStart` is
-the only event guaranteed to fire.
+the only event guaranteed to fire. **The reap is budgeted separately from the injection** and
+runs after the injection is emitted, so a slow sweep can never eat the startup budget it shares
+an event with (eng review, issue 6).
 
 **Gate:** each of the five sources behaves as tabled; a compacted session recovers its goal;
 `resume` proves no clobber; an unregistered repository costs zero injected tokens; the title
-matches the convention.
+matches the convention; `transcript_path` is recorded on `startup`/`clear` and left untouched on
+`resume`/`compact`/`fork`; the injected payload stays inside its measured character ceiling.
 
 ### S3 - SessionEnd verdict and reaper
 
