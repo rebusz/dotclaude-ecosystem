@@ -586,26 +586,42 @@ disabled flag. The kill switch above is the documented emergency-off.
 
 ## Definition of Done
 
-- [ ] Trigger matching ignores quoted, fenced, and pasted content, proven by a regression
-      test built from the 2026-07-25 incident.
-- [ ] Model pricing covers the Claude 5 family and never silently falls back to a cheaper
-      table.
-- [ ] The four previously untracked scripts are canonical in this repository.
-- [ ] Session intent is written to disk, survives compaction, and is re-injected.
-- [ ] Drift, split-lane, and handoff prompts reach the agent mid-session, throttled.
+Reconciled by the Stage 3 eng review (issue 4). The list below is **only what this plan
+ships**. Four items were removed: two described work that left with the scope cut, and two
+described work the hotfix already delivered - which the `## Test plan` section had already
+ruled out listing as pending, three sections earlier in this same document. A checklist is
+read as instructions, so a stale line there is not a stale narrative, it is a wrong build
+order.
+
+- [ ] Session intent is written to disk, survives compaction, and is re-injected at
+      `SessionStart` with `source: compact`.
+- [ ] The scratch file carries `transcript_path`, recorded on `startup`/`clear` only.
 - [ ] No hook in this plan can block a turn or end a session.
 - [ ] `SessionEnd` produces a three-way verdict and never archives on its own.
-- [ ] `turn_counter_*` backlog is reaped and cannot grow unbounded again.
-- [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
-      marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
-- [ ] Redaction traverses nested transcript structure, not lines.
 - [ ] The SessionEnd verdict is persisted and reaches the operator by at least one of the
       two delivery paths, because `SessionEnd` itself cannot speak.
+- [ ] An unconsumed verdict is never reaped on age alone; a consumed one is; a hard outer
+      bound exists so nothing leaks forever.
+- [ ] `turn_counter_*` backlog is reaped and cannot grow unbounded again.
 - [ ] A session killed without `SessionEnd` is still reaped.
+- [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
+      marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
+- [ ] `/curator` locates the transcript via `transcript_path` and never globs for a
+      substitute.
+- [ ] `/curator` names any of this plan's two hook entries that are absent from
+      `settings.json`.
+- [ ] Redaction traverses nested transcript structure, not lines.
 - [ ] Session titles follow the convention automatically at start.
-- [ ] Every token budget above is measured, recorded, and met.
+- [ ] Every token budget is measured in S1, written from that measurement, and **asserted in
+      tests** so it cannot regress silently.
 - [ ] Removing the two hook entries restores pre-plan behavior exactly.
 - [ ] Exact-head review, CI, merge, and operator checkout sync are complete.
+
+**Delivered elsewhere, deliberately not gated here.** Trigger provenance and Claude 5 pricing
+shipped in hotfix `ad12cf2` with tests in `scripts/tests/test_hook_trigger_provenance.py`. The
+drift check and its throttle travel with `2026-07-25_session_drift_check_r1.md`. Eleven
+still-untracked scripts in `~/.claude/scripts` are recorded under `## Current-state evidence`
+and are owned by the split-out plans, not by this one.
 
 ## Author pre-mortem
 
