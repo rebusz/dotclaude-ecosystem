@@ -779,6 +779,11 @@ and `session_end` share their read path and differ only in trigger. **Resolved:*
 collapse into one `session_lifecycle.py` with two entrypoints, taking the module count to
 seven.
 
+> **Corrected by the Stage 3 eng review (issue 4).** K1 then deleted `PreCompact` entirely, so
+> the merged module has **one** entrypoint, not two, and the rationale recorded here no longer
+> applies. The name stays because the module owns session-close behaviour, not because it
+> multiplexes triggers. Post-cut and after eng-review issue D1, the module count is five.
+
 *Finding 5.2 (DRY, resolved).* Four hooks independently need "resolve the registry", "read
 and validate the scratch file", and "write the scratch file atomically". Left unstated, each
 would reimplement it. **Resolved:** one `session_state.py` owns those three operations; the
