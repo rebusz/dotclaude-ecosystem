@@ -709,6 +709,14 @@ check (S2) is the write path as well as the read path; when it fires and the mod
 changed goal, it rewrites the file. PreCompact re-injects with the `updated_at` stamp
 visible so a stale plan is legible as stale.
 
+> **Superseded twice; corrected by the Stage 3 eng review (issue 4).** K1 removed `PreCompact`
+> from this plan, so re-injection happens at `SessionStart` with `source: compact`. The scope
+> cut then removed the drift check, which was half of this resolution - so the automatic
+> rewrite-on-drift path is **not in this plan**. What remains is the `updated_at` stamp on the
+> re-injected scratch file, which makes a stale goal legible as stale rather than preventing
+> it. That is a weaker mitigation than the one recorded above, and it is the honest current
+> state: the rewrite path returns only if `2026-07-25_session_drift_check_r1.md` ships.
+
 **2. Error and rescue map - 1 CRITICAL GAP, resolved.**
 
 | Codepath | Failure | Exception | Rescued | Action | Operator sees |
