@@ -201,7 +201,8 @@ SessionStart ---> session_router.py (facts only)
                         v
          ~/.claude/state/session_plan_<id>.json
           { goal, chain[], persona, risk, repo,
-            start_sha, checkpoints[], claims[] }
+            start_sha, transcript_path, checkpoints[],
+            claims[] }
                         |
               +---------+---------+
               |                   |
