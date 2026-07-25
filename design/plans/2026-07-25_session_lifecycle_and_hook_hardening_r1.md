@@ -397,7 +397,9 @@ and, bounded and throttled, from `SessionStart`.
 
 **Gate:** the 1,944-file backlog is cleared; a live session's files survive a concurrent
 reap; verdicts are correct across merged-clean, merged-dirty, and unmerged fixtures; a
-session killed without `SessionEnd` is still reaped on the next `SessionStart`.
+session killed without `SessionEnd` is still reaped on the next `SessionStart`; an unconsumed
+verdict survives a reap run past the retention window, a consumed one does not, and one past
+the hard outer bound is removed either way.
 
 ### S4 - `/curator`
 
