@@ -382,146 +382,6 @@ a secret nested inside a tool-result content array does not survive redaction.
 
 ### S5 - Exact-head review and landing
 
-**Files:** `scripts/answer_footer.py`, `scripts/repo_hygiene_nudge.py`,
-`scripts/memory_size_guard.py`, `scripts/autoplan_review_workflow.js`,
-`install/` manifest updates.
-
-Copy the four untracked files from `~/.claude/scripts` into canonical `scripts/`, verify
-byte identity after copy, and add them to the installer manifest. No behavior change.
-
-The remaining eight untracked scripts (`multi_audit_free.py`, `of_*.js`, `tsu_*.py`,
-`verify_a1_recall.js`) are **out of scope** and recorded here so their absence is not
-mistaken for coverage.
-
-**Gate:** `diff` proves byte identity; installer status reports zero drift.
-
-### S1 - Repo registry and SessionStart router
-
-**Files:** `scripts/session_registry.py`, `scripts/session_router.py`,
-`templates/session_registry.json.template`, `scripts/tests/test_session_router.py`.
-
-The registry names repositories that get a full run, each with its plan/vision/idea paths.
-It also covers `dotclaude-ecosystem`, which `plan_context_loader.py` cannot detect.
-
-Full run emits, via `additionalContext`:
-
-- repository, branch, HEAD, dirty state, divergence from trunk;
-- active plans and open `IDEA_BOX` entries (bounded, reusing existing loaders);
-- the most recent unconsumed handoff, if any;
-- a proposed skill chain from a routing table;
-- an instruction to write `session_plan_<id>.json`.
-
-It also returns `sessionTitle` in the documented `<Repo> <DD MON> [chip] <topic>` shape.
-This retires the cross-session renaming duty currently described in global rules, which
-exists only because a session cannot rename itself.
-
-Outside the registry: one line with repository and branch, no injection.
-
-The routing table includes the **design chain** (D5): when the repository has a frontend
-surface and the request is visual, propose `design-consultation` ->  `design-shotgun` ->
-`image-to-code` or `design-html` -> taste overlay -> `design-review`, and hand code to
-`/fwf`. It is a suggestion, never a gate.
-
-**Gate:** registered and unregistered repositories both behave as specified; injected
-payload stays under budget; title matches the convention; a repository absent from the
-registry costs zero injected tokens.
-
-### S2 - Drift check on PostToolBatch
-
-**Files:** `scripts/session_drift.py`, tests.
-
-Throttled by batch count and elapsed context. Reads the scratch file and emits a short
-`additionalContext`: the declared goal, what has happened since the last check, and three
-questions - is the plan still right, should a second lane be split off, is it time to hand
-off. Advisory. Never blocks.
-
-`PostToolBatch` fires after **every** batch of parallel tool calls. In the session that
-produced this plan that would have been roughly twelve times. Throttling is a correctness
-requirement, not tuning.
-
-**Gate:** measured firing rate over a recorded real session stays within budget; a
-disabled or failing check never interrupts a turn.
-
-### S3 - PreCompact and SessionEnd
-
-**Files:** `scripts/session_precompact.py`, `scripts/session_end.py`,
-`scripts/state_reaper.py`, tests.
-
-`PreCompact` writes the current scratch file and emits it so the goal survives the
-compaction boundary. This is the single highest-value moment for the whole plan: it is the
-only point where the system knows in advance that context is about to be destroyed.
-
-`SessionEnd` computes one of three verdicts - `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT` - from
-branch merge state, worktree cleanliness, and unresolved items in the scratch file. It
-reports; it never archives.
-
-`state_reaper.py` deletes `turn_counter_*` and `session_plan_*` for sessions older than a
-retention window. It runs from `SessionEnd` and is separately invocable. It deletes only
-files matching its own owned prefixes.
-
-**Gate:** a forced compaction preserves the goal; the reaper removes the 1944-file backlog
-and touches nothing it does not own; verdicts are correct on fixture repositories covering
-merged-clean, merged-dirty, and unmerged states.
-
-### S4 - `/curator`
-
-**Files:** `skills/curator/SKILL.md`, `scripts/curator_claims.py`, tests and fixtures.
-
-Two layers:
-
-1. **State**, delegated to `truthctl snapshot --require ...`. Gate results, reason codes,
-   and the snapshot path are reproduced verbatim. No gate logic is written here.
-2. **Claims**, new. Extract concrete assertions from the session transcript JSONL ("fixed
-   X", "tests passed", "committed Y") and confront each with repository evidence: `git log`,
-   `git diff`, recorded exit codes, file mtimes.
-
-Every claim is emitted as `VERIFIED`, `REFUTED`, or `UNVERIFIED`. The handoff is always
-written; unverified claims appear as unverified. This is the "fail closed on summaries"
-rule made mechanical.
-
-Claim extraction requires judgment, so it is a model step reading a bounded transcript
-window, not a regex. Its cost is paid once per session close.
-
-**Gate:** a fixture session claiming a fix that was never made yields `REFUTED`; a genuine
-fix yields `VERIFIED`; an unrunnable check yields `UNVERIFIED` and never `VERIFIED`.
-
-### S5 - `/sweep`
-
-**Files:** `skills/sweep/SKILL.md`, `scripts/sweep_scan.py`, tests.
-
-Scans a repository for abandoned work: plans whose slices are unchecked while their
-frontmatter says active, `TODO`/`FIXME` older than a threshold, scaffolding without a
-caller, `IDEA_BOX` entries referencing files that no longer exist.
-
-Findings above a value threshold are appended to repository-local `IDEA_BOX.md` as slugged
-entries, which closes the loop through the existing
-`plan_context_updater --resolved-ideas`. A GitHub issue is created **only** when the
-operator asks for a specific finding, per D6.
-
-**Gate:** the scan is read-only, proven by before/after `git status`; appended entries are
-consumable by `plan_context_updater`; no issue is created without an explicit request.
-
-### S6 - Adversarial personas in `autoplan`
-
-**Files:** `scripts/autoplan_review_workflow.js` (tracked by S0), persona prompt files,
-`skills/master-agent/SKILL.md` documentation update.
-
-Extend the existing `personas` array with three audit lenses:
-
-| Persona | Question it forces |
-|---|---|
-| `bad-actor` | who pushes this across the R3 boundary, the broker path, or the Tsignal/LAB seam |
-| `operator-0931` | market just opened, what is on screen, what is one click away, what is missing |
-| `auditor-post-hoc` | can this decision be replayed and reconstructed in a month |
-
-The agent selects which lenses are relevant to the plan under review rather than running
-all of them, and reports per-persona findings plus any plan changes they force.
-
-**Gate:** a plan touching the order boundary selects `bad-actor`; a documentation plan
-selects none and says so; persona output changes the plan text, not only the report.
-
-### S7 - Exact-head review and landing
-
 - run focused and full `scripts/tests`, scoped `ruff`, `compileall`, `git diff --check`;
 - record measured token cost of the SessionStart injection and the drift check;
 - produce the implementation review packet;
@@ -571,32 +431,20 @@ actually ran.
 
 The hooks are a permanent tax on every session, so budgets are acceptance criteria.
 
-- SessionStart full run: <= 2,000 characters injected; p95 wall time <= 400 ms;
-- SessionStart outside the registry: <= 120 characters; p95 wall time <= 150 ms;
-- drift check: <= 600 characters injected. **Throttle: fires when at least 8 tool
-  batches AND at least 25,000 characters of context have elapsed since the last
-  check — whichever condition is satisfied later gates the fire, so both floors
-  must be crossed.** Never more than once per 8 batches regardless of context growth;
-- PreCompact re-injection: <= 1,500 characters;
+- SessionStart, full run: <= 2,000 characters injected; p95 wall time <= 400 ms;
+- SessionStart, compact re-injection: <= 1,500 characters (the scratch file plus its
+  `updated_at` stamp, so a stale plan reads as stale);
+- SessionStart, outside the registry: <= 120 characters; p95 wall time <= 150 ms;
+- SessionStart opportunistic reap: <= 200 files per invocation, <= 150 ms, never blocking;
 - **curator claim extraction: <= 20,000 characters of redacted transcript window
-  (the most recent turns), one model call per session close, no retry on timeout.**
-  This is the plan's only model call inside a hook path and therefore the only
-  place a cost ceiling has to be stated rather than inherited;
+  (the most recent turns), one model call per invocation, no retry on timeout.**
+  This is the plan's only model call and therefore the only place a cost ceiling has to
+  be stated rather than inherited;
 - hook wall time: <= 2 seconds each, fail-open on timeout.
 
-**SessionEnd verdict thresholds** (previously "large context", which no implementation
-could resolve deterministically):
-
-| Merged into trunk | Worktree clean | Open items in scratch | Context used | Verdict |
-|---|---|---|---|---|
-| yes | yes | none | any | `ARCHIVE-OK` |
-| yes | yes or dirty | any | any | `HANDOFF` |
-| no | any | any | >= 60% of window | `CHECKPOINT` |
-| no | any | any | < 60% of window | `CHECKPOINT` |
-
-Unmerged always yields `CHECKPOINT`; the context figure is reported in the verdict for
-the operator's judgement but does not change it. This removes the undefined
-"large context" cutoff entirely rather than assigning it an arbitrary number.
+The drift check's throttle numbers left with the drift check. They are recorded in
+`2026-07-25_session_drift_check_r1.md` together with the contradiction that has to be
+resolved before that plan can be implemented at all.
 
 **Hook execution model** (previously unstated, flagged independently by three lanes):
 Claude Code runs hooks **synchronously** as subprocesses with a per-hook timeout. Every
