@@ -225,12 +225,162 @@ Forbidden edges:
   this plan     --X--> cross-session channel  (that is Conductor)
 ```
 
+## Scope cut - 2026-07-25, operator decision
+
+After the Kimi K3 CLI frontier lane (see `Stage 2b`), the operator cut this plan to its
+core and split the rest. The plan now answers exactly the two questions in the executive
+decision and nothing else.
+
+**Retained:** session state module, repo registry, SessionStart router, SessionEnd verdict,
+reaper, `/curator`.
+
+**Split into their own plans**, each independently motivated and each free to go through its
+own workflow later:
+
+| Was | Now | Why it left |
+|---|---|---|
+| S2 drift check on `PostToolBatch` | `2026-07-25_session_drift_check_r1.md` | Adds an always-on event surface to an ecosystem whose motivating incident was a hook injecting 13.5 KB unrequested. Its own pre-mortem names its noise as the most likely failure. It also carries the unresolved A1-vs-A2 contradiction. |
+| S5 `/sweep` | `2026-07-25_sweep_abandoned_work_r1.md` | Repository hygiene, unrelated to session lifecycle. |
+| S6 adversarial personas | `2026-07-25_adversarial_plan_personas_r1.md` | Plan-review quality, unrelated to session lifecycle. |
+
+**Dissolved entirely:** the old S0 ("bring touched scripts under version control"). It existed
+only to track untracked scripts before editing them. `answer_footer.py` was tracked by the
+hotfix `ad12cf2`; `repo_hygiene_nudge.py`, `memory_size_guard.py`, and
+`autoplan_review_workflow.js` are touched only by the split-out plans and travel with them.
+The cut removed the slice rather than shrinking it.
+
+**Resulting shape:** two hooks instead of four, four modules plus one skill instead of seven
+modules. `PreCompact` and `PostToolBatch` are both gone from this plan - the first because it
+cannot carry the payload the plan asked of it, the second because it left with the drift check.
+
 ## Implementation slices
 
 Slices are ordered so that each one is independently shippable and independently
-removable. S0 is a prerequisite for anything that edits an untracked script.
+removable.
 
-### S0 - Bring touched scripts under version control
+### S1 - Session state and repo registry
+
+**Files:** `scripts/session_state.py`, `scripts/session_registry.py`,
+`templates/session_registry.json.template`, `scripts/tests/test_session_state.py`.
+
+`session_state.py` owns the three operations every consumer needs and nobody reimplements:
+resolve the registry, read-and-validate the scratch file, write it atomically. Writes go to a
+same-directory temp file then `os.replace`, so a process killed mid-write leaves the previous
+good file intact - the Windows failure mode where a terminated subprocess has not released its
+handle degrades to "previous plan still readable", never to "plan lost".
+
+The scratch file carries `schema_version: "session.plan.v1"`. An unrecognised version is
+treated as absent **and** appends `UNRECOGNIZED_VERSION` to `hook_errors.log`, so a stale
+install on a second machine is discoverable instead of looking identical to a first run.
+
+The registry names repositories that get a full run and their plan/vision/idea paths. It
+covers `dotclaude-ecosystem`, which `plan_context_loader.py` cannot detect.
+
+**Gate:** validation rejects malformed, truncated, and wrong-version files without raising;
+concurrent writers never produce a partial file; a registry miss resolves cleanly to the
+minimal branch.
+
+### S2 - SessionStart router
+
+**Files:** `scripts/session_router.py`, `scripts/tests/test_session_router.py`.
+
+One hook, five matchers, three behaviours:
+
+| `source` | Behaviour |
+|---|---|
+| `startup` | full run: facts + instruction to write the scratch file; sets `sessionTitle` |
+| `clear` | same as `startup` |
+| **`compact`** | **re-injects the existing scratch file** - this is the compaction-survival path |
+| `resume` | reads the existing file, never clobbers it |
+| `fork` | reads the existing file, never clobbers it |
+
+**Compaction survival lives here, not in `PreCompact`.** `PreCompact` has exactly one output
+channel, `decision: "block"`, plus the universal fields; it has no `additionalContext` and
+therefore cannot re-inject anything. `SessionStart` has `additionalContext` and its matcher set
+includes `compact`, so the re-injection happens on the near side of the boundary instead of the
+far side. This corrects the plan's original claim that `PreCompact` was "the single
+highest-value moment"; the moment is real, the hook was wrong.
+
+The full run emits repository, branch, HEAD, dirty state, trunk divergence, active plans,
+open `IDEA_BOX` entries, the most recent unconsumed handoff, **any unconsumed SessionEnd
+verdict from the previous session in this repository**, and a proposed skill chain from a
+routing table that includes the design chain settled in D5. Outside the registry: one line.
+
+The router also performs an **opportunistic bounded reap** (see S3) because `SessionStart` is
+the only event guaranteed to fire.
+
+**Gate:** each of the five sources behaves as tabled; a compacted session recovers its goal;
+`resume` proves no clobber; an unregistered repository costs zero injected tokens; the title
+matches the convention.
+
+### S3 - SessionEnd verdict and reaper
+
+**Files:** `scripts/session_lifecycle.py`, `scripts/state_reaper.py`,
+`scripts/tests/test_session_lifecycle.py`, `scripts/tests/test_state_reaper.py`.
+
+**Verdict delivery is the hard part and the original plan had none.** `SessionEnd` output is
+ignored by the harness - exit code and JSON alike - so a verdict emitted there is invisible at
+the only moment it matters. The verdict is therefore **persisted, not announced**: `SessionEnd`
+writes it beside the scratch file, and it reaches the operator by two paths that can actually
+speak - the next `SessionStart` in that repository surfaces it (S2), and `/curator` renders it
+on demand (S4).
+
+Verdict rules, reduced to the three that actually decide anything:
+
+| Condition | Verdict |
+|---|---|
+| merged into trunk, worktree clean, no open items | `ARCHIVE-OK` |
+| merged into trunk, anything else outstanding | `HANDOFF` |
+| not merged | `CHECKPOINT` |
+
+Context consumption is **reported** in the verdict for the operator's judgement and decides
+nothing. The earlier four-row table had two rows that both yielded `CHECKPOINT`, parading a
+variable that never changed the outcome.
+
+`state_reaper.py` deletes `turn_counter_*`, `session_plan_*`, and stale verdict files. It
+excludes its own `session_id`, anything modified inside the retention window, and any session
+the harness reports as live. **Age is never sufficient authority to delete.**
+
+**The reaper cannot rely on `SessionEnd`.** A killed session, an IDE crash, or a closed
+terminal never fires it - and on Windows that is the ordinary exit, which is precisely why
+1,944 `turn_counter_*` files accumulated in the first place. A janitor triggered only by clean
+exits cannot clean up after unclean ones. The reaper therefore runs from **both** `SessionEnd`
+and, bounded and throttled, from `SessionStart`.
+
+**Gate:** the 1,944-file backlog is cleared; a live session's files survive a concurrent
+reap; verdicts are correct across merged-clean, merged-dirty, and unmerged fixtures; a
+session killed without `SessionEnd` is still reaped on the next `SessionStart`.
+
+### S4 - `/curator`
+
+**Files:** `skills/curator/SKILL.md`, `scripts/curator_claims.py`, tests and fixtures.
+
+Two layers.
+
+**State**, delegated to `truthctl`. The curator runs a **fresh** `truthctl snapshot
+--no-store` at close rather than consuming a cached one, and any gate whose evidence head
+differs from current `HEAD` renders `UNVERIFIED`, never `VERIFIED`. Reproducing a stale gate
+result verbatim would be silent misinformation - the exact failure the curator exists to
+prevent.
+
+**Claims**, new. Extract concrete assertions from the session transcript ("fixed X", "tests
+passed", "committed Y") and confront each with repository evidence: `git log`, `git diff`,
+recorded exit codes, file mtimes. Every claim emits `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
+The handoff is always written; unverified claims appear as unverified.
+
+Redaction walks the **parsed structure**, not lines. A session transcript is nested JSONL -
+message objects containing content arrays containing tool-result blocks - and flat-string
+regexes would miss a secret nested one level down. The patterns come from
+`terminal_evidence.py`; its line-oriented driver does not.
+
+`/curator` also renders any persisted SessionEnd verdict, which is one of the two delivery
+paths that replaced the channel `SessionEnd` does not have.
+
+**Gate:** a fixture session claiming an unmade fix yields `REFUTED`; a genuine fix yields
+`VERIFIED`; an unrunnable check or a stale snapshot yields `UNVERIFIED` and never `VERIFIED`;
+a secret nested inside a tool-result content array does not survive redaction.
+
+### S5 - Exact-head review and landing
 
 **Files:** `scripts/answer_footer.py`, `scripts/repo_hygiene_nudge.py`,
 `scripts/memory_size_guard.py`, `scripts/autoplan_review_workflow.js`,
