@@ -868,7 +868,32 @@ both were pointed adversarially at the prior reviews' own conclusions, not just 
 | Lane | Runner | Sandbox | Result |
 |---|---|---|---|
 | `21_kimi_cli_k3` | `auditkimi_cli.py`, kimi 0.27.0 | throwaway worktree | **returned** |
-| `22_codex_cli_gpt` | `auditcodex_cli.py`, codex-cli 0.145.0 | OS read-only | **pending** |
+| `22_codex_cli_gpt` | `auditcodex_cli.py`, codex-cli 0.145.0 | OS read-only | **failed - upstream sandbox hang** |
+
+**Codex lane, resolved 2026-07-25 17:22.** The lane did not time out and did not error; it hung,
+and the cause is upstream of this repo. A later invocation of the same lane was still alive 55
+minutes after launch, and the process tree shows where: `codex` itself had consumed 7.4 s of CPU
+and was idle, waiting on its child `codex-windows-sandbox-setup`, which had consumed **2,395 s of
+CPU in 55 minutes of wall clock** - roughly 72% of one core, spinning rather than blocking. Both
+were terminated by operator decision.
+
+Two things follow, neither of which is a finding about this plan:
+
+- **`--health-check` does not exercise the failing path.** It calls `call_codex_cli` with
+  `repo=None`, which builds argv with `--skip-git-repo-check` and **no `--cd`**. The hang occurs
+  on repo-scoped runs, which is the only way the lane is ever used for an audit. `healthy: true`
+  was therefore never evidence that the lane works, and the handoff's reading of it as "runtime
+  hang rather than a configuration problem" was right for the wrong reason.
+- **`subprocess.run(timeout=...)` did not reap the tree.** The process outlived its 900 s budget
+  by forty minutes. On Windows the timeout kills the direct child; a grandchild holding the
+  inherited stdout/stderr handles keeps the post-kill `communicate()` drain blocked, which is why
+  the runner never wrote its `codex exec timed out` error and `.codex_run.log` is 0 bytes.
+
+**Operator decision, 2026-07-25:** proceed to Stage 3 on the Kimi lane and the CDP panel. The
+lane defect belongs to `D:/APPS/_shared/audit`, not to this plan, and is recorded there rather
+than blocking the review. Stage 2b therefore closes with one frontier lane, not two - stated
+plainly because a panel that silently reports "8 of 9" is the failure mode this plan's own
+`Panel completeness` section exists to prevent.
 
 ### Kimi K3 - two mechanism errors that both prior reviews missed
 
