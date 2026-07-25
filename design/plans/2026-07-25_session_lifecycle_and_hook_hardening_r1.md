@@ -267,14 +267,29 @@ removable.
 
 ### S1 - Session state and repo registry
 
-**Files:** `scripts/session_state.py`, `scripts/session_registry.py`,
+**Files:** `scripts/session_state.py`,
 `templates/session_registry.json.template`, `scripts/tests/test_session_state.py`.
 
-`session_state.py` owns the three operations every consumer needs and nobody reimplements:
+`session_state.py` owns the operations every consumer needs and nobody reimplements:
 resolve the registry, read-and-validate the scratch file, write it atomically. Writes go to a
 same-directory temp file then `os.replace`, so a process killed mid-write leaves the previous
 good file intact - the Windows failure mode where a terminated subprocess has not released its
 handle degrades to "previous plan still readable", never to "plan lost".
+
+**Eng review, issue D1 (2026-07-25).** The slice originally also listed a separate
+`session_registry.py`. That reintroduced the duplication Finding 5.2 was written to remove:
+"resolve the registry" would have had two plausible owners and no rule saying which is
+authoritative. Registry resolution lives in `session_state.py` and nowhere else. The module is
+allowed exactly the four operations named here; anything a later slice wants to add belongs in
+that slice's own module, so this does not become the junk drawer.
+
+The scratch file carries **`transcript_path`** (eng review, issue 3). `SessionStart` receives
+the transcript path in its event payload; `/curator` is a skill and receives no payload, so
+without this field the plan's most security-sensitive consumer has no defined way to find its
+input. Recording it at start makes the binding explicit and per-session, which is what stops a
+concurrent session's transcript - and therefore its secrets - from being resolved by mistake. A
+scratch file written before this field existed, or one whose path no longer resolves, degrades
+to `UNVERIFIED` claims rather than a guess or a raise.
 
 The scratch file carries `schema_version: "session.plan.v1"`. An unrecognised version is
 treated as absent **and** appends `UNRECOGNIZED_VERSION` to `hook_errors.log`, so a stale
