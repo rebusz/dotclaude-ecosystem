@@ -550,6 +550,26 @@ budgets above are acceptance criteria and not guidance. No hook performs network
 For scale, the incident that motivated slice 1 injected 13.5 KB unrequested. Any slice that
 breaches its budget is not shipped until it fits.
 
+**Budgets are asserted, not merely measured** (eng review, issue 5). S5 measured each number
+once, at landing, and nothing re-checked it afterwards. A ceiling nobody enforces is
+documentation: the first later edit that adds one more useful fact to the router regrows the
+injection permanently, on every session in every repository, with no test going red. That is
+precisely the regression this plan exists to prevent, so the character ceilings and the wall-time
+budgets are unit-test assertions on the router's own return value - no clock dependence for the
+character counts, no I/O, no flake surface. Raising a ceiling stays possible and becomes a
+deliberate argument rather than a silent drift.
+
+**Why the 400 ms p95 was withdrawn** (eng review, issue 6). CEO Finding 7 set 400 ms as the
+registered-case target, and the fact list in S2 was specified separately and never priced
+against it. The arithmetic does not close: interpreter startup on Windows is 150-250 ms by
+Finding 7's own measurement, the opportunistic reap claimed another 150 ms of the same event,
+and what remains has to cover several `git` subprocess spawns, a plan-directory scan and two
+file reads. Combined with the assertions above, keeping 400 ms would have planted a test that
+fails on the day it is written and then gets edited upward until it passes, which destroys the
+point of having a budget. The number is therefore **derived from the S1 measurement** rather
+than asserted ahead of it, and the reap's allowance is separated from the injection's so one
+janitor run cannot consume the other's budget.
+
 ## Rollback and emergency off
 
 1. Remove the two hook entries from `settings.json`. This is the kill switch, and it is
