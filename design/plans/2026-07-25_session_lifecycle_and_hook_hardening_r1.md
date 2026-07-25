@@ -491,6 +491,23 @@ pending work would misrepresent what is left to build.
 | Every hook script raises an exception | session unaffected, failure recorded to a log |
 | Both hooks removed from settings | ecosystem behaves exactly as before this plan |
 
+Added by the Stage 3 eng review. Nine rows follow from issues 1, 2 and 3; two are the budget
+assertions from issue 5.
+
+| Scenario | Expected |
+|---|---|
+| **Unconsumed verdict, reap runs past the retention window** | **file survives; delivery still possible** |
+| Consumed verdict, reap runs past the retention window | file removed |
+| Verdict past the hard outer bound, never consumed | file removed; bound exists so nothing leaks forever |
+| Rendering a verdict (either delivery path) | `consumed_at` stamped, exactly once |
+| `startup`/`clear` | `transcript_path` recorded from the event payload |
+| `resume`/`compact`/`fork` | `transcript_path` left untouched |
+| **Curator with `transcript_path` absent** | **`UNVERIFIED` claims, logged; never globs for a substitute** |
+| Curator with `transcript_path` pointing at a deleted file | `UNVERIFIED` claims, logged, no raise |
+| Curator wiring check, zero / one / both hook entries present | names exactly the absent ones; silent when fully wired |
+| **SessionStart full run, registered repo** | **injected payload within its measured character ceiling** |
+| SessionStart outside the registry | injected payload within the minimal-branch ceiling |
+
 ### Validation commands
 
 ```powershell
