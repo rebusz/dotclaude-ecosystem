@@ -35,6 +35,45 @@ HOME = Path.home() / ".claude"
 LOADER = HOME / "scripts" / "plan_context_loader.py"
 STEER = HOME / "scripts" / "steer_context.py"
 
+# --- Trigger provenance -----------------------------------------------------
+# A trigger must come from the OPERATOR'S OWN sentence, never from material they
+# pasted. On 2026-07-25 a pasted Reddit thread containing the word "drift" inside
+# a third-party comment fired the steering branch and injected 13.5 KB into a turn
+# about something else. Any pasted log, issue body, audit report, or model
+# transcript could do the same, so quoted/fenced material is stripped and long
+# prompts are matched only at their edges (where an operator actually writes).
+PASTE_THRESHOLD = 2000  # chars of cleaned text above which a prompt is assumed to carry a paste
+EDGE_WINDOW = 500       # chars kept from each end of such a prompt
+
+_FENCE_RE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_QUOTE_LINE_RE = re.compile(r"^[ \t]*>.*$", re.M)
+_MD_LINK_RE = re.compile(r"\[[^\]\n]*\]\([^)\n]*\)")
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def operator_text(prompt: str) -> str:
+    """Return the part of `prompt` that is plausibly the operator's own writing.
+
+    Drops fenced blocks, inline code, blockquote lines, markdown links and bare
+    URLs; then, for anything long enough to contain a paste, keeps only the head
+    and tail — an operator's instruction sits at one end, pasted bulk in between.
+
+    Known limitation: a genuinely long operator-authored prompt with a trigger
+    buried in its middle will not fire. That is the deliberate trade — a missed
+    trigger costs one explicit re-ask, a false trigger costs 13.5 KB and can flip
+    the session's operating mode.
+    """
+    text = _FENCE_RE.sub(" ", prompt)
+    text = _QUOTE_LINE_RE.sub(" ", text)
+    text = _MD_LINK_RE.sub(" ", text)
+    text = _URL_RE.sub(" ", text)
+    text = _INLINE_CODE_RE.sub(" ", text)
+    if len(text) <= PASTE_THRESHOLD:
+        return text
+    return text[:EDGE_WINDOW] + "\n" + text[-EDGE_WINDOW:]
+
+
 # Plan/module CREATION — narrow on purpose (not general talk about plans).
 PATTERNS = [
     r"\bnow[ay]\s+plan\b",
@@ -138,8 +177,10 @@ def main() -> int:
     if not prompt:
         return 0
 
-    plan_match = any(rx.search(prompt) for rx in COMPILED)
-    steer_match = any(rx.search(prompt) for rx in STEER_COMPILED)
+    # Match only against the operator's own words — never pasted/quoted material.
+    scannable = operator_text(prompt)
+    plan_match = any(rx.search(scannable) for rx in COMPILED)
+    steer_match = any(rx.search(scannable) for rx in STEER_COMPILED)
     if not (plan_match or steer_match):
         return 0  # non-matching prompts add ZERO tokens
 
