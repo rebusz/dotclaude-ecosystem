@@ -1,0 +1,38 @@
+[
+  {
+    "label": "Best",
+    "model_id": "perplexity/best",
+    "slug": "01_ppl_best",
+    "success": true,
+    "tokens": null,
+    "latency_s": 120.49,
+    "source": "perplexity_cdp",
+    "github_repo": null,
+    "github_connector_present": null,
+    "selected_model_text": "Best\nSelects the best available model"
+  },
+  {
+    "label": "Sonar 2",
+    "model_id": "perplexity/sonar-2",
+    "slug": "02_ppl_sonar2",
+    "success": true,
+    "tokens": null,
+    "latency_s": 57.31,
+    "source": "perplexity_cdp",
+    "github_repo": null,
+    "github_connector_present": null,
+    "selected_model_text": "Sonar 2"
+  },
+  {
+    "label": "Kimi K2.6",
+    "model_id": "perplexity/kimi-k2.6",
+    "slug": "07_ppl_kimi_k26",
+    "success": true,
+    "tokens": null,
+    "latency_s": 53.74,
+    "source": "perplexity_cdp",
+    "github_repo": null,
+    "github_connector_present": null,
+    "selected_model_text": "Kimi K2.6"
+  }
+]
