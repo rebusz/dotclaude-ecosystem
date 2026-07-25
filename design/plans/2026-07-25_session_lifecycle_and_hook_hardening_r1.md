@@ -421,11 +421,37 @@ actually ran.
 
 The hooks are a permanent tax on every session, so budgets are acceptance criteria.
 
-- SessionStart full run: <= 2,000 characters injected;
-- SessionStart outside the registry: <= 120 characters;
-- drift check: <= 600 characters, at most once per N batches;
+- SessionStart full run: <= 2,000 characters injected; p95 wall time <= 400 ms;
+- SessionStart outside the registry: <= 120 characters; p95 wall time <= 150 ms;
+- drift check: <= 600 characters injected. **Throttle: fires when at least 8 tool
+  batches AND at least 25,000 characters of context have elapsed since the last
+  check — whichever condition is satisfied later gates the fire, so both floors
+  must be crossed.** Never more than once per 8 batches regardless of context growth;
 - PreCompact re-injection: <= 1,500 characters;
+- **curator claim extraction: <= 20,000 characters of redacted transcript window
+  (the most recent turns), one model call per session close, no retry on timeout.**
+  This is the plan's only model call inside a hook path and therefore the only
+  place a cost ceiling has to be stated rather than inherited;
 - hook wall time: <= 2 seconds each, fail-open on timeout.
+
+**SessionEnd verdict thresholds** (previously "large context", which no implementation
+could resolve deterministically):
+
+| Merged into trunk | Worktree clean | Open items in scratch | Context used | Verdict |
+|---|---|---|---|---|
+| yes | yes | none | any | `ARCHIVE-OK` |
+| yes | yes or dirty | any | any | `HANDOFF` |
+| no | any | any | >= 60% of window | `CHECKPOINT` |
+| no | any | any | < 60% of window | `CHECKPOINT` |
+
+Unmerged always yields `CHECKPOINT`; the context figure is reported in the verdict for
+the operator's judgement but does not change it. This removes the undefined
+"large context" cutoff entirely rather than assigning it an arbitrary number.
+
+**Hook execution model** (previously unstated, flagged independently by three lanes):
+Claude Code runs hooks **synchronously** as subprocesses with a per-hook timeout. Every
+hook in this plan is therefore on the session's hot path, which is why the wall-time
+budgets above are acceptance criteria and not guidance. No hook performs network I/O.
 
 For scale, the incident that motivated slice 1 injected 13.5 KB unrequested. Any slice that
 breaches its budget is not shipped until it fits.
