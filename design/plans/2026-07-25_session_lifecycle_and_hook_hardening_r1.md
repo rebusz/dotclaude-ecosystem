@@ -709,16 +709,158 @@ required expansion, and none contradicts D1-D7. One deployment risk is accepted 
 recorded rather than solved. Slice count moves from seven to eight with `session_state.py`
 added and `session_precompact`/`session_end` collapsed.
 
+## Stage 2 Audit Synthesis - `/fwp` paid panel
+
+Run: `design/audits/2026-07-25_2026-07-25_session_lifecycle_and_hook_hardening_r1/`
+Topology: R1 audit, `--mode paid --synthesizer claude`.
+
+### Panel completeness - read this before weighing anything below
+
+| Lane | Source | Returned | Usable |
+|---|---|---|---|
+| GPT Pro current | `gpt_cdp` | **no - `captcha_detected`** | - |
+| Perplexity Best | `perplexity_cdp` | yes, 120 s | **yes** |
+| Perplexity Sonar 2 | `perplexity_cdp` | yes, 57 s | no - truncated input |
+| Perplexity Kimi K2.6 | `perplexity_cdp` | yes, 54 s | no - truncated input |
+| Gemini current | `gemini_cdp` | yes | partial |
+| DeepSeek V4 Pro, Mistral Medium 3.5, MiniMax M3, Seed 1.6 | OpenRouter paid | yes | partial |
+
+Two failures compound here and neither may be papered over:
+
+1. **The opposite-frontier lane did not run.** With `--synthesizer claude`, the GPT CDP
+   lane exists specifically so a non-Claude frontier model grades work a Claude agent
+   produced. It returned `captcha_detected`. The captcha was not bypassed - doing so is
+   prohibited and would not have produced trustworthy evidence anyway. **This panel
+   therefore contains no independent frontier reviewer.**
+2. **Two of three Perplexity lanes audited a truncated plan.** Sonar 2 opens with "Given
+   the heavy compaction"; Kimi K2.6 states "roughly 60-70% of the body was compacted
+   away" and quotes a sentence cut mid-word at "SessionSta". Their findings are dominated
+   by absence claims about sections that are present in the plan - architecture diagram,
+   token budget numbers, implementation slices, the D1-D7 decision table, the Reddit-paste
+   regression test. Those are artifacts of a mutilated input, not defects in the plan.
+
+**Effective panel: one fully-informed lane plus partial corroboration.** Confidence in
+this stage is **low-to-moderate**, not the moderate-to-high a complete R1 panel would
+carry. Recorded rather than smoothed over.
+
+### Applied - consensus and unique-valid findings
+
+Each entry states the plan heading, the change, and the reason, per the synthesis contract.
+
+**A1 (P1, `Why now` / Invariant 5 / S2 / Test plan) - close the PostToolBatch injection
+surface.** The 2026-07-25 hotfix closed trigger injection through `UserPromptSubmit`, where
+the vector was pasted prompt text. `PostToolBatch` delivers `tool_calls[].tool_output`, and
+a drift check that reads "what has happened since the last check" would naturally read it -
+inheriting the exact defect class slice 1 exists to close. A file containing the word
+`drift`, or a log line containing `ultracode`, would be enough. **Change:** `session_drift.py`
+derives its context from the scratch file and from operator-authored turn text only; it
+never scans tool-result payloads. A regression test mirroring the hotfix fixture is required:
+tool output containing a trigger must not fire anything. *Best, unique, architecturally
+valid - and the single most valuable finding this panel produced.*
+
+**A2 (P1, `Token budget`) - define the drift throttle.** The plan said "at most once per N
+batches" and never defined N, while the Definition of Done gates on "measured firing rate
+within budget". An acceptance criterion whose budget is undefined cannot be evaluated, and
+the pre-mortem names drift-check noise as the most likely failure. **Change:** applied
+above - 8 batches AND 25,000 characters, both floors required.
+
+**A3 (P1, `Architecture` / S3) - log a clean version miss.** Finding 1.1 made unrecognised
+`schema_version` fall to "no plan". That is correct behaviour and invisible telemetry: a
+stale install on a second machine degrades silently and looks identical to a first run.
+**Change:** a version mismatch appends `UNRECOGNIZED_VERSION` to `hook_errors.log`. The
+session still degrades gracefully; the degradation is now discoverable.
+
+**A4 (P2, `Token budget` / S4) - ceiling the curator's model call.** The budget table
+covered every injection path and omitted the one explicit model call the plan introduces.
+A 200-turn session yields hundreds of KB of JSONL; "bounded window" without a number is
+unbounded. **Change:** applied above - 20,000 characters, one call, no retry.
+
+**A5 (P2, `Token budget` / S3) - replace the undefined CHECKPOINT threshold.** "Large
+context" appeared in no table and no test. **Change:** applied above - the verdict is
+decided by merge state and open items; context percentage is reported, never decisive.
+
+**A6 (P2, S4 / reuse map) - a stale TruthDeck snapshot must not be reproduced as truth.**
+The error map covered `truthctl` absent. It did not cover `truthctl` present with a snapshot
+whose head has moved. Reproducing a stale gate result "verbatim" is silent misinformation -
+the precise failure the curator exists to prevent. **Change:** the curator re-runs
+`truthctl snapshot --no-store` at close rather than consuming a cached one, and any gate
+whose evidence head differs from current `HEAD` is rendered `UNVERIFIED`, never `VERIFIED`.
+
+**A7 (P2, Security Finding 3.1) - redaction must traverse structure, not lines.**
+`terminal_evidence.py` redacts flat terminal output. A session transcript is nested JSONL:
+message objects containing content arrays containing tool-result blocks. Flat-string regexes
+would miss secrets nested one level down - a boundary mismatch on the plan's
+highest-sensitivity path. **Change:** the curator walks the parsed structure and redacts at
+every string leaf before assembling the window, reusing the patterns from
+`terminal_evidence.py` but not its line-oriented driver.
+
+**A8 (P2, S2 / S3, Windows-specific) - a killed hook must not lose the checkpoint.** On
+Windows, terminating a subprocess mid-write does not guarantee the file handle is released;
+the next write hits `PermissionError`, which the error map routes to "treat as no plan" -
+silently discarding the session's intent. **Change:** scratch writes go to a same-directory
+temp file and `os.replace` (the pattern already used by `terminal_evidence.py` and
+`answer_footer.py`), so a killed write leaves the previous good file intact; a
+`PermissionError` on read retries once before degrading.
+
+**A9 (P2, S1 / Deployment) - the router self-diagnoses missing wiring.** CEO Finding 9
+accepted that `settings.json` entries are hand-wired and undetected. The asymmetry that
+leaves is real: a machine with modules installed but hooks unwired runs zero hooks and says
+nothing, while the operator believes the system is live. **Change:** `session_router.py`
+checks that all four expected hook entries are present and logs one line naming any that are
+absent. Self-diagnosis inside existing module scope, no installer ownership required.
+
+**A10 (P3, S5) - define the `/sweep` value threshold.** "Findings above a value threshold"
+is satisfied equally by always-append and never-append. **Change:** a finding is appended
+only when it names a concrete artifact (file path, plan slice, or `IDEA_BOX` slug) and is
+older than 14 days; everything else goes to the report only.
+
+### Corroborated - already resolved before the panel ran
+
+**Degraded mode needs an observable signal.** Sonar 2 and Kimi K2.6 raised this
+independently despite their truncated inputs, and it matches CEO Finding 8 (fail open toward
+the session, fail loud toward `hook_errors.log`). Three lanes converging on a resolved
+finding is confirmation the resolution was the right shape.
+
+**Hook execution model was genuinely unstated.** All three Perplexity lanes flagged it, and
+unlike their other absence claims this one was not a truncation artifact - the plan really
+never said whether hooks are synchronous. Now stated explicitly in `Token budget`.
+
+### Discarded, with reasons
+
+| Finding | Source | Why discarded |
+|---|---|---|
+| Architecture section missing / must be restored | Kimi P1, Sonar P1 | Present in full; truncation artifact |
+| Token budget has no numeric criteria | Sonar P2, Kimi P2 | Present in full; truncation artifact |
+| Implementation slices have zero detail | Kimi P1, Sonar P2 | S0-S7 present with files and gates; truncation artifact |
+| Reddit-paste scenario has no test | Kimi P2 | Test exists and shipped in `test_hook_trigger_provenance.py` |
+| D1-D7 decision table omitted | Kimi P2 | Present in full; truncation artifact |
+| "Verified verdict at close" has no design | Sonar P1 | Conflates the SessionEnd verdict with the curator; both specified |
+| Invariant 1 contradicts survive-compaction | Sonar P2 | No conflict: scratch-not-truth is about *authority*, not durability |
+| Windows paths invalid in containers | Kimi P3 | Windows-first is a declared ecosystem boundary, not a defect |
+| `answer_footer` pricing test ownership unclear | Best P3 | Stale: hotfix merged as `ad12cf2` with tests before this panel ran |
+| Two sessions in one directory clobber each other | Best P2 | `session_id` is unique per session; per-session filenames already separate them |
+| `operator-0931` persona assumes one market open | Best P3 | Persona is prompt text, tuned at use; not a gating defect |
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | mode: HOLD_SCOPE, 11 findings, 1 critical gap, all resolved |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | superseded by `/fwp` Stage 2 panel |
+| Audit Panel | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes: 8 returned, 1 failed (`captcha_detected`); 10 applied, 11 discarded |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | superseded by Stage 2 panel |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | - | pending Stage 3 |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
 
-- **VERDICT:** CEO CLEARED (HOLD SCOPE, all findings resolved in scope) - eng review required.
+- **CROSS-MODEL:** one fully-informed lane (Perplexity Best) produced every applied finding;
+  two lanes audited a truncated plan and their absence claims were discarded with reasons;
+  the GPT CDP frontier lane did not run. Three lanes independently corroborated the
+  already-resolved observable-degraded-mode finding, and three flagged the genuinely
+  unstated hook execution model. Panel confidence: **low-to-moderate**.
+- **VERDICT:** CEO CLEARED + AUDIT APPLIED (10 findings absorbed, 1 of them closing an
+  injection surface the hotfix would otherwise have left open one event downstream) - eng
+  review required.
 
-NO UNRESOLVED DECISIONS
+**UNRESOLVED DECISIONS:**
+- Re-run the GPT Pro CDP frontier lane before implementation, or accept an R1 panel with no
+  independent frontier reviewer? The captcha was not bypassed and will not be. Operator call.
