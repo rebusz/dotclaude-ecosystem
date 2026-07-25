@@ -6,7 +6,7 @@ status_detail: grilled-and-agreed-awaiting-fwp-review
 risk: R1
 phase: plan
 repos: [dotclaude-ecosystem]
-tags: [agent-tooling, hooks, session-lifecycle, handoff, evidence, personas]
+tags: [agent-tooling, hooks, session-lifecycle, compaction, handoff, evidence]
 related:
   - design/plans/2026-07-22_truthdeck_agent_evidence_control_plane_r1.md
   - design/plans/2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md
@@ -29,8 +29,8 @@ Two questions are currently unanswered by any tool in the ecosystem:
 
 TruthDeck answers what is true about *repository and runtime state*. It does not answer
 either of the above. `/fwf` and `/fwp` own the engineering lifecycle of a *plan*, not the
-lifecycle of a *session*. This plan fills that gap with four hooks, one session-scoped
-scratch file, and two skills, all advisory.
+lifecycle of a *session*. This plan fills that gap with two hooks, one session-scoped
+scratch file, and one skill, all advisory.
 
 **Plan-writing authorization:** granted by the operator on 2026-07-25 after a `/grill-me`
 interview (seven decisions recorded below).
@@ -38,12 +38,11 @@ interview (seven decisions recorded below).
 
 ## Consequence, downside, reversibility
 
-- **Proposed action:** harden one existing hook against injected triggers; add SessionStart,
-  PostToolBatch, PreCompact, and SessionEnd hooks; add a per-session scratch file; add
-  `/curator` and `/sweep`; extend `autoplan` personas; add a repo registry.
+- **Proposed action:** add SessionStart and SessionEnd hooks; add a per-session scratch file; add `/curator`; add a repo
+  registry. The drift check, `/sweep`, and the persona work were cut to their own plans.
 - **Plausible downside if wrong:** the hooks run on every session in every repository, so a
-  defect degrades all work everywhere, not one project. A noisy drift-check trains the
-  operator to ignore it. A wrong curator verdict makes honest handoffs look dishonest.
+  defect degrades all work everywhere, not one project. A wrong curator verdict makes
+  honest handoffs look dishonest.
   The scratch file could be mistaken for a second plan authority.
 - **Reversibility:** fully reversible. Remove hook entries from `settings.json`, delete
   `~/.claude/state/session_plan_*`, revert the commits. No application repository, runtime,
@@ -61,12 +60,11 @@ an emergency-off path, and a slice order in which every hook is independently re
 
 1. A session declares its goal, skill chain, persona, and risk class at start, on disk.
 2. That declaration survives compaction and is re-injected afterwards.
-3. Mid-session, the agent is periodically asked whether the plan still holds, whether a
-   second lane should be split off, and whether it is time to hand off.
-4. At close, claims made during the session are confronted with repository evidence before
-   anything is called done.
-5. Abandoned work is discoverable.
-6. Plans are audited through explicitly named adversarial personas.
+3. At close, claims made during the session are confronted with repository evidence before
+   anything is called done, and the outcome is persisted where the operator will meet it.
+
+Goals about mid-session steering and abandoned-work discovery were in the original draft
+and left with the scope cut; see `## Scope cut`.
 
 ### Collision verdict
 
@@ -78,7 +76,7 @@ bounded fallback read of `design/plans/` was used instead. Three collisions were
 |---|---|---|
 | A curator that verifies claims | `2026-07-22_truthdeck_agent_evidence_control_plane_r1.md`, **shipped**. It already owns gate evaluation, fail-closed semantics, and `verify-handoff`. Its pre-mortem names "second source of truth" as failure mode 1 | **Reshape.** `/curator` consumes `truthctl`; it never re-implements a gate or mints a second evidence authority |
 | A `Monitor`-based event bus between worktree lanes | `2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md` (draft) owns cross-repo agent coordination. Shipped TruthDeck R1 non-goals include "no always-on daemon, HTTP service, **event bus**" | **Dropped from this plan.** The correct path to lane coordination is running Conductor through `/fwf`, not building a competing bus |
-| A `/fwd` design workflow command | `2026-07-21_global_fwf_fwp_contract_reset.md`: "No compatibility aliases, soak/shadow phase, or **third workflow command**" | **Dropped as a command.** The design chain becomes a routing rule inside S1 |
+| A `/fwd` design workflow command | `2026-07-21_global_fwf_fwp_contract_reset.md`: "No compatibility aliases, soak/shadow phase, or **third workflow command**" | **Dropped as a command.** The design chain becomes a routing rule inside S2 |
 
 **Verdict: CREATE NEW PLAN, LINK PREDECESSORS.** Do not amend or supersede TruthDeck R1,
 Conductor R2, or the workflow contract reset.
@@ -103,9 +101,10 @@ Neither instruction came from the operator. Both came from pasted third-party te
 detector reads `data["prompt"]` and applies its regexes to the whole string with no
 distinction between what the operator wrote and what the operator quoted. Any pasted log,
 issue body, audit report, or model transcript can therefore trigger a mode change or a
-context injection. This is the first slice.
+context injection. That defect is closed: the hotfix landed as `ad12cf2` before this plan
+entered review, which is why it is no longer a slice here.
 
-The remaining slices address a second, slower failure: session intent lives only in the
+This plan addresses a second, slower failure: session intent lives only in the
 context window, so compaction destroys it, and session outcome is a self-report that
 nothing checks.
 
@@ -125,10 +124,10 @@ Baseline at plan creation:
   `claude-opus-5`, which misses the table and silently falls back to
   `_DEFAULT_PRICING = (3.0, 15.0, 3.75, 0.30)`, the Sonnet rate. Reported session cost is
   understated roughly fivefold on every turn.
-- **12 of 36 scripts in `~/.claude/scripts` are absent from `dotclaude-ecosystem/scripts`**,
-  including three this plan modifies: `answer_footer.py`, `repo_hygiene_nudge.py`,
-  `memory_size_guard.py`, plus `autoplan_review_workflow.js`. Fixes to those files
-  currently exist only on one machine and do not survive a reinstall.
+- **12 of 36 scripts in `~/.claude/scripts` were absent from `dotclaude-ecosystem/scripts`**.
+  `answer_footer.py` was brought under version control by the hotfix; the remaining eleven
+  are untouched by this plan after the scope cut. Fixes to them still exist on one machine
+  only and do not survive a reinstall. Recorded so the gap is not mistaken for coverage.
 - `plan_keyword_detector.py` is tracked and byte-identical between repo and install.
 - TruthDeck is installed with CLI and MCP registered on both Claude and Codex.
 
@@ -138,10 +137,8 @@ Baseline at plan creation:
 |---|---|---|
 | `truthctl` snapshot/gates/verify-handoff | curator's evidence layer | re-implemented in the curator |
 | `plan_context_loader.py`, `steer_context.py` | fact sources for the router | duplicated policy |
-| `git_hygiene.py` read paths | `/sweep` repository observation | cleanup authority |
 | `_catalog_common.py` | frontmatter parsing for plan scanning | new parser |
-| `autoplan_review_workflow.js` `personas` array | persona extension point | new review pipeline |
-| `IDEA_BOX.md` + `plan_context_updater --resolved-ideas` | `/sweep` output and loop closure | second backlog |
+| `IDEA_BOX.md` via `plan_context_loader` | router surfaces open ideas | second backlog |
 | `settings.json` hooks | the whole delivery mechanism | model-side convention |
 
 ## Frozen product contract
@@ -206,22 +203,31 @@ SessionStart ---> session_router.py (facts only)
           { goal, chain[], persona, risk, repo,
             start_sha, checkpoints[], claims[] }
                         |
-        +---------------+---------------+----------------+
-        |               |               |                |
-        v               v               v                v
-  PostToolBatch     PreCompact       SessionEnd       /curator
-  drift check       re-inject        verdict +        truthctl gates
-  (throttled,       after compact    reaper           + claim check
-   advisory)                                                |
-                                                            v
-                                                   handoff with every
-                                                   claim marked verified
-                                                   or unverified
+              +---------+---------+
+              |                   |
+              v                   v
+        SessionEnd            /curator
+        writes verdict        fresh truthctl gates
+        + reaps               + claim check
+              |                   |
+              |                   v
+              |          handoff, every claim marked
+              |          VERIFIED / REFUTED / UNVERIFIED
+              v
+      verdict file (SessionEnd output is IGNORED by the
+      harness, so the verdict is persisted, never announced)
+              |
+              +--> surfaced by the NEXT SessionStart in this repo
+              +--> rendered on demand by /curator
+
+Two hooks only: SessionStart and SessionEnd.
 
 Forbidden edges:
-  session_plan --X--> any gate, any authority, any commit message
+  session_plan  --X--> any gate, any authority, any commit message
   hook          --X--> decision:"block" / continue:false
   pasted text   --X--> trigger match
+  PreCompact    --X--> additionalContext   (the event has no such field)
+  SessionEnd    --X--> anything the operator can see in-session
   this plan     --X--> cross-session channel  (that is Conductor)
 ```
 
@@ -383,7 +389,7 @@ a secret nested inside a tool-result content array does not survive redaction.
 ### S5 - Exact-head review and landing
 
 - run focused and full `scripts/tests`, scoped `ruff`, `compileall`, `git diff --check`;
-- record measured token cost of the SessionStart injection and the drift check;
+- record measured token cost and wall time of every SessionStart branch and of `/curator`;
 - produce the implementation review packet;
 - obtain exact-head review through the operator-selected `/fwp`;
 - fix ship-blocking findings, batch one push, ready the PR once, merge;
@@ -410,9 +416,8 @@ a secret nested inside a tool-result content array does not survive redaction.
 | Reaper run | only owned prefixes removed, others untouched |
 | Curator on a session claiming an unmade fix | `REFUTED` |
 | Curator when `truthctl` is unavailable | `UNVERIFIED`, never `VERIFIED`, nonzero status |
-| `/sweep` on a clean repo | no findings, no writes, `git status` unchanged |
 | Every hook script raises an exception | session unaffected, failure recorded to a log |
-| All four hooks removed from settings | ecosystem behaves exactly as before this plan |
+| Both hooks removed from settings | ecosystem behaves exactly as before this plan |
 
 ### Validation commands
 
@@ -456,11 +461,11 @@ breaches its budget is not shipped until it fits.
 
 ## Rollback and emergency off
 
-1. Remove the four hook entries from `settings.json`. This is the kill switch, and it is
+1. Remove the two hook entries from `settings.json`. This is the kill switch, and it is
    sufficient on its own; every capability here is delivered through a hook.
 2. Delete `~/.claude/state/session_plan_*`. Nothing else reads them.
 3. Revert the merged commits to restore `plan_keyword_detector.py` and the footer.
-4. `/curator` and `/sweep` are invoked explicitly and are inert when not called.
+4. `/curator` is invoked explicitly and is inert when not called.
 
 Rollback deletes no repository content, no `IDEA_BOX` entry, no TruthDeck snapshot, no
 branch, and no worktree.
