@@ -494,3 +494,205 @@ This document authorizes planning only.
 
 The hotfix branch covering `plan_keyword_detector.py` and `answer_footer.py` is tracked
 separately as R1 defect repair and does not wait on this review.
+
+**Hotfix status:** landed as `ad12cf2` (PR #50, squash-merged 2026-07-25), installed to
+`~/.claude/scripts`, smoke-tested in both directions (pasted trigger emits 0 bytes; the
+operator's own "co dalej?" emits 12,490).
+
+## CEO Review Record - Stage 1 `/fwp`
+
+Review date: 2026-07-25. Mode: **HOLD SCOPE**.
+
+Mode rationale: the plan's scope was set by an operator `/grill-me` interview the same
+day, which recorded seven explicit decisions (D1-D7 above) and cut three of ten candidate
+items during the collision check. The `/fwp` R1 contract assigns product and mechanical
+questions in this stage to the agent under conservative scope control. Expanding scope
+here would re-litigate decisions the operator closed hours earlier, so no expansion
+ceremony ran and no CEO plan document was written (both are EXPANSION-mode artifacts).
+
+### System audit
+
+- `main == origin/main == ad12cf2`; worktree clean.
+- One pre-existing stash (`park generated operator playbook pdf`) untouched, same stash
+  already noted in the TruthDeck R1 plan.
+- Full suite green at review baseline: `191 passed, 2 subtests passed`.
+- No `TODO`/`FIXME`/`HACK` markers in `scripts/`, `skills/`, or `agent-rules/` (two hits in
+  `idea_digest.py` are string literals naming a section, not markers).
+- Repo has no `TODOS.md`; deferred work lives in `design/` and per-repo `IDEA_BOX.md`.
+- Hot files over 30 days are workflow-OS audit/handoff docs and `agent-rules/core.md` -
+  this plan touches none of them, so there is no recurring-problem-area smell to inherit.
+- No design doc from `/office-hours` for this branch; the grill transcript is the
+  equivalent input and is recorded as D1-D7.
+
+### Section verdicts
+
+**1. Architecture - 3 findings.**
+
+*Finding 1.1 (GAP, resolved).* `session_plan_<id>.json` had no schema version. Every other
+artifact in this ecosystem is versioned (`truthdeck.snapshot.v1`, `conductor.work-item.v1`,
+the OpusF bridge payloads). An unversioned file read by four separate hooks breaks silently
+the first time its shape changes. **Resolved:** the file carries
+`"schema_version": "session.plan.v1"`; a reader that does not recognise the version treats
+the file as absent rather than guessing.
+
+*Finding 1.2 (GAP, resolved).* The model writes the scratch file, but nothing said what
+happens when it writes malformed JSON or omits a field. **Resolved:** every reader
+validates and fails open - a malformed or partial file is treated as "no session plan",
+never as an empty plan, and never raises into the session.
+
+*Finding 1.3 (GAP, resolved).* PreCompact re-injection could re-inject a **stale** goal.
+The plan said the model writes the file at session start but never said when it updates it,
+so a session whose direction changed mid-run would have its original goal re-injected after
+compaction - actively misleading, worse than injecting nothing. **Resolved:** the drift
+check (S2) is the write path as well as the read path; when it fires and the model reports a
+changed goal, it rewrites the file. PreCompact re-injects with the `updated_at` stamp
+visible so a stale plan is legible as stale.
+
+**2. Error and rescue map - 1 CRITICAL GAP, resolved.**
+
+| Codepath | Failure | Exception | Rescued | Action | Operator sees |
+|---|---|---|---|---|---|
+| any hook reading scratch | malformed JSON | `json.JSONDecodeError` | Y | treat as no plan | nothing |
+| any hook reading scratch | file locked by another session | `PermissionError`/`OSError` | Y | treat as no plan | nothing |
+| `session_end` verdict | git call hangs | `subprocess.TimeoutExpired` | Y | verdict `UNKNOWN` | verdict says unknown |
+| `curator` | `truthctl` absent | `FileNotFoundError` | Y | all claims `UNVERIFIED` | explicit, in handoff |
+| `curator` | transcript unreadable | `OSError` | Y | claims `UNVERIFIED` | explicit |
+| `state_reaper` | file vanished mid-scan | `FileNotFoundError` | Y | skip, continue | nothing |
+| `session_router` | registry malformed | `json.JSONDecodeError` | Y | one-line mode | one line, not silence |
+
+*Finding 2.1 (**CRITICAL GAP**, resolved).* The reaper was specified as deleting
+`turn_counter_*` and `session_plan_*` "for sessions older than a retention window". Age is
+not liveness. This session has run for hours; another session's `SessionEnd` firing
+mid-run would have reaped its live scratch file and turn counter. **Resolved:** the reaper
+excludes (a) its own `session_id`, (b) any session whose files were modified inside the
+retention window, and (c) any `session_plan_*` whose `session_id` appears in the harness's
+live-session list when that list is obtainable. Age alone never authorises a delete.
+
+**3. Security - 2 findings, both resolved.**
+
+*Finding 3.1 (GAP, resolved. Likelihood Medium, Impact High).* The curator reads the
+session transcript JSONL. That transcript holds everything the session touched - pasted
+credentials, `.env` contents echoed by a tool, environment dumps - and the curator feeds a
+bounded window of it to a model. That is a **new egress path for secrets** that the plan did
+not name. **Resolved:** the curator redacts before the window is assembled, reusing
+`terminal_evidence.py`'s redaction helpers rather than inventing a second one, and never
+persists raw transcript text into the handoff.
+
+*Finding 3.2 (GAP, resolved. Likelihood Medium, Impact Medium).* `/sweep` writes findings
+derived from repository content into `IDEA_BOX.md`, and `plan_context_loader.py` injects
+`IDEA_BOX.md` into future sessions. A `TODO` comment containing an injection payload would
+therefore reach a future session's context by a laundered route. **This is the same defect
+class the plan's own slice 1 exists to close** - closing injection at the prompt while
+opening it at the idea box would be self-defeating. **Resolved:** `/sweep` writes findings
+as quoted, escaped, length-bounded text, and records the source `file:line` rather than
+copying prose verbatim.
+
+**4. Data flow and interaction edge cases - 2 gaps, resolved.**
+
+*Finding 4.1 (resolved).* `SessionStart` fires with `source: resume` as well as `startup`.
+As specified, a resumed session would overwrite its own scratch file and lose the goal it
+was resuming. **Resolved:** on `resume`, `compact`, and `fork`, the router reads the existing
+file and does not clobber it; only `startup` and `clear` create one.
+
+*Finding 4.2 (resolved).* `SessionStart` in a directory that is not a git repository was
+unspecified. **Resolved:** registry lookup miss and "not a repo" both fall to the same
+one-line branch; neither raises.
+
+Shadow paths for the scratch file: **nil** (no file) -> hooks behave as pre-plan; **empty**
+(zero-length) -> same as nil; **error** (unreadable) -> same as nil, plus a line in the hook
+error log. All three collapse to one behaviour deliberately, so there is one path to test.
+
+**5. Code quality - 2 findings, resolved.**
+
+*Finding 5.1 (resolved).* The slice list named eight new modules. The complexity check fires
+above two new services. Six are genuinely separate hook entrypoints, but `session_precompact`
+and `session_end` share their read path and differ only in trigger. **Resolved:** they
+collapse into one `session_lifecycle.py` with two entrypoints, taking the module count to
+seven.
+
+*Finding 5.2 (DRY, resolved).* Four hooks independently need "resolve the registry", "read
+and validate the scratch file", and "write the scratch file atomically". Left unstated, each
+would reimplement it. **Resolved:** one `session_state.py` owns those three operations; the
+hooks import it. Atomic writes reuse the temp-file-then-`os.replace` pattern already
+established in `terminal_evidence.py` and `answer_footer.py`.
+
+**6. Tests - 3 gaps, resolved.** The plan's matrix covered trigger provenance, pricing,
+verdicts, and budgets. Missing and now added: (a) two concurrent sessions where one reaps
+while the other is live (guards Finding 2.1); (b) malformed and truncated scratch files
+(guards 1.2); (c) `SessionStart` with `source: resume` proving no clobber (guards 4.1). The
+pyramid stays unit-heavy with no external services, no clock dependence, and no ordering
+dependence, so flakiness risk is low.
+
+**7. Performance - 1 finding, resolved.** Token budgets were specified; wall time was not.
+On Windows, Python interpreter startup alone is roughly 150-250 ms, and `SessionStart` sits
+in front of every session in every repo. **Resolved:** `SessionStart` carries a p95 budget of
+400 ms in the registered case and 150 ms outside the registry, measured and recorded in S7
+alongside the token numbers. The existing 2 s ceiling stays as the fail-open timeout, not as
+the target.
+
+**8. Observability - 1 finding, resolved.** The plan said hooks fail open. The existing
+`plan_keyword_detector.py` carries the opposite principle in its own comments: a broken steer
+path must be visibly dead, never silent. Both are right for different audiences. **Resolved:**
+fail open toward the *session* (never break a turn) and fail loud toward *disk* - every
+swallowed exception appends one bounded line to `~/.claude/state/hook_errors.log`, so a hook
+that has been quietly dead for a week is discoverable. Retention for that log is the reaper's
+job.
+
+**9. Deployment - 1 risk flagged, accepted.** The installers copy `scripts/*.py`, so the
+modules ship. The `settings.json` hook entries do **not** ship - they are hand-edited user
+config outside version control. Enabling is therefore a manual step on every machine, and
+there is no drift detection between "modules installed" and "hooks wired". Accepted for this
+plan and recorded rather than solved: an installer-managed hook block is its own change, and
+folding it in here would widen an R1 plan into settings-file ownership.
+
+**10. Long-term trajectory.** Reversibility **5/5** - removing four `settings.json` entries
+restores prior behaviour completely, and nothing else in the ecosystem takes a dependency on
+the scratch file. Debt introduced: seven modules, one state file family, one log file. Path
+dependency is low; the one real risk is the scratch file accreting readers until it becomes
+the shadow plan the pre-mortem names, which invariant 1 and the reaper together bound.
+
+**11. Design and UX - SKIPPED.** The plan ships no user interface. S7's design chain is a
+routing rule that *proposes* existing design skills; it renders nothing itself.
+
+### Outside voice
+
+The `/fwp` Stage 2 fan-out (`auditf.py --mode paid --synthesizer claude`) **is** this
+workflow's outside voice, and it runs against this same plan immediately after this stage
+with an opposite-frontier reviewer plus the Perplexity, Gemini, and Kimi CDP lanes. Running
+the skill's own single-model Codex pass in addition would duplicate that function at extra
+cost with a narrower panel. Skipped deliberately, recorded here so the omission is legible.
+
+### Failure modes registry
+
+| Codepath | Failure mode | Rescued | Test | Operator sees | Logged |
+|---|---|---|---|---|---|
+| reaper vs live session | live scratch file deleted | yes | required | nothing (correct) | yes |
+| PreCompact | stale goal re-injected | yes | required | `updated_at` stamp | yes |
+| curator | secret reaches model window | yes | required | nothing (redacted) | no (by design) |
+| `/sweep` | injected text laundered via IDEA_BOX | yes | required | quoted + bounded | yes |
+| SessionStart on resume | scratch file clobbered | yes | required | nothing (correct) | yes |
+| any hook | unhandled exception | yes | required | nothing in session | yes, `hook_errors.log` |
+
+No row remains with rescued=no, test=no, and a silent operator impact.
+
+### Verdict
+
+**PROCEED.** Eleven findings across sections 1-8, of which one was critical (the reaper
+deleting live-session state). All eleven are resolved inside the existing scope; none
+required expansion, and none contradicts D1-D7. One deployment risk is accepted and
+recorded rather than solved. Slice count moves from seven to eight with `session_state.py`
+added and `session_precompact`/`session_end` collapsed.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | mode: HOLD_SCOPE, 11 findings, 1 critical gap, all resolved |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | superseded by `/fwp` Stage 2 panel |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | - | pending Stage 3 |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
+
+- **VERDICT:** CEO CLEARED (HOLD SCOPE, all findings resolved in scope) - eng review required.
+
+NO UNRESOLVED DECISIONS
