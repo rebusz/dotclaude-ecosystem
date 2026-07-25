@@ -987,8 +987,9 @@ character breaks that lane's stdout echo on Windows. The review itself was intac
   decision; two hooks, four modules, one skill. Eng review required.
 
 **UNRESOLVED DECISIONS:**
-- The Codex CLI frontier lane has not returned. Fold its findings in when it does, or proceed
-  to Stage 3 on the strength of the Kimi lane alone.
+- ~~The Codex CLI frontier lane has not returned.~~ **Resolved 2026-07-25:** the lane hangs in
+  Codex's own Windows sandbox helper, not in our runner. Operator chose to proceed to Stage 3 on
+  the Kimi lane; the lane defect is filed against `_shared/audit`. See `## Stage 2b`.
 - CDP web-UI lanes silently degrade long plan input, which cost two of three Perplexity lanes
   in this run. The cause is downstream of `_shared/audit`, so it cannot be fixed by editing the
   runner; the available lever is lane selection - prefer CLI lanes for plans past a size the
