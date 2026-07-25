@@ -1,8 +1,8 @@
 ---
-title: Session Lifecycle Router, Curator, and Hook Hardening
+title: Session Lifecycle Core - Compaction Survival and Verified Close
 date: 2026-07-25
 status: draft
-status_detail: grilled-and-agreed-awaiting-fwp-review
+status_detail: cut-to-core-2026-07-25-awaiting-fwp-stage-3
 risk: R1
 phase: plan
 repos: [dotclaude-ecosystem]
@@ -14,7 +14,7 @@ related:
   - design/plans/2026-06-27_global_agent_workflow_os.md
 ---
 
-# Session Lifecycle Router, Curator, and Hook Hardening
+# Session Lifecycle Core - Compaction Survival and Verified Close
 
 ## Executive decision
 
@@ -399,30 +399,37 @@ a secret nested inside a tool-result content array does not survive redaction.
 
 ## Test plan
 
+Trigger-provenance and pricing scenarios are **not** listed here. They shipped with the
+hotfix and live in `scripts/tests/test_hook_trigger_provenance.py`; repeating them as
+pending work would misrepresent what is left to build.
+
 | Scenario | Expected |
 |---|---|
-| Operator writes "drift" in their own sentence | steering fires |
-| Operator pastes a document containing "drift" in a quote | steering does **not** fire |
-| Pasted text contains `ultracode` | no orchestration opt-in |
-| Fenced code block contains a trigger word | no fire |
-| Unknown model id in the footer | cost marked uncertain, never Sonnet-priced silently |
-| `claude-opus-5` session | Opus rates applied |
 | Session starts in a registered repo | full injection, title set, scratch file created |
 | Session starts outside the registry | one line, no scratch file, zero injected context |
-| Forced compaction mid-session | goal re-injected, chain intact |
-| Session ends merged and clean | `ARCHIVE-OK` |
-| Session ends merged with open items | `HANDOFF` plus draft |
-| Session ends unmerged with large context | `CHECKPOINT` |
-| Reaper run | only owned prefixes removed, others untouched |
+| Session starts in a directory that is not a repo | one line, no raise |
+| **`SessionStart` with `source: compact`** | **goal re-injected with `updated_at` visible** |
+| `SessionStart` with `source: resume` or `fork` | existing scratch file read, never clobbered |
+| Scratch file has unrecognised `schema_version` | treated as absent **and** `UNRECOGNIZED_VERSION` logged |
+| Scratch file malformed or truncated | treated as absent, no raise |
+| Write killed mid-flight (Windows handle held) | previous good file still readable |
+| Session ends merged and clean | `ARCHIVE-OK` persisted |
+| Session ends merged with open items | `HANDOFF` persisted plus draft |
+| Session ends unmerged | `CHECKPOINT`; context reported, not decisive |
+| **Unconsumed verdict exists** | **surfaced by the next `SessionStart` in that repo** |
+| **Session killed, `SessionEnd` never fires** | **still reaped on the next `SessionStart`** |
+| Reaper run | only owned prefixes removed; live session's files survive |
 | Curator on a session claiming an unmade fix | `REFUTED` |
-| Curator when `truthctl` is unavailable | `UNVERIFIED`, never `VERIFIED`, nonzero status |
+| Curator when `truthctl` is unavailable | `UNVERIFIED`, never `VERIFIED` |
+| **Curator when the snapshot head differs from `HEAD`** | **`UNVERIFIED`, never reproduced as `VERIFIED`** |
+| **Secret nested in a tool-result content array** | **redacted before the model window is built** |
 | Every hook script raises an exception | session unaffected, failure recorded to a log |
 | Both hooks removed from settings | ecosystem behaves exactly as before this plan |
 
 ### Validation commands
 
 ```powershell
-python -m pytest -q scripts/tests/test_session_router.py scripts/tests/test_session_drift.py scripts/tests/test_session_end.py scripts/tests/test_state_reaper.py scripts/tests/test_curator_claims.py scripts/tests/test_sweep_scan.py scripts/tests/test_plan_keyword_detector.py
+python -m pytest -q scripts/tests/test_session_state.py scripts/tests/test_session_router.py scripts/tests/test_session_lifecycle.py scripts/tests/test_state_reaper.py scripts/tests/test_curator_claims.py
 python -m pytest -q scripts/tests
 python -m ruff check <new and touched files>
 python -m compileall -q <new modules>
@@ -485,33 +492,36 @@ disabled flag. The kill switch above is the documented emergency-off.
 - [ ] No hook in this plan can block a turn or end a session.
 - [ ] `SessionEnd` produces a three-way verdict and never archives on its own.
 - [ ] `turn_counter_*` backlog is reaped and cannot grow unbounded again.
-- [ ] `/curator` reports TruthDeck gates verbatim and marks every session claim
-      `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
-- [ ] `/sweep` is read-only and writes findings only to `IDEA_BOX.md`.
-- [ ] `autoplan` runs adversarial personas selected per plan and their findings change plan
-      text.
+- [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
+      marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
+- [ ] Redaction traverses nested transcript structure, not lines.
+- [ ] The SessionEnd verdict is persisted and reaches the operator by at least one of the
+      two delivery paths, because `SessionEnd` itself cannot speak.
+- [ ] A session killed without `SessionEnd` is still reaped.
 - [ ] Session titles follow the convention automatically at start.
 - [ ] Every token budget above is measured, recorded, and met.
-- [ ] Removing the four hook entries restores pre-plan behavior exactly.
+- [ ] Removing the two hook entries restores pre-plan behavior exactly.
 - [ ] Exact-head review, CI, merge, and operator checkout sync are complete.
 
 ## Author pre-mortem
 
-1. **The drift check becomes noise.** Most likely failure. Mitigated by throttling, a hard
-   character budget, and a measured firing rate from a real session before enabling.
-2. **The curator cries wolf.** A `REFUTED` on a genuine fix destroys trust immediately.
+1. **The curator cries wolf.** A `REFUTED` on a genuine fix destroys trust immediately.
    Mitigated by a three-state verdict with an explicit `UNVERIFIED` middle, so the curator
    is never forced to guess between done and not done.
-3. **The scratch file becomes a shadow plan.** Mitigated by invariant 1, by the file name,
+2. **The scratch file becomes a shadow plan.** Mitigated by invariant 1, by the file name,
    by excluding it from every gate, and by the reaper.
-4. **Hook stack interaction.** Twelve hooks across seven events is the real complexity, and
-   it is the one thing local tests cannot fully cover. Mitigated by enabling events one at
-   a time in S7 and by requiring each to be independently removable.
-5. **Registry drift.** A new repository silently gets no router. Accepted; the failure is
+3. **Hook stack interaction.** Ten hook entries across four events is the real complexity,
+   and it is the one thing local tests cannot fully cover. Mitigated by enabling events one
+   at a time in S5 and by requiring each to be independently removable. The scope cut halved
+   this plan's contribution to it.
+4. **Registry drift.** A new repository silently gets no router. Accepted; the failure is
    visible and harmless, and autodetection was rejected in D7 as a worse trade.
-6. **Scope creep toward Conductor.** The drift check asking "should this be a separate
-   lane" is one step from wanting a channel between lanes. That step is explicitly out of
-   scope and belongs to Conductor R2.
+5. **Scope creep toward Conductor.** Any "should this be a separate lane" feature is one
+   step from wanting a channel between lanes. That step is out of scope here and belongs to
+   Conductor R2. It left with the drift check.
+6. **The plan re-grows.** Three features were cut today. The pressure to fold them back in
+   because they are "nearly done" is the failure that produced the original eight-slice
+   shape. Each returns through its own plan or not at all.
 
 ## Approval gate
 
@@ -844,26 +854,112 @@ never said whether hooks are synchronous. Now stated explicitly in `Token budget
 | Two sessions in one directory clobber each other | Best P2 | `session_id` is unique per session; per-session filenames already separate them |
 | `operator-0931` persona assumes one market open | Best P3 | Persona is prompt text, tuned at use; not a gating defect |
 
+## Stage 2b - CLI frontier lanes
+
+The Stage 2 CDP panel had no independent frontier reviewer: the GPT Pro lane returned
+`captcha_detected`, and the captcha was not bypassed. The operator directed a retry through
+the **CLI** lanes instead, which reach the same model families without a browser.
+
+Two changes made these lanes worth more than the ones they replaced. Both were run with
+`--repo` rather than a pasted prompt, so each model read the **full plan from the working
+tree** - removing the truncation that reduced two of three Perplexity lanes to noise. And
+both were pointed adversarially at the prior reviews' own conclusions, not just at the plan.
+
+| Lane | Runner | Sandbox | Result |
+|---|---|---|---|
+| `21_kimi_cli_k3` | `auditkimi_cli.py`, kimi 0.27.0 | throwaway worktree | **returned** |
+| `22_codex_cli_gpt` | `auditcodex_cli.py`, codex-cli 0.145.0 | OS read-only | **pending** |
+
+### Kimi K3 - two mechanism errors that both prior reviews missed
+
+Kimi verified its load-bearing claims against the live hooks reference before writing, and
+both were confirmed independently against the same document.
+
+**K1 (P1) - `PreCompact` cannot emit context.** Its only output fields are `decision: "block"`,
+`reason`, and the universal set. It has **no `additionalContext`**. The plan built S3 on it,
+called it "the single highest-value moment for the whole plan", and priced a 1,500-character
+re-injection through a channel that does not exist. The correct event is `SessionStart` with
+`source: compact`, which does have `additionalContext` and which this plan's own Finding 4.1
+had already wired into the router. **Applied:** compaction survival moved to the router;
+`PreCompact` removed from the plan entirely. The moment was real; the hook was wrong.
+
+**K2 (P1) - the `SessionEnd` verdict had no delivery channel.** `SessionEnd` output is ignored
+by the harness, exit code and JSON alike. A three-state verdict emitted there would be
+invisible at the only moment it matters, which is the whole of headline goal 2. **Applied:**
+the verdict is persisted rather than announced, and reaches the operator by the next
+`SessionStart` in that repository or on demand through `/curator` - two paths that can
+actually speak.
+
+**K3 (P1) - A9's self-diagnosis was circular.** `session_router.py` is delivered *by* the
+`SessionStart` hook. The failure A9 was written to catch - modules installed, hooks unwired,
+operator believes the system is live - is exactly the state in which the router never runs and
+logs nothing. It detects partial wiring only. **Applied:** the check moves to the installer or
+a status command, something that runs whether or not hooks are wired.
+
+**K4 (P1) - A1 and A2 contradicted each other.** A1 forbade the drift check from reading
+tool-result payloads; A2's throttle required a 25,000-character context floor that only those
+payloads could supply. Both were applied in the same pass as separate findings and neither
+reviewer noticed the collision. **Resolved by the scope cut:** the drift check left, and the
+contradiction travels with it as the blocking item in its own plan.
+
+**K5 (P2) - the plan had not been reconciled with its own review record.** Finding 5.1
+collapsed two modules and 5.2 added one, but the slice list and validation commands still
+named the old files. An implementer following the slices would have built modules the review
+record says no longer exist. **Applied:** slices and validation commands rewritten.
+
+**K6 (P2) - three plans wearing one coat.** Surfaced to the operator as a scope decision
+rather than absorbed. **Operator cut the plan to core on 2026-07-25**; see `## Scope cut`.
+
+**K7 (P3, applied) - the reaper had no guaranteed trigger.** It ran from `SessionEnd`, which a
+killed session never fires - and on Windows that is the ordinary exit, which is precisely how
+1,944 `turn_counter_*` files accumulated. A janitor that only runs after clean exits cannot
+clean up after unclean ones. **Applied:** the reaper also runs bounded and throttled from
+`SessionStart`.
+
+**K8 (P3, applied) - the verdict table had dead rows.** Two of four rows both yielded
+`CHECKPOINT`, parading a "context used" column that changed no outcome. **Applied:** reduced
+to three rules with context reported and never decisive.
+
+**K9 (P3, applied) - S0's file list was stale and its copy direction undefined.** Applied by
+dissolution: the scope cut removed S0 entirely.
+
+**K10 (P2, recorded as debt, not fixed).** The hotfix smoke test reported the operator's own
+two-word "co dalej?" emitting **12,490 bytes**. That number was presented as proof the fix
+worked. It is also proof the fix addressed *provenance* and not *volume*: trivial operator
+text still triggers an injection of the same order as the 13.5 KB incident this work exists to
+react to. Neither the CEO review nor the CDP panel asked why that is acceptable, and the
+Definition of Done tests provenance only. **Not fixed here** - it belongs to
+`plan_keyword_detector.py` and `steer_context.py`, not to this plan - but recorded so it is not
+lost.
+
+**Runner defect found in passing.** `auditkimi_cli.py` wrote its output file, then crashed on
+`print(run.text)` with `UnicodeEncodeError` under cp1252. Any review containing a non-ASCII
+character breaks that lane's stdout echo on Windows. The review itself was intact.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | mode: HOLD_SCOPE, 11 findings, 1 critical gap, all resolved |
-| Audit Panel | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes: 8 returned, 1 failed (`captcha_detected`); 10 applied, 11 discarded |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | - | superseded by Stage 2 panel |
+| Audit Panel (CDP) | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes, 8 returned, frontier lane failed `captcha_detected`; 10 applied, 11 discarded |
+| Frontier CLI (Kimi K3) | `auditkimi_cli.py` | Independent frontier, full plan | 1 | issues_found | 10 findings; 2 mechanism errors, 1 self-contradiction, 1 scope cut, 1 debt |
+| Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 0 | **pending** | launched, no output at time of writing |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | - | pending Stage 3 |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
 
-- **CROSS-MODEL:** one fully-informed lane (Perplexity Best) produced every applied finding;
-  two lanes audited a truncated plan and their absence claims were discarded with reasons;
-  the GPT CDP frontier lane did not run. Three lanes independently corroborated the
-  already-resolved observable-degraded-mode finding, and three flagged the genuinely
-  unstated hook execution model. Panel confidence: **low-to-moderate**.
-- **VERDICT:** CEO CLEARED + AUDIT APPLIED (10 findings absorbed, 1 of them closing an
-  injection surface the hotfix would otherwise have left open one event downstream) - eng
-  review required.
+- **CROSS-MODEL:** the CDP panel and the CLI frontier lane disagree sharply in value, and the
+  reason is input fidelity rather than model quality. Lanes fed a truncated paste produced
+  absence claims about sections that were present; the lane given `--repo` access read the
+  plan and found two errors that invalidated a slice. **The lesson is about the harness, not
+  the models:** `auditf.py` truncates at 30 KB, and a plan carrying its own review records
+  now exceeds that. Every future `/fwf` and `/fwp` panel on a mature plan will hit this.
+- **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED. Plan cut to core by operator
+  decision; two hooks, four modules, one skill. Eng review required.
 
 **UNRESOLVED DECISIONS:**
-- Re-run the GPT Pro CDP frontier lane before implementation, or accept an R1 panel with no
-  independent frontier reviewer? The captcha was not bypassed and will not be. Operator call.
+- The Codex CLI frontier lane has not returned. Fold its findings in when it does, or proceed
+  to Stage 3 on the strength of the Kimi lane alone.
+- `auditf.py` truncates plan input at 30 KB, which silently degraded two of three CDP lanes in
+  this run. Fixing it is out of scope here and belongs to the audit runner; recorded so the
+  next panel does not repeat it.
