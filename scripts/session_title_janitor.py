@@ -1,0 +1,203 @@
+#!/usr/bin/env python
+"""Normalize CCD session titles to `<Repo> <DD MON> [chip] <topic>`.
+
+The `mcp__ccd_session_mgmt__set_session_title` tool silently refuses to
+overwrite any session whose `titleSource` is `user`, and still returns a
+success-shaped message. Operator rule (2026-07-25): the janitor must stamp a
+date on EVERY session title, including ones renamed by hand. So this script
+edits the session store on disk instead of going through the MCP tool.
+
+Minimal-edit policy: the operator's own wording is preserved verbatim. The only
+change is injecting `<DD MON>` after the leading repo token (or prefixing
+`<Repo> <DD MON>` when no repo token is present).
+
+Usage:
+    python session_title_janitor.py            # dry run, prints planned renames
+    python session_title_janitor.py --apply    # write changes
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import re
+import sys
+import tempfile
+
+STORE_GLOB = os.path.join(
+    os.environ.get("APPDATA", ""),
+    "Claude",
+    "claude-code-sessions",
+    "*",
+    "*",
+    "local_*.json",
+)
+
+MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+          "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+# Already-conforming titles carry `<DD MON>` as the token right after the repo.
+DATE_RE = re.compile(r"\b(\d{1,2})\s+(" + "|".join(MONTHS) + r")\b")
+
+# Operator shorthands seen in hand-written titles, mapped to their repo dir.
+ALIASES = {
+    "Obsidian Flow": ["OF", "Obsidian flow"],
+    "TsignalLAB": ["LAB", "Tsignal LAB"],
+    "Hue Flow": ["HUE"],
+    "ViF": ["VIF"],
+    "VAVO website": ["VAVO"],
+    "Tsignal 5.0": ["Tsignal"],
+    "Tsignal Remote": ["Tsignal remote"],
+}
+
+# Noise tokens the operator uses as a second-position marker, not part of topic.
+MARKERS = {"MASTER", "INV", "GLOBAL"}
+
+
+def repo_from_cwd(cwd: str) -> str | None:
+    """`D:\\APPS\\Tsignal 5.0\\.claude\\worktrees\\x` -> `Tsignal`."""
+    if not cwd:
+        return None
+    parts = re.split(r"[\\/]+", cwd)
+    for i, p in enumerate(parts):
+        if p.upper() == "APPS" and i + 1 < len(parts):
+            raw = parts[i + 1]
+            return re.sub(r"\s+\d+(\.\d+)*$", "", raw)  # strip " 5.0"
+    if "dotclaude" in cwd:
+        return "dotclaude"
+    return None
+
+
+def accepted_prefixes(repo: str, raw_dir: str | None) -> list[str]:
+    """Prefixes that already identify the repo, longest first.
+
+    Also accepts any leading word of the repo name (`Garmin` for `Garmin
+    Flow`), so a title the operator already prefixed is not double-prefixed.
+    """
+    out = {repo}
+    for key, aliases in ALIASES.items():
+        canon = re.sub(r"\s+\d+(\.\d+)*$", "", key)
+        if canon == repo or key == raw_dir:
+            out.add(canon)
+            out.update(aliases)
+    words = repo.split()
+    for i in range(1, len(words)):
+        out.add(" ".join(words[:i]))
+    return sorted(out, key=len, reverse=True)
+
+
+def decap(text: str) -> str:
+    """Lowercase the first letter, but never mangle acronyms or CamelCase."""
+    head = text.split(" ", 1)[0]
+    if head.isupper() or not head[1:].islower():
+        return text
+    return text[0].lower() + text[1:]
+
+
+def date_token(session: dict) -> str:
+    ms = session.get("createdAt") or session.get("lastActivityAt")
+    if not ms:
+        return ""
+    d = dt.datetime.fromtimestamp(ms / 1000)
+    return f"{d.day:02d} {MONTHS[d.month - 1]}"
+
+
+def normalize(title: str, repo: str, raw_dir: str | None, date: str) -> str | None:
+    """Return the conforming title, or None when no change is needed."""
+    title = (title or "").strip()
+    if not title or not date:
+        return None
+
+    for prefix in accepted_prefixes(repo, raw_dir):
+        if title.lower().startswith(prefix.lower()):
+            # Keep the operator's own spelling of the prefix, not our canonical
+            # form — `ViF` must not become `VIF`.
+            kept = title[: len(prefix)]
+            rest = title[len(prefix):].lstrip()
+            # Already dated in the slot right after the repo token?
+            if DATE_RE.match(rest):
+                return None
+            head, _, tail = rest.partition(" ")
+            if head.upper() in MARKERS and tail.strip():
+                rest = tail.lstrip()
+            if not rest:
+                return None
+            return f"{kept} {date} {decap(rest)}"
+
+    # No repo token at all — prefix repo + date, keep the topic verbatim.
+    if DATE_RE.search(title[:20]):
+        return None
+    return f"{repo} {date} {decap(title)}"
+
+
+def atomic_write(path: str, data: dict) -> None:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--apply", action="store_true", help="write changes")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="only touch the N most recently active sessions")
+    args = ap.parse_args()
+
+    paths = glob.glob(STORE_GLOB)
+    if not paths:
+        print(f"no session store found under {STORE_GLOB}", file=sys.stderr)
+        return 1
+
+    sessions = []
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if d.get("sessionId") and not d.get("isArchived"):
+            sessions.append((p, d))
+
+    sessions.sort(key=lambda t: t[1].get("lastActivityAt") or 0, reverse=True)
+    if args.limit:
+        sessions = sessions[: args.limit]
+
+    changed = 0
+    for path, d in sessions:
+        raw_dir = None
+        cwd = d.get("cwd") or ""
+        parts = re.split(r"[\\/]+", cwd)
+        for i, p in enumerate(parts):
+            if p.upper() == "APPS" and i + 1 < len(parts):
+                raw_dir = parts[i + 1]
+        repo = repo_from_cwd(cwd)
+        if not repo:
+            continue
+        new = normalize(d.get("title", ""), repo, raw_dir, date_token(d))
+        if not new or new == d.get("title"):
+            continue
+        changed += 1
+        print(f"{'RENAME' if args.apply else 'WOULD'}: {d['title']!r} -> {new!r}")
+        if args.apply:
+            d["title"] = new  # titleSource intentionally left as-is
+            atomic_write(path, d)
+
+    print(f"\n{len(sessions)} sessions checked, {changed} "
+          f"{'renamed' if args.apply else 'would be renamed'}")
+    if args.apply and changed:
+        print("NOTE: the CCD app caches titles in memory; restart it to see "
+              "the new titles in the sidebar.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
