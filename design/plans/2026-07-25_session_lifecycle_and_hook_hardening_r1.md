@@ -630,10 +630,12 @@ and are owned by the split-out plans, not by this one.
    is never forced to guess between done and not done.
 2. **The scratch file becomes a shadow plan.** Mitigated by invariant 1, by the file name,
    by excluding it from every gate, and by the reaper.
-3. **Hook stack interaction.** Ten hook entries across four events is the real complexity,
-   and it is the one thing local tests cannot fully cover. Mitigated by enabling events one
-   at a time in S5 and by requiring each to be independently removable. The scope cut halved
-   this plan's contribution to it.
+3. **Hook stack interaction.** The installed stack grows from 8 entries across 3 events to 10
+   across 5, and interaction between entries is the one thing local tests cannot fully cover.
+   Mitigated by enabling events one at a time in S5 and by requiring each to be independently
+   removable. The scope cut reduced this plan's own contribution from four hooks to two.
+   (Count corrected by the Stage 3 eng review, issue 4; the earlier "four events" figure
+   described the pre-cut shape.)
 4. **Registry drift.** A new repository silently gets no router. Accepted; the failure is
    visible and harmless, and autodetection was rejected in D7 as a worse trade.
 5. **Scope creep toward Conductor.** Any "should this be a separate lane" feature is one
