@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "D:\APPS\_shared\audit\auditkimi_cli.py", line 421, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "D:\APPS\_shared\audit\auditkimi_cli.py", line 416, in main
+    print(run.text)
+    ~~~~~^^^^^^^^^^
+  File "C:\Users\dszub\AppData\Local\python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 7087: character maps to <undefined>
