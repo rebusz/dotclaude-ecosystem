@@ -1096,6 +1096,192 @@ lost.
 `print(run.text)` with `UnicodeEncodeError` under cp1252. Any review containing a non-ASCII
 character breaks that lane's stdout echo on Windows. The review itself was intact.
 
+## Eng Review Record - Stage 3 `/fwp`
+
+Review date: 2026-07-25. Mode: **FULL_REVIEW**. Six issues plus one deferred TODO, all
+resolved by operator decision during the review. No critical gaps.
+
+### Scope challenge
+
+The complexity check fired - six new modules where the threshold is two. It did **not** fire on
+the operator's scope cut, which is settled and was not reopened. It fired on one overlap inside
+the retained core: Finding 5.2 created `session_state.py` to own "resolve the registry, read and
+validate the scratch file, write it atomically", and the slice list then also carried a separate
+`session_registry.py`. **Resolved (D1):** merged; registry resolution has exactly one owner.
+Five modules, one skill.
+
+### Findings
+
+**Issue 1 (P1, confidence 9/10, `S3`) - the reaper could delete an undelivered verdict.** The
+reaper's exclusion list covers own-session, recently-modified, and live. *Unconsumed* was not on
+it, and the verdict's only delivery trigger is the next `SessionStart` in that repository - so in
+any repository visited less often than the retention window, the payload of headline goal 2 was
+swept up before it could ever be read, silently. **Applied:** `consumed_at` stamp set by
+whichever delivery path renders it first; reap on consumption or on a hard outer bound, never on
+age alone. This extends Finding 2.1's existing rule to a second file family rather than
+inventing a new one.
+
+**Issue 2 (P2, confidence 9/10, `S4`) - an applied finding had been re-homed to a slice that
+does not exist.** A9 put the hook-wiring self-check in `session_router.py`; K3 correctly killed
+it as circular, since the router is delivered by the hook whose absence it checks; K3's
+replacement home, "the installer or a status command", is built by no slice in this plan. As
+written the check would have shipped nowhere. **Applied:** `/curator` owns it - operator-invoked,
+so it runs in exactly the state where every hook is dead. Detection, not prevention; the cause is
+now in `IDEA_BOX.md`.
+
+**Issue 3 (P2, confidence 8/10, `S1`/`S4`) - the curator had no defined way to find its
+transcript.** Hooks receive `transcript_path` in their event payload; `/curator` is a skill and
+receives no payload, and the scratch file had no field for it. The input to the plan's
+highest-sensitivity component was unsourced, and the obvious fallback - glob for the most recent
+transcript - resolves to another session's file under concurrency, which by Finding 3.1 means
+another session's credentials. **Applied:** the router records `transcript_path` at
+`startup`/`clear`; the curator reads it and never globs.
+
+**Issue 4 (P1, confidence 9/10, `Definition of Done`) - the DoD gated on work that had left.**
+Two items belonged to plans split out by the scope cut, and two described work hotfix `ad12cf2`
+already shipped - which `## Test plan` had explicitly ruled out listing as pending, three
+sections earlier in this same document. The plan could never be marked done, and an implementer
+reading the checklist as instructions would have rebuilt cut scope, which is failure mode 6 of
+its own pre-mortem. **Applied:** DoD reconciled to what this plan ships, with a "delivered
+elsewhere" note; the pre-mortem's stale event count, Finding 1.3's drift-check-dependent
+resolution, and Finding 5.1's two-entrypoint rationale corrected in place. Note this is K5
+recurring: K5 was applied to exactly the two sections it named and no further.
+
+**Issue 5 (P2, confidence 8/10, `Token budget`) - budgets were acceptance criteria with no
+assertion.** S5 measured once at landing; nothing re-checked. A ceiling nobody enforces is
+documentation, and the first later edit that adds a useful fact to the router regrows the
+injection permanently on every session in every repository with no test going red - the exact
+regression this plan exists to prevent. **Applied:** character ceilings and wall-time budgets are
+unit-test assertions.
+
+**Issue 6 (P2, confidence 8/10, `Token budget`/`S2`) - the 400 ms p95 did not fit its own
+workload.** Interpreter startup is 150-250 ms by CEO Finding 7's own measurement, the
+opportunistic reap claimed a further 150 ms of the same event, and the remainder had to cover
+several `git` spawns, a directory scan and two file reads. Combined with issue 5, this would have
+planted a test that fails on the day it is written and then gets raised until it passes.
+**Applied:** the number is derived from an S1 measurement spike, and the reap is budgeted
+separately from the injection and runs after it is emitted.
+
+**Issue 7 (TODO) - installer-managed hook block.** Deferred a fourth time, now recorded in
+`IDEA_BOX.md` with all three prior rounds of reasoning so it survives this plan being archived.
+
+### Prior learning applied
+
+`gemma-context-complementary-split` (confidence 10/10, 2026-04-15): injected context must be
+complementary, never double-injected. The router now emits facts, the scratch file, and an
+unconsumed verdict on one event - the shape that learning warns about - which is part of why
+issue 5's assertion and issue 6's re-measurement matter more than they would on a cold path.
+
+### Outside voice - skipped, with cause
+
+`CODEX_MODE` resolves to `ready`, and the lane was **not** run. The skill's invocation is
+`codex exec ... -C <repo> -s read-only`, which is the repo-scoped sandboxed shape confirmed
+hanging on this host earlier the same day: `codex` idle at 7.4 s CPU waiting on
+`codex-windows-sandbox-setup`, which had burned 2,395 s of CPU in 55 minutes of wall clock. See
+`## Stage 2b` and `_shared/design/audits/2026-07-25_codex_cli_lane_sandbox_hang.md`. No Claude
+subagent was dispatched in its place either, because this plan already carries a stronger outside
+voice than a single subagent pass - the eight-lane Stage 2 panel plus the Kimi K3 frontier lane,
+which produced the two mechanism errors that reshaped the architecture. Stage 1 recorded the same
+reasoning when it skipped the single-model Codex pass. Recorded rather than smoothed over: this
+review has **no independent frontier reviewer of its own findings**.
+
+### NOT in scope
+
+| Deferred | Why |
+|---|---|
+| Installer-managed `settings.json` hook block | Widens an R1 plan into settings-file ownership; deferred by CEO Finding 9 and again here. In `IDEA_BOX.md` |
+| Automatic rewrite-on-drift of the scratch file | Was half of Finding 1.3's resolution; left with the drift check. `updated_at` legibility is what remains |
+| Drift check, `/sweep`, adversarial personas | Operator scope cut, 2026-07-25. Own plans |
+| K10 - 12,490 bytes injected on a two-word operator prompt | Belongs to `plan_keyword_detector.py` and `steer_context.py`, not to this plan |
+| Eleven still-untracked scripts in `~/.claude/scripts` | Travel with the split-out plans that touch them |
+| Fixing `auditcodex_cli.py` | Different repository; filed at `_shared/design/audits/2026-07-25_codex_cli_lane_sandbox_hang.md` |
+| CDP lane input fidelity | Cause is downstream of `_shared/audit`; the lever is lane selection, not this plan |
+
+### What already exists
+
+| Existing surface | This plan | Verdict |
+|---|---|---|
+| `truthctl` snapshot/gates/verify-handoff | `/curator` delegates state verification to it | Reused, not rebuilt |
+| `terminal_evidence.py` redaction patterns | Curator reuses the patterns, replaces the line-oriented driver with a structure walk | Reused correctly; the driver swap is justified by nested JSONL |
+| `terminal_evidence.py` / `answer_footer.py` atomic write | `session_state.py` reuses temp-file-then-`os.replace` | Reused, not rebuilt |
+| `plan_context_loader.py`, `steer_context.py` | Fact sources for the router | Reused; the router must not duplicate their policy |
+| `_catalog_common.py` | Frontmatter parsing for plan scanning | Reused, no second parser |
+| `plan_context_loader.py` repo detection | Cannot see `dotclaude-ecosystem`; the registry exists because of this | Known limitation, worked around deliberately, not fixed here |
+| `settings.json` hook mechanism | The entire delivery mechanism | Reused; ownership explicitly not claimed |
+
+### Failure modes - new codepaths from this review
+
+| Codepath | Realistic production failure | Test | Error handling | Operator sees |
+|---|---|---|---|---|
+| verdict consumption stamp | delivery path renders but crashes before stamping, verdict re-delivered | yes | idempotent stamp | a repeated verdict, not a lost one |
+| verdict hard outer bound | bound shorter than a real absence, verdict lost | yes | bound set well past retention | nothing - accepted, bounded |
+| `transcript_path` recorded | harness relocates the transcript mid-session, path goes stale | yes | dangling path -> `UNVERIFIED` + log | claims marked unverified, explicitly |
+| curator wiring check | `settings.json` unreadable or malformed | yes | treated as "cannot determine", never as "wired" | explicit uncertainty |
+| budget assertions | ceiling raised silently to make CI pass | no | none possible in code | visible in the diff, by design |
+| S1 measurement spike | measured on an idle machine, optimistic under load | yes, p95 not mean | p95 with the reap excluded | slow startup if wrong |
+
+No row is rescued=no, test=no, and silent. **Zero critical gaps.**
+
+### Worktree parallelization
+
+| Step | Modules touched | Depends on |
+|---|---|---|
+| S1 state + registry + measurement spike | `scripts/`, `templates/`, `scripts/tests/` | - |
+| S2 router | `scripts/`, `scripts/tests/` | S1 (imports `session_state`, needs the measured budget) |
+| S3 lifecycle + reaper | `scripts/`, `scripts/tests/` | S1 (imports `session_state`) |
+| S4 `/curator` | `skills/curator/`, `scripts/`, `scripts/tests/` | S1 (`transcript_path`), S3 (`consumed_at`) |
+| S5 review and landing | all | S2, S3, S4 |
+
+`Lane A: S1 -> S2 (sequential, shared scripts/)` / `Lane B: S3 -> S4 (sequential, shared
+scripts/)` / `Lane C: S5 (waits)`.
+
+**Execution order:** S1 alone first - it is a hard dependency for everything and it produces the
+budget number S2 needs. Then A and B in parallel worktrees. Merge both, then S5.
+
+**Conflict flag:** every lane writes into `scripts/` and `scripts/tests/`, so parallel lanes will
+touch the same directory even though they touch different files. Worktree isolation handles it;
+expect trivial merges, and land S1 before either lane starts to keep them off `session_state.py`
+simultaneously.
+
+## Implementation Tasks
+
+Synthesized from this review's findings. Each task derives from a specific finding above.
+
+- [ ] **T1 (P1, human: ~1h / CC: ~10min)** - `state_reaper.py` / `session_lifecycle.py` - add `consumed_at` to the verdict file and make the reaper honour it
+  - Surfaced by: Eng review issue 1 - reaper exclusion list covers liveness, not delivery
+  - Files: `scripts/session_lifecycle.py`, `scripts/state_reaper.py`, `scripts/session_state.py`, `scripts/tests/test_state_reaper.py`
+  - Verify: `python -m pytest -q scripts/tests/test_state_reaper.py` - unconsumed survives past retention, consumed does not, outer bound removes either way
+- [ ] **T2 (P1, human: ~1h / CC: ~10min)** - plan document - reconcile the Definition of Done and the stale review prose
+  - Surfaced by: Eng review issue 4 - DoD gates on split-out and already-shipped work
+  - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`
+  - Verify: every DoD line names work this plan ships; no line duplicates hotfix `ad12cf2`
+  - **Applied during the review itself; listed for the record.**
+- [ ] **T3 (P2, human: ~30min / CC: ~5min)** - `session_state.py` - merge registry resolution in, delete the separate module from the slice
+  - Surfaced by: Eng review D1 - Finding 5.2's rule reintroduced the duplication it removed
+  - Files: `scripts/session_state.py`, `scripts/tests/test_session_state.py`
+  - Verify: `python -m pytest -q scripts/tests/test_session_state.py`; no `session_registry` import anywhere
+- [ ] **T4 (P2, human: ~30min / CC: ~5min)** - `session_router.py` / `curator_claims.py` - record and consume `transcript_path`
+  - Surfaced by: Eng review issue 3 - curator's input was unsourced
+  - Files: `scripts/session_router.py`, `scripts/curator_claims.py`, `scripts/session_state.py`, tests for both
+  - Verify: recorded on `startup`/`clear`, untouched on `resume`/`compact`/`fork`; missing and dangling both yield `UNVERIFIED`; no glob fallback exists in the source
+- [ ] **T5 (P2, human: ~45min / CC: ~10min)** - `/curator` - report absent hook entries
+  - Surfaced by: Eng review issue 2 - A9's check was circular and K3's replacement had no owner
+  - Files: `skills/curator/SKILL.md`, `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
+  - Verify: zero / one / both entries present each produce the right report; unreadable `settings.json` reports uncertainty, never "wired"
+- [ ] **T6 (P2, human: ~1h / CC: ~10min)** - test suite - assert token and wall-time budgets
+  - Surfaced by: Eng review issue 5 - budgets measured once, never enforced
+  - Files: `scripts/tests/test_session_router.py`
+  - Verify: assertions fail when the injected payload exceeds its ceiling
+- [ ] **T7 (P2, human: ~3h / CC: ~25min)** - `S1` - measure `SessionStart` p95 on Windows and write the budget from it
+  - Surfaced by: Eng review issue 6 - 400 ms did not fit its own workload
+  - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`, `scripts/tests/test_session_router.py`
+  - Verify: recorded breakdown for interpreter startup, each `git` spawn, the scan and the reads; budget in the plan matches the measurement; reap excluded from the injection budget
+- [ ] **T8 (P3, human: ~10min / CC: ~2min)** - `IDEA_BOX.md` - capture the installer-managed hook block
+  - Surfaced by: Eng review issue 7
+  - Files: `IDEA_BOX.md`
+  - Verify: entry names all three prior deferrals and their reasoning
+  - **Applied during the review itself; listed for the record.**
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
@@ -1104,9 +1290,10 @@ character breaks that lane's stdout echo on Windows. The review itself was intac
 | Audit Panel (CDP) | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes, 8 returned, frontier lane failed `captcha_detected`; 10 applied, 11 discarded |
 | Frontier CLI (Kimi K3) | `auditkimi_cli.py` | Independent frontier, full plan | 1 | issues_found | 10 findings; 2 mechanism errors, 1 self-contradiction, 1 scope cut, 1 debt |
 | Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 0 | **failed** | hung in `codex-windows-sandbox-setup`; not re-run, defect filed against `_shared/audit` |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | - | pending Stage 3 |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_found | mode: FULL_REVIEW, 7 issues (2 P1), 0 critical gaps, all resolved; 12 test gaps closed |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
+| Outside Voice | `/plan-eng-review` | Independent challenge | 0 | **skipped** | Codex lane hangs on this host; Stage 2 + 2b already provide a stronger panel |
 
 - **CROSS-MODEL:** the CDP panel and the CLI frontier lane disagree sharply in value, and the
   reason is input fidelity rather than model quality. Lanes whose input arrived compacted
