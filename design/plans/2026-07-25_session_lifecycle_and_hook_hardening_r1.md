@@ -571,6 +571,20 @@ assertions from issue 5.
 | **SessionStart full run, registered repo** | **injected payload within its measured character ceiling** |
 | SessionStart outside the registry | injected payload within the minimal-branch ceiling |
 
+Added by Stage 3b, after the Codex frontier lane overturned five of the eng review's fixes.
+
+| Scenario | Expected |
+|---|---|
+| **`SessionStart` with `source: fork`** | **fresh scratch file created; parent's file never read or guessed** |
+| `fork` records `transcript_path` | its own, never the parent's |
+| Verdict surfaced by the router but never curated | `surfaced_at` set, `consumed_at` unset, **survives every reap** until the hard outer bound |
+| Verdict rendered by `/curator` | `consumed_at` set; now reapable |
+| **Session on clean trunk that changes nothing** | **`NO-OP`, never `ARCHIVE-OK`** |
+| Session with unrelated pre-existing dirty files | verdict unaffected by work not attributable to it |
+| Transcript missing the newest turn | claims from that turn are absent, never `VERIFIED`; observed tail reported |
+| `/curator` wiring report | refers to `/hooks`; reads no `settings.json`; never asserts a hook is absent |
+| Reap runs inside SessionStart | its cost counted within the SessionStart budget, not beside it |
+
 ### Validation commands
 
 ```powershell
