@@ -83,6 +83,7 @@ def _write_bound_session(
     root: Path,
     transcript_path: Path,
     plan_transcript_path: str | None = None,
+    start_dirty_paths: list[str] | None = None,
 ) -> None:
     state.write_session_plan(
         "session-a",
@@ -92,11 +93,9 @@ def _write_bound_session(
         ),
         state_dir=state_dir,
     )
-    state.write_session_binding(
-        "session-a",
-        _binding("session-a", root, transcript_path),
-        state_dir=state_dir,
-    )
+    binding = _binding("session-a", root, transcript_path)
+    binding["start_dirty_paths"] = start_dirty_paths or []
+    state.write_session_binding("session-a", binding, state_dir=state_dir)
 
 
 def _write_transcript(path: Path, records: list[dict[str, object]]) -> None:
@@ -753,6 +752,55 @@ class TestClaimVerification(unittest.TestCase):
         )
         self.assertEqual(results[0]["state"], "UNVERIFIED")
 
+    def test_baseline_dirty_artifact_without_attributable_change_is_unverified(self):
+        claims = curator.extract_claims(["Implemented `operator-notes.md`."])
+        results = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=curator.ChangedPathEvidence(
+                frozenset(),
+                True,
+                frozenset({"operator-notes.md"}),
+            ),
+            command_evidence=(),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(results[0]["state"], "UNVERIFIED")
+        self.assertIn("dirty at session start", results[0]["reason"])
+
+    def test_committed_baseline_path_is_attributable_but_uncommitted_baseline_is_not(self):
+        results = [
+            mock.Mock(returncode=0, stdout="already-dirty.txt\0committed.py\0"),
+            mock.Mock(returncode=0, stdout="already-dirty.txt\0operator-notes.md\0new.py\0"),
+            mock.Mock(returncode=0, stdout="new-untracked.txt\0"),
+        ]
+        with mock.patch.object(curator.subprocess, "run", side_effect=results):
+            evidence = curator.changed_paths(
+                Path("D:/repo"),
+                "a" * 40,
+                ["already-dirty.txt", "operator-notes.md", "vanished-dirty.txt"],
+            )
+
+        self.assertEqual(
+            evidence.paths,
+            frozenset(
+                {
+                    "already-dirty.txt",
+                    "committed.py",
+                    "new.py",
+                    "new-untracked.txt",
+                }
+            ),
+        )
+        self.assertEqual(
+            evidence.baseline_ambiguous_paths,
+            frozenset({"operator-notes.md", "vanished-dirty.txt"}),
+        )
+        self.assertTrue(evidence.complete)
+
     def test_changed_path_collection_preserves_nul_paths_and_reports_failures(self):
         results = [
             mock.Mock(returncode=0, stdout="tracked\nline\0"),
@@ -907,13 +955,57 @@ class TestCuratorReport(unittest.TestCase):
                 )
 
             self.assertEqual(report["claims"][0]["state"], "VERIFIED")
-            changed.assert_called_once_with(root.resolve(), "a" * 40)
+            changed.assert_called_once_with(root.resolve(), "a" * 40, [])
             self.assertNotIn("supersecret", report["redacted_window"])
             handoff = output.read_text(encoding="utf-8")
             self.assertNotIn("supersecret", handoff)
             self.assertIn("Implemented `scripts/new.py`", handoff)
             self.assertNotIn("API_KEY", handoff)
             self.assertIn("Transcript observed tail", handoff)
+
+    def test_report_does_not_attribute_preexisting_dirty_file_to_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            state_dir = Path(tmp) / "state"
+            transcript = Path(tmp) / "session.jsonl"
+            _write_transcript(
+                transcript,
+                [_assistant("Implemented `operator-notes.md`.")],
+            )
+            _write_bound_session(
+                state_dir,
+                root=root,
+                transcript_path=transcript,
+                start_dirty_paths=["operator-notes.md"],
+            )
+            with (
+                mock.patch.object(curator, "run_truth_snapshot", return_value=(_snapshot(), None)),
+                mock.patch.object(curator, "current_head", return_value=HEAD),
+                mock.patch.object(
+                    curator,
+                    "changed_paths",
+                    return_value=curator.ChangedPathEvidence(
+                        frozenset(),
+                        True,
+                        frozenset({"operator-notes.md"}),
+                    ),
+                ) as changed,
+                mock.patch.object(curator, "current_git_root", return_value=root),
+            ):
+                report = curator.prepare_curator_report(
+                    session_id="session-a",
+                    repo_root=root,
+                    state_dir=state_dir,
+                    now=NOW,
+                )
+
+            self.assertEqual(report["claims"][0]["state"], "UNVERIFIED")
+            changed.assert_called_once_with(
+                root.resolve(),
+                "a" * 40,
+                ["operator-notes.md"],
+            )
 
     def test_mismatched_git_root_blocks_truth_and_verdict_consumption(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1001,7 +1093,7 @@ class TestCuratorReport(unittest.TestCase):
             self.assertTrue(report["binding_evidence"])
             self.assertEqual(report["claims"][0]["state"], "VERIFIED")
             truth.assert_called_once_with(root)
-            changed.assert_called_once_with(root, "a" * 40)
+            changed.assert_called_once_with(root, "a" * 40, [])
 
     def test_invalid_session_id_is_rejected_before_default_handoff_path(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1606,13 +1606,16 @@ packet was frozen:
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
 - a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
   destructive cleanup of operator work from being misreported as `NO-OP`;
+- `/curator` separates committed session paths from current working-tree paths; a path already
+  dirty at session start remains `UNVERIFIED` unless the session commit range supplies
+  attributable change evidence, so pre-existing operator work cannot be claimed as verified;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
   by a squash landing, instead of using per-commit `git cherry`;
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
 Implementation validation after the external-review repairs: curator suite
-`39 passed, 4 subtests passed`; full `scripts/tests` suite `296 passed, 6 subtests passed`;
+`42 passed, 4 subtests passed`; full `scripts/tests` suite `299 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 

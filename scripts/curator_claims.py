@@ -85,6 +85,7 @@ class TranscriptWindow:
 class ChangedPathEvidence:
     paths: frozenset[str]
     complete: bool
+    baseline_ambiguous_paths: frozenset[str] = frozenset()
 
 
 def _iso(value: datetime) -> str:
@@ -459,9 +460,11 @@ def verify_claims(
     if isinstance(changed_paths, ChangedPathEvidence):
         changed_path_values = set(changed_paths.paths)
         changed_paths_complete = changed_paths.complete
+        baseline_ambiguous_values = set(changed_paths.baseline_ambiguous_paths)
     else:
         changed_path_values = changed_paths
         changed_paths_complete = True
+        baseline_ambiguous_values = set()
     session_commits = (
         _session_commit_shas(repo_root, start_sha)
         if truth_snapshot is not None and truth_fresh
@@ -546,6 +549,31 @@ def verify_claims(
                 )
                 continue
             if not all_matched:
+                attributable_or_baseline = changed_path_values | baseline_ambiguous_values
+                combined_matched, combined_ambiguous, combined_all_matched = _match_artifacts(
+                    artifacts,
+                    changed_paths=attributable_or_baseline,
+                    repo_root=repo_root,
+                )
+                if combined_ambiguous:
+                    results.append(
+                        _result(
+                            claim,
+                            "UNVERIFIED",
+                            "A named artifact matched multiple changed or baseline-dirty files.",
+                        )
+                    )
+                    continue
+                if combined_all_matched and combined_matched - matched:
+                    results.append(
+                        _result(
+                            claim,
+                            "UNVERIFIED",
+                            "One or more named artifacts were dirty at session start and lack "
+                            "session-attributable change evidence.",
+                        )
+                    )
+                    continue
                 if not changed_paths_complete:
                     results.append(
                         _result(
@@ -866,17 +894,25 @@ def _test_command_covers_artifacts(
     return True
 
 
-def changed_paths(repo_root: Path, start_sha: str) -> ChangedPathEvidence:
-    paths: set[str] = set()
+def changed_paths(
+    repo_root: Path,
+    start_sha: str,
+    start_dirty_paths: Iterable[str] = (),
+) -> ChangedPathEvidence:
+    committed_paths: set[str] = set()
+    working_paths: set[str] = set()
     complete = bool(re.fullmatch(r"[0-9a-fA-F]{40}", start_sha))
     if not complete:
         return ChangedPathEvidence(frozenset(), False)
+    baseline_dirty = {
+        item for item in start_dirty_paths if isinstance(item, str)
+    }
     commands = [
         ["diff", "--name-only", "-z", "--no-renames", f"{start_sha}..HEAD"],
         ["diff", "--name-only", "-z", "--no-renames", "HEAD"],
         ["ls-files", "--others", "--exclude-standard", "-z"],
     ]
-    for args in commands:
+    for index, args in enumerate(commands):
         try:
             result = subprocess.run(
                 ["git", "-C", str(repo_root), *args],
@@ -893,8 +929,18 @@ def changed_paths(repo_root: Path, start_sha: str) -> ChangedPathEvidence:
         if result.returncode != 0:
             complete = False
             continue
-        paths.update(parse_nul_paths(result.stdout))
-    return ChangedPathEvidence(frozenset(paths), complete)
+        parsed = set(parse_nul_paths(result.stdout))
+        if index == 0:
+            committed_paths.update(parsed)
+        else:
+            working_paths.update(parsed)
+    baseline_ambiguous = baseline_dirty - committed_paths
+    attributable_paths = committed_paths | (working_paths - baseline_dirty)
+    return ChangedPathEvidence(
+        frozenset(attributable_paths),
+        complete,
+        frozenset(baseline_ambiguous),
+    )
 
 
 def _render_gates(snapshot: dict[str, Any] | None, *, fresh: bool) -> list[dict[str, Any]]:
@@ -1026,7 +1072,7 @@ def prepare_curator_report(
                 "claim": "Session transcript was unavailable.",
                 "kind": "coverage",
                 "state": "UNVERIFIED",
-                "reason": "Immutable session transcript binding is unavailable or mismatched.",
+                "reason": "Exact session transcript binding is unavailable or mismatched.",
                 "artifacts": [],
             }
         ]
@@ -1055,7 +1101,11 @@ def prepare_curator_report(
             extracted = extract_claims(window.assistant_messages)
             start_sha = str(binding.get("start_sha") or "") if binding else ""
             paths = (
-                changed_paths(observed_root, start_sha)
+                changed_paths(
+                    observed_root,
+                    start_sha,
+                    binding.get("start_dirty_paths", []) if binding else (),
+                )
                 if start_sha
                 else ChangedPathEvidence(frozenset(), False)
             )
