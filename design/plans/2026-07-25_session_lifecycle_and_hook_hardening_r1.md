@@ -1567,7 +1567,8 @@ packet was frozen:
 
 - model-editable scratch is no longer provenance; `session.binding.v1` owns repo, worktree,
   start SHA, transcript, branch, and dirty baseline through atomic create-if-absent; malformed
-  or concurrent bindings can never be overwritten;
+  or concurrent bindings can never be overwritten, and `/curator` accepts any working
+  directory contained by that bound Git top-level;
 - Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
   filenames; traversal-like claim paths are rejected and incomplete collection cannot produce
   `REFUTED`;
@@ -1592,7 +1593,7 @@ packet was frozen:
   discoverable beyond 400 files.
 
 Implementation validation after the external-review repairs: curator suite
-`38 passed, 4 subtests passed`; full `scripts/tests` suite `295 passed, 6 subtests passed`;
+`39 passed, 4 subtests passed`; full `scripts/tests` suite `296 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 

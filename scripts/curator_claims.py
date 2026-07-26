@@ -986,11 +986,18 @@ def prepare_curator_report(
         )
     except (KeyError, OSError, RuntimeError, TypeError):
         bound_root = None
+    try:
+        requested_within_root = (
+            observed_root is not None
+            and requested_root.relative_to(observed_root) is not None
+        )
+    except ValueError:
+        requested_within_root = False
     binding_valid = bool(
         binding is not None
         and observed_root is not None
         and bound_root == observed_root
-        and requested_root == observed_root
+        and requested_within_root
     )
     router_evidence = plan is not None and binding_valid
 
@@ -999,8 +1006,8 @@ def prepare_curator_report(
         "disabled" if binding_valid else "immutable session binding unavailable or mismatched"
     )
     if run_truth and binding_valid:
-        truth_snapshot, truth_error = run_truth_snapshot(requested_root)
-    head = current_head(requested_root) if truth_snapshot is not None else None
+        truth_snapshot, truth_error = run_truth_snapshot(observed_root)
+    head = current_head(observed_root) if truth_snapshot is not None and observed_root else None
     snapshot_head = _snapshot_head(truth_snapshot)
     truth_fresh = bool(head and snapshot_head and head == snapshot_head)
 
@@ -1048,13 +1055,13 @@ def prepare_curator_report(
             extracted = extract_claims(window.assistant_messages)
             start_sha = str(binding.get("start_sha") or "") if binding else ""
             paths = (
-                changed_paths(requested_root, start_sha)
+                changed_paths(observed_root, start_sha)
                 if start_sha
                 else ChangedPathEvidence(frozenset(), False)
             )
             claims = verify_claims(
                 extracted,
-                repo_root=requested_root,
+                repo_root=observed_root,
                 start_sha=start_sha,
                 changed_paths=paths,
                 command_evidence=window.command_evidence,

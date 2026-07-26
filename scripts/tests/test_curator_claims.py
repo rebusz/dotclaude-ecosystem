@@ -961,6 +961,48 @@ class TestCuratorReport(unittest.TestCase):
             assert verdict is not None
             self.assertIsNone(verdict["consumed_at"])
 
+    def test_subdirectory_invocation_uses_bound_git_top_level_for_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            subdirectory = root / "nested" / "module"
+            subdirectory.mkdir(parents=True)
+            state_dir = Path(tmp) / "state"
+            transcript = Path(tmp) / "session.jsonl"
+            _write_transcript(
+                transcript,
+                [_assistant("Implemented `scripts/new.py`.")],
+            )
+            _write_bound_session(
+                state_dir,
+                root=root,
+                transcript_path=transcript,
+            )
+            with (
+                mock.patch.object(curator, "current_git_root", return_value=root),
+                mock.patch.object(
+                    curator,
+                    "run_truth_snapshot",
+                    return_value=(_snapshot(), None),
+                ) as truth,
+                mock.patch.object(curator, "current_head", return_value=HEAD),
+                mock.patch.object(
+                    curator,
+                    "changed_paths",
+                    return_value={"scripts/new.py"},
+                ) as changed,
+            ):
+                report = curator.prepare_curator_report(
+                    session_id="session-a",
+                    repo_root=subdirectory,
+                    state_dir=state_dir,
+                    now=NOW,
+                )
+
+            self.assertTrue(report["binding_evidence"])
+            self.assertEqual(report["claims"][0]["state"], "VERIFIED")
+            truth.assert_called_once_with(root)
+            changed.assert_called_once_with(root, "a" * 40)
+
     def test_invalid_session_id_is_rejected_before_default_handoff_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
