@@ -374,11 +374,13 @@ def _match_artifacts(
     *,
     changed_paths: set[str],
     repo_root: Path,
-) -> tuple[set[str], bool]:
+) -> tuple[set[str], bool, bool]:
     normalized_changes = {item.replace("\\", "/").lstrip("./") for item in changed_paths}
     matches: set[str] = set()
     ambiguous = False
-    for raw in artifacts:
+    artifact_values = list(dict.fromkeys(artifacts))
+    matched_artifacts = 0
+    for raw in artifact_values:
         value = re.sub(r":\d+(?::\d+)?$", "", raw.strip()).replace("\\", "/")
         candidate = Path(value)
         if candidate.is_absolute():
@@ -391,6 +393,7 @@ def _match_artifacts(
         value = value.lstrip("./")
         if value in normalized_changes:
             matches.add(value)
+            matched_artifacts += 1
             continue
         if "/" not in value:
             suffix_matches = {
@@ -398,9 +401,10 @@ def _match_artifacts(
             }
             if len(suffix_matches) == 1:
                 matches.update(suffix_matches)
+                matched_artifacts += 1
             elif len(suffix_matches) > 1:
                 ambiguous = True
-    return matches, ambiguous
+    return matches, ambiguous, matched_artifacts == len(artifact_values)
 
 
 def _gate_state(snapshot: dict[str, Any], stage: str) -> str | None:
@@ -487,12 +491,12 @@ def verify_claims(
                     _result(claim, "UNVERIFIED", "No concrete file artifact was named.")
                 )
             else:
-                matched, ambiguous = _match_artifacts(
+                matched, ambiguous, all_matched = _match_artifacts(
                     artifacts,
                     changed_paths=changed_path_values,
                     repo_root=repo_root,
                 )
-            if artifacts and matched:
+            if artifacts and all_matched:
                 results.append(
                     _result(claim, "VERIFIED", "Changed artifact: " + ", ".join(sorted(matched)))
                 )
@@ -510,7 +514,11 @@ def verify_claims(
                 )
             elif artifacts:
                 results.append(
-                    _result(claim, "REFUTED", "Named artifacts are absent from session changes.")
+                    _result(
+                        claim,
+                        "REFUTED",
+                        "One or more named artifacts are absent from session changes.",
+                    )
                 )
         elif kind == "test":
             expected = claim.get("expected_pass_count")

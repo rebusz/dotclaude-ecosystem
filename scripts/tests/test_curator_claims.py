@@ -387,6 +387,33 @@ class TestClaimVerification(unittest.TestCase):
         self.assertEqual(unique[0]["state"], "VERIFIED")
         self.assertEqual(ambiguous[0]["state"], "UNVERIFIED")
 
+    def test_compound_change_requires_every_named_artifact(self):
+        claims = curator.extract_claims(
+            ["Implemented `scripts/a.py` and `scripts/b.py`."]
+        )
+        partial = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths={"scripts/a.py"},
+            command_evidence=(),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+        complete = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths={"scripts/a.py", "scripts/b.py"},
+            command_evidence=(),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(partial[0]["state"], "REFUTED")
+        self.assertIn("One or more", partial[0]["reason"])
+        self.assertEqual(complete[0]["state"], "VERIFIED")
+
     def test_commit_claim_must_be_inside_session_range(self):
         claims = curator.extract_claims(["Committed as abcdef1."])
         with mock.patch.object(

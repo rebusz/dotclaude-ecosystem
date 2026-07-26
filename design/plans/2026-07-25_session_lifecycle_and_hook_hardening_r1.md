@@ -1564,7 +1564,8 @@ packet was frozen:
 - Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
   filenames; incomplete collection cannot produce `REFUTED`;
 - the curator's model-facing window is assistant text only, while test exit evidence requires
-  a correlated structured tool result and a recognised test runner;
+  a correlated structured tool result and a recognised test runner; a compound change claim
+  verifies only when every named artifact is matched;
 - the reaper checks its deadline while enumerating, protects sessions with a fresh bound
   transcript, and includes binding files in its owned bounded state;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
@@ -1572,8 +1573,8 @@ packet was frozen:
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
-Implementation validation at this head: focused lifecycle suite `90 passed`; full
-`scripts/tests` suite `281 passed, 2 subtests passed`; scoped Ruff, `compileall`, and
+Implementation validation after the external-review repair: focused curator suite `31 passed`;
+full `scripts/tests` suite `282 passed, 2 subtests passed`; scoped Ruff, `compileall`, and
 `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending C11
 and C14.
 
