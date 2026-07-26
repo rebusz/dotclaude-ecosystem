@@ -305,6 +305,52 @@ class TestTranscriptAttribution(unittest.TestCase):
             self.assertTrue(evidence.work_reached_trunk)
             self.assertFalse(evidence.transcript_complete)
 
+    def test_collect_evidence_treats_exclusion_magic_filename_as_literal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+
+            def git(*args: str) -> str:
+                result = subprocess.run(
+                    ["git", "-C", str(root), *args],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    check=True,
+                )
+                return result.stdout.strip()
+
+            git("init", "-b", "main")
+            git("config", "user.name", "Session Lifecycle Tests")
+            git("config", "user.email", "session-lifecycle@example.invalid")
+            magic_name = "!operator.txt"
+            (root / magic_name).write_text("base\n", encoding="utf-8")
+            git("add", "--", magic_name)
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/main", base)
+
+            git("checkout", "-b", "feature")
+            (root / magic_name).write_text("base\nfeature only\n", encoding="utf-8")
+            git("add", "--", magic_name)
+            git("commit", "-m", "feature")
+
+            transcript = Path(tmp) / "session.jsonl"
+            transcript.write_text("", encoding="utf-8")
+            evidence = lifecycle.collect_evidence(
+                registration=_registration(root),
+                plan=_plan(start_sha=base),
+                transcript_path=transcript,
+                state_dir=Path(tmp) / "state",
+                deadline_s=5.0,
+            )
+
+            self.assertTrue(evidence.git_ok)
+            self.assertEqual(evidence.committed_paths, (magic_name,))
+            self.assertFalse(evidence.work_reached_trunk)
+
 
 class TestLifecyclePersistence(unittest.TestCase):
     def test_session_end_persists_verdict_and_emits_nothing(self):

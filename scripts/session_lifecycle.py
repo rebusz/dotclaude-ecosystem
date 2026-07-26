@@ -529,6 +529,12 @@ def _git(
     return result
 
 
+def _literal_pathspec(path: str) -> str:
+    """Encode a repository-relative filename as a top-level literal pathspec."""
+
+    return f":(top,literal){path}"
+
+
 def collect_evidence(
     *,
     registration: RepositoryRegistration,
@@ -627,7 +633,9 @@ def collect_evidence(
             "origin/main",
         ]
         if committed_paths:
-            effect_diff_args.extend(["--", *committed_paths])
+            effect_diff_args.extend(
+                ["--", *(_literal_pathspec(path) for path in committed_paths)]
+            )
         effect_diff = _git(
             effect_diff_args,
             repo_root=root,

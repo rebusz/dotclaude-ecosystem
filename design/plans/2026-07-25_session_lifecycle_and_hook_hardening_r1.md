@@ -1628,14 +1628,16 @@ packet was frozen:
   dirty at session start remains `UNVERIFIED` unless the session commit range supplies
   attributable change evidence, so pre-existing operator work cannot be claimed as verified;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
-  by a squash landing, instead of using per-commit `git cherry`;
+  by a squash landing, instead of using per-commit `git cherry`; every filename sent back to
+  Git is encoded as a top-level literal pathspec, so valid `!`/`^`-prefixed Windows filenames
+  cannot turn into exclusions and falsely prove the effect landed;
 - verdict values are an exact enum including `UNKNOWN`; pending-verdict discovery completes the
   directory scan while retaining only the newest bounded result heap, so the newest
   unconsumed verdict remains discoverable beyond both 400 results and the former 5,000-entry
   prefix.
 
 Implementation validation after the external-review repairs: curator suite
-`43 passed, 4 subtests passed`; full `scripts/tests` suite `303 passed, 6 subtests passed`;
+`43 passed, 4 subtests passed`; full `scripts/tests` suite `304 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 
