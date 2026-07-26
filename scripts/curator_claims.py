@@ -315,6 +315,7 @@ def extract_claims(messages: Iterable[str]) -> list[dict[str, Any]]:
                 {
                     "text": text[:500],
                     "kind": kind,
+                    "requires_change_evidence": bool(_CHANGE_RE.search(text)),
                     "commit": commit.group(1) if commit else None,
                     "artifacts": artifacts[:10],
                     "expected_pass_count": int(pass_count.group(1)) if pass_count else None,
@@ -451,6 +452,54 @@ def verify_claims(
             )
             continue
         kind = claim["kind"]
+        if claim.get("requires_change_evidence"):
+            artifacts = {
+                str(item).replace("\\", "/")
+                for item in claim.get("artifacts", [])
+                if isinstance(item, str)
+            }
+            if not artifacts:
+                results.append(
+                    _result(
+                        claim,
+                        "UNVERIFIED",
+                        "The change portion names no concrete file artifact.",
+                    )
+                )
+                continue
+            matched, ambiguous, all_matched = _match_artifacts(
+                artifacts,
+                changed_paths=changed_path_values,
+                repo_root=repo_root,
+            )
+            if ambiguous:
+                results.append(
+                    _result(claim, "UNVERIFIED", "A named artifact matched multiple changed files.")
+                )
+                continue
+            if not all_matched:
+                if not changed_paths_complete:
+                    results.append(
+                        _result(
+                            claim,
+                            "UNVERIFIED",
+                            "Git path evidence was incomplete, so absence cannot refute the claim.",
+                        )
+                    )
+                else:
+                    results.append(
+                        _result(
+                            claim,
+                            "REFUTED",
+                            "One or more named artifacts are absent from session changes.",
+                        )
+                    )
+                continue
+            if kind == "change":
+                results.append(
+                    _result(claim, "VERIFIED", "Changed artifact: " + ", ".join(sorted(matched)))
+                )
+                continue
         if kind == "commit":
             sha = claim.get("commit")
             matches = (
@@ -481,45 +530,7 @@ def verify_claims(
             else:
                 results.append(_result(claim, "UNVERIFIED", "No commit SHA was stated."))
         elif kind == "change":
-            artifacts = {
-                str(item).replace("\\", "/")
-                for item in claim.get("artifacts", [])
-                if isinstance(item, str)
-            }
-            if not artifacts:
-                results.append(
-                    _result(claim, "UNVERIFIED", "No concrete file artifact was named.")
-                )
-            else:
-                matched, ambiguous, all_matched = _match_artifacts(
-                    artifacts,
-                    changed_paths=changed_path_values,
-                    repo_root=repo_root,
-                )
-            if artifacts and all_matched:
-                results.append(
-                    _result(claim, "VERIFIED", "Changed artifact: " + ", ".join(sorted(matched)))
-                )
-            elif artifacts and ambiguous:
-                results.append(
-                    _result(claim, "UNVERIFIED", "A named artifact matched multiple changed files.")
-                )
-            elif artifacts and not changed_paths_complete:
-                results.append(
-                    _result(
-                        claim,
-                        "UNVERIFIED",
-                        "Git path evidence was incomplete, so absence cannot refute the claim.",
-                    )
-                )
-            elif artifacts:
-                results.append(
-                    _result(
-                        claim,
-                        "REFUTED",
-                        "One or more named artifacts are absent from session changes.",
-                    )
-                )
+            results.append(_result(claim, "UNVERIFIED", "No change evidence was available."))
         elif kind == "test":
             expected = claim.get("expected_pass_count")
             relevant = [
@@ -661,6 +672,8 @@ def _snapshot_head(snapshot: dict[str, Any] | None) -> str | None:
 
 def _is_test_command(command: str) -> bool:
     normalized = " ".join(command.strip().split())
+    if re.search(r"[;&|\r\n]", command):
+        return False
     patterns = (
         r"(?:^|[;&|]\s*)(?:python(?:\.exe)?\s+-m\s+)?pytest(?:\s|$)",
         r"(?:^|[;&|]\s*)(?:python(?:\.exe)?\s+-m\s+)?unittest(?:\s|$)",

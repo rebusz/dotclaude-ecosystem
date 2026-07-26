@@ -36,6 +36,12 @@ scratch file, and one skill, all advisory.
 interview (seven decisions recorded below).
 **Implementation authorization:** not implied. The operator selected `/fwp` for review.
 
+**Current implementation boundary (Codex handoff, 2026-07-25):** this PR lands the
+independently removable S1-S4 code slice only. S5 hook registration, including
+`SessionEnd timeout: 2`, is intentionally excluded until the operator settles C11 and C14.
+Merging this inactive core does not claim activation or complete the plan's DoD; it preserves
+the reviewed code while the product decisions remain open.
+
 ## Consequence, downside, reversibility
 
 - **Proposed action:** add SessionStart and SessionEnd hooks; add a per-session scratch file; add `/curator`; add a repo
@@ -1565,7 +1571,8 @@ packet was frozen:
   filenames; incomplete collection cannot produce `REFUTED`;
 - the curator's model-facing window is assistant text only, while test exit evidence requires
   a correlated structured tool result and a recognised test runner; a compound change claim
-  verifies only when every named artifact is matched;
+  verifies only when every named artifact is matched, mixed change/test claims must satisfy
+  both evidence classes, and shell-masked test invocations are rejected;
 - the reaper checks its deadline while enumerating, protects sessions with a fresh bound
   transcript, and includes binding files in its owned bounded state;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
@@ -1573,8 +1580,9 @@ packet was frozen:
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
-Implementation validation after the external-review repair: focused curator suite `31 passed`;
-full `scripts/tests` suite `282 passed, 2 subtests passed`; scoped Ruff, `compileall`, and
+Implementation validation after the external-review repairs: focused curator suite
+`33 passed, 4 subtests passed`; full `scripts/tests` suite `284 passed, 6 subtests passed`;
+scoped Ruff, `compileall`, and
 `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending C11
 and C14.
 

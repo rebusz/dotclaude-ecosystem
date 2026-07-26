@@ -414,6 +414,44 @@ class TestClaimVerification(unittest.TestCase):
         self.assertIn("One or more", partial[0]["reason"])
         self.assertEqual(complete[0]["state"], "VERIFIED")
 
+    def test_mixed_change_and_test_claim_requires_change_evidence_too(self):
+        claims = curator.extract_claims(
+            ["Updated `scripts/missing.py`; 5 tests passed."]
+        )
+        results = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="python -m pytest -q",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+        unnamed = curator.verify_claims(
+            curator.extract_claims(["Updated the code; 5 tests passed."]),
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths={"scripts/real.py"},
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="python -m pytest -q",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(results[0]["state"], "REFUTED")
+        self.assertEqual(unnamed[0]["state"], "UNVERIFIED")
+
     def test_commit_claim_must_be_inside_session_range(self):
         claims = curator.extract_claims(["Committed as abcdef1."])
         with mock.patch.object(
@@ -504,6 +542,32 @@ class TestClaimVerification(unittest.TestCase):
             truth_fresh=True,
         )
         self.assertEqual(results[0]["state"], "UNVERIFIED")
+
+    def test_shell_masked_test_exit_is_not_accepted(self):
+        claims = curator.extract_claims(["Tests passed: 5 passed."])
+        for command in (
+            "pytest -q || echo 5 passed",
+            "pytest -q; echo 5 passed",
+            "pytest -q | echo 5 passed",
+            "pytest -q && echo 5 passed",
+        ):
+            with self.subTest(command=command):
+                results = curator.verify_claims(
+                    claims,
+                    repo_root=Path("D:/repo"),
+                    start_sha="a" * 40,
+                    changed_paths=set(),
+                    command_evidence=(
+                        curator.CommandEvidence(
+                            command=command,
+                            exit_code=0,
+                            output="5 passed",
+                        ),
+                    ),
+                    truth_snapshot=_snapshot(),
+                    truth_fresh=True,
+                )
+                self.assertEqual(results[0]["state"], "UNVERIFIED")
 
     def test_incomplete_git_paths_cannot_refute_an_absent_artifact(self):
         claims = curator.extract_claims(["Implemented `scripts/missing.py`."])
