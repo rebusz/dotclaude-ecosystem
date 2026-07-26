@@ -384,15 +384,17 @@ def decide_verdict(plan: dict[str, Any], evidence: SessionEvidence) -> VerdictDe
             tuple(sorted(set(attributable_paths) | disappeared_baseline)),
             open_items,
         )
-    no_work = not evidence.commit_shas and not attributable_paths
-    ambiguous_baseline = bool(current_dirty & baseline_dirty) and not evidence.transcript_complete
-    if no_work and ambiguous_baseline:
+    ambiguous_baseline = (
+        current_dirty & baseline_dirty if not evidence.transcript_complete else set()
+    )
+    if ambiguous_baseline:
         return VerdictDecision(
             "UNKNOWN",
             "Transcript was incomplete, so changes to pre-existing dirty files cannot be attributed.",
-            attributable_paths,
+            tuple(sorted(set(attributable_paths) | ambiguous_baseline)),
             open_items,
         )
+    no_work = not evidence.commit_shas and not attributable_paths
     if no_work:
         return VerdictDecision(
             "NO-OP",

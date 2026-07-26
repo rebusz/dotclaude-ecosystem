@@ -1642,12 +1642,15 @@ packet was frozen:
   exposing partial JSON;
 - the router accepts only the four documented `SessionStart.source` values; a CLI fork's real
   hook shape (`resume` with an unseen session ID) bootstraps its own state without clobbering
-  existing resumes or fabricating a fifth source.
+  existing resumes or fabricating a fifth source;
+- an incomplete transcript preserves `UNKNOWN` whenever a pre-existing dirty path remains,
+  even if unrelated session commits reached trunk, so a commit cannot mask ambiguous changes
+  to operator work as `ARCHIVE-OK`.
 
 Implementation validation after the external-review repairs: curator suite
 `43 passed, 4 subtests passed`; Windows/Python 3.12 workflow-equivalent suite
-`116 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
-runs; full `scripts/tests` suite `307 passed, 6 subtests passed`; scoped Ruff, `compileall`,
+`117 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
+runs; full `scripts/tests` suite `308 passed, 6 subtests passed`; scoped Ruff, `compileall`,
 and `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending
 C11 and C14.
 

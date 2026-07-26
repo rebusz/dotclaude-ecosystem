@@ -192,6 +192,21 @@ class TestVerdictRules(unittest.TestCase):
         )
         self.assertEqual(result.verdict, "UNKNOWN")
 
+    def test_merged_commit_cannot_hide_ambiguous_preexisting_dirt(self):
+        result = lifecycle.decide_verdict(
+            _plan(start_dirty_paths=["operator-notes.md"]),
+            _evidence(
+                dirty_paths=("operator-notes.md",),
+                committed_paths=("scripts/unrelated.py",),
+                transcript_complete=False,
+                work_reached_trunk=True,
+            ),
+        )
+
+        self.assertEqual(result.verdict, "UNKNOWN")
+        self.assertIn("operator-notes.md", result.attributable_paths)
+        self.assertIn("scripts/unrelated.py", result.attributable_paths)
+
     def test_git_failure_is_unknown(self):
         result = lifecycle.decide_verdict(_plan(), _evidence(git_ok=False))
         self.assertEqual(result.verdict, "UNKNOWN")
