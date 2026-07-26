@@ -1184,8 +1184,14 @@ character breaks that lane's stdout echo on Windows. The review itself was intac
 
 ## Eng Review Record - Stage 3 `/fwp`
 
-Review date: 2026-07-25. Mode: **FULL_REVIEW**. Six issues plus one deferred TODO, all
-resolved by operator decision during the review. No critical gaps.
+Review date: 2026-07-25. Mode: **FULL_REVIEW**. Six issues plus one deferred TODO, each decided
+by the operator during the review. No critical gaps.
+
+> **Corrected in Stage 3b (Codex C15).** This header originally said "all resolved". Two of the
+> seven were not resolutions: issue 7 was a deferral to `IDEA_BOX.md`, and issue 6 deferred the
+> actual number to a later measurement. More importantly, **Stage 3b went on to overturn or
+> repair five of the seven fixes below** - issues 1, 2, 3, 5 and 6. Read each one together with
+> its Stage 3b correction; where they disagree, Stage 3b wins.
 
 ### Scope challenge
 
