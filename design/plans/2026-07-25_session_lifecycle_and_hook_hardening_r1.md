@@ -1329,6 +1329,102 @@ touch the same directory even though they touch different files. Worktree isolat
 expect trivial merges, and land S1 before either lane starts to keep them off `session_state.py`
 simultaneously.
 
+## Stage 3b - Codex GPT-5.6 frontier lane, challenge of the eng review
+
+Run: `design/audits/2026-07-25_.../22_codex_cli_gpt.md`, 129 s, repo-scoped, 6,450 chars.
+Model: `gpt-5.6-sol` via `auditcodex_cli.py`.
+
+This is the independent frontier review that Stage 2 lost to a captcha, Stage 2b lost to a
+hang, and Stage 3 recorded as missing. It was pointed at the one target nothing had ever
+attacked: **the eng review's own findings.** It landed 16, and it damaged several of them.
+
+**Why the lane finally ran.** Two defects in `_shared/audit/auditcodex_cli.py`, both fixed and
+landed with tests before this run. First, `--ignore-user-config` discarded the host's
+`[windows] sandbox = "elevated"`, and the fallback implementation in codex-cli 0.145.0 never
+completes - measured, `codex-windows-sandbox-setup` burned 2,395 s of CPU in 55 minutes while
+the parent sat idle. This is also why the lane appeared to work elsewhere: other repositories
+are driven by an interactive Codex that reads that config, while an audit lane deliberately
+reads none of it. Second, and only visible once the hang was gone: **a prompt passed in argv is
+truncated at its first newline.** The multi-line challenge arrived as its opening line, and the
+lane returned confident 159- and 225-character non-answers with exit 0 and empty stderr. The
+prompt now travels on stdin. The second defect is the more dangerous of the two: a hang is
+loud, a truncated prompt is a lane that quietly reviews a different question than the one asked.
+
+### Verified before folding
+
+Three findings rested on claims about hook behaviour. Every one was checked against the
+official hooks reference rather than taken on the model's word - the discipline this plan
+learned from K1 and K2, applied this time to a reviewer's claims instead of an author's.
+
+| Claim | Verdict |
+|---|---|
+| Hook stdout is processed only on process exit | **Confirmed.** *"JSON output is only processed on exit 0"* |
+| `SessionStart` carries no parent session id on `fork` | **Confirmed.** No such field is documented |
+| Transcript is written asynchronously and may lag | **Confirmed**, verbatim, plus a documented remedy for `Stop` |
+| `/hooks` exists and hooks resolve from many sources | **Confirmed.** Read-only browser; **seven** sources |
+| `SessionEnd` has a 1.5-second default timeout | **REFUTED.** No such default exists anywhere |
+
+### Applied
+
+- **C1 (P1) - the measurement was circular.** S1 cannot measure a full `SessionStart` run that
+  S2 has not built. Split: S1 owns the floor, S2 owns the total and writes the budget.
+- **C2 (P1) - "runs after the injection is emitted" was mechanically false.** Output is read on
+  exit, so nothing a hook does before exiting is off the hot path. The reap is now counted
+  inside the SessionStart budget. Same class as K1 and K2, committed by the review itself.
+- **C3 (P1) - `fork` could not read its parent's file.** No parent id exists. `fork` now behaves
+  as `startup`, and the lost capability is stated rather than implied.
+- **C4 (P1) - `consumed_at` did not mean what it claimed.** Injecting into a session's context
+  is not the operator reading it. Split into `surfaced_at` (telemetry, authorises nothing) and
+  `consumed_at` (written only by `/curator`), and only the latter permits a reap.
+- **C5 (P1) - the verdict graded the repository, not the session.** Attribution is now explicit
+  against `start_sha`, and an empty attributable set yields `NO-OP` instead of a false
+  `ARCHIVE-OK`.
+- **C6 (P2) - issue 5 promised wall-time assertions and described none.** Split into hard
+  character assertions and a deliberately generous wall-time ceiling, with the reason stated.
+- **C7 (P2) - `transcript_path` on `fork` bound `/curator` to the parent's transcript.** `fork`
+  now records its own.
+- **C8 (P2) - the transcript lags and the curator claimed completeness.** It now reports the
+  last message it actually saw and never marks an uncaught-up turn `VERIFIED`.
+- **C9 (P2) - the wiring check was a worse copy of a shipped feature.** `/hooks` already exists
+  and reads all seven sources; parsing one `settings.json` reports false absence. The custom
+  check is deleted and `/curator` refers to `/hooks`. This removes code.
+- **C15 (P3) - "all resolved" overstated the eng review.** Two of its issues were deferrals, not
+  fixes. Wording corrected below.
+
+### Refuted
+
+- **C16 (P3) - the claimed 1.5-second `SessionEnd` budget does not exist.** Command hooks
+  default to 600 s; only `UserPromptSubmit` and `MessageDisplay` lower it. The plan's own 2 s
+  ceiling is self-imposed, which is worth knowing: it is a choice about operator experience, not
+  a constraint to be defended against.
+
+### Recorded, not applied - these are operator decisions, not defects
+
+- **C10 - the D1 merge premise is arguable.** Codex is right that two modules do not force two
+  authoritative resolvers. D1 was an operator decision taken during this review with the
+  tradeoff visible, and the counter-argument is recorded here rather than quietly reversed.
+- **C11 - a hook cannot compel the model to write the scratch file.** True, and it goes to the
+  foundation: `additionalContext` is a reminder, not an instruction the harness enforces. The
+  declared-intent mechanism is best-effort by construction. Worth the operator's attention
+  before implementation begins.
+- **C12 - deferring installer ownership leaves the feature machine-local.** True; in
+  `IDEA_BOX.md`.
+- **C13 - the registry is a second stale-config surface** rather than a fix to repository
+  detection. Settled by D7.
+- **C14 - goal 2 is not enforced,** because `/curator` is optional and `SessionEnd` alone is
+  coarse. The sharpest strategic point in the set. The plan is honest that both paths are
+  advisory, but "confronted before anything is called done" promises more than an optional
+  skill delivers.
+
+### What this changes about the review, not just the plan
+
+Stage 3 found seven issues and applied seven fixes. Five of those fixes were wrong or
+incomplete, and two of them were wrong in the specific way this plan has now been burned by
+three times: **a design resting on an event behaviour nobody looked up.** The eng review
+diagnosed that pattern in others, wrote the lesson down, and then repeated it within the hour.
+The lesson is not "check hooks" - it is that a review with no independent challenger scores its
+own work, and does it generously.
+
 ## Implementation Tasks
 
 Synthesized from this review's findings. Each task derives from a specific finding above.
