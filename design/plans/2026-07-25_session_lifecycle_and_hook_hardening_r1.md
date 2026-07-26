@@ -390,9 +390,21 @@ Verdict rules, reduced to the three that actually decide anything:
 
 | Condition | Verdict |
 |---|---|
-| merged into trunk, worktree clean, no open items | `ARCHIVE-OK` |
-| merged into trunk, anything else outstanding | `HANDOFF` |
-| not merged | `CHECKPOINT` |
+| **no work attributable to this session** | **`NO-OP`** |
+| session's work merged into trunk, worktree clean, no open items | `ARCHIVE-OK` |
+| session's work merged into trunk, anything else outstanding | `HANDOFF` |
+| session's work not merged | `CHECKPOINT` |
+
+> **Stage 3b correction (Codex C5).** The first three rows originally read on **repository**
+> state, not session state, and never said what "merged" or "open items" meant relative to
+> `start_sha`. Two consequences, both bad: a session that opened on a clean `main` and achieved
+> nothing collected `ARCHIVE-OK`, and a session whose repository happened to be dirty from
+> unrelated work was forced to `HANDOFF`. That is repository status wearing the label of session
+> verification, which is precisely what headline goal 2 promises not to be. **Resolved:**
+> attribution is explicit - the verdict reads only commits between `start_sha` and `HEAD` and
+> files this session actually wrote. When that set is empty the verdict is `NO-OP`, which is
+> honest, rather than `ARCHIVE-OK`, which is a false success on the most common session shape
+> there is: one that read things and changed nothing.
 
 Context consumption is **reported** in the verdict for the operator's judgement and decides
 nothing. The earlier four-row table had two rows that both yielded `CHECKPOINT`, parading a
