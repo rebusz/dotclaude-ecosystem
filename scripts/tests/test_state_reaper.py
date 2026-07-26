@@ -347,41 +347,53 @@ class TestStateReaper(unittest.TestCase):
             self.assertTrue(summary["file_limit_hit"])
             self.assertFalse(verdict.exists())
 
-    def test_persisted_cursor_prevents_live_oldest_candidate_starvation(self):
+    def test_unconsumed_verdict_cannot_occupy_deletable_candidate_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            plan = root / "session_plan_live.json"
-            plan.write_text("{}", encoding="utf-8")
-            _old(plan, days=40)
+            protected = root / "session_verdict_protected.json"
+            _verdict(
+                protected,
+                session_id="protected",
+                created_days_ago=30,
+            )
+            _old(protected, days=30)
+            eligible = root / "turn_counter_eligible"
+            eligible.write_text("1", encoding="utf-8")
+            _old(eligible, days=20)
+
+            with mock.patch.object(reaper, "MAX_SCAN_FILES", 1):
+                summary = reaper.reap_state(
+                    state_dir=root,
+                    current_session_id="current",
+                    live_session_ids=set(),
+                    now=NOW,
+                    max_files=1,
+                    time_budget_s=1.0,
+                )
+
+            self.assertTrue(protected.exists())
+            self.assertFalse(eligible.exists())
+            self.assertEqual(summary["deleted"], 1)
+
+    def test_persisted_cursor_advances_beyond_failed_candidate_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            blocked = root / "turn_counter_blocked"
+            blocked.write_text("1", encoding="utf-8")
+            _old(blocked, days=40)
             eligible = root / "turn_counter_eligible"
             eligible.write_text("1", encoding="utf-8")
             _old(eligible, days=30)
-            transcript = root / "live.jsonl"
-            transcript.write_text("{}\n", encoding="utf-8")
-            os.utime(transcript, (NOW.timestamp(), NOW.timestamp()))
-            state.write_session_binding(
-                "live",
-                {
-                    "schema_version": state.SESSION_BINDING_SCHEMA,
-                    "session_id": "live",
-                    "repo": "repo",
-                    "worktree_root": str(root.resolve()),
-                    "start_sha": "a" * 40,
-                    "transcript_path": str(transcript.resolve()),
-                    "start_branch": "main",
-                    "start_dirty_paths": [],
-                    "created_at": "2026-07-01T00:00:00Z",
-                },
-                state_dir=root,
-            )
+            original_unlink = Path.unlink
+
+            def fail_blocked(path: Path, *args: object, **kwargs: object) -> None:
+                if path.name == blocked.name:
+                    raise PermissionError("locked")
+                original_unlink(path, *args, **kwargs)
 
             with (
-                mock.patch.object(reaper, "MAX_SCAN_FILES", 2),
-                mock.patch.object(
-                    reaper.time,
-                    "perf_counter",
-                    side_effect=[0.0, 0.002],
-                ),
+                mock.patch.object(reaper, "MAX_SCAN_FILES", 1),
+                mock.patch.object(Path, "unlink", autospec=True, side_effect=fail_blocked),
             ):
                 first = reaper.reap_state(
                     state_dir=root,
@@ -389,15 +401,11 @@ class TestStateReaper(unittest.TestCase):
                     live_session_ids=set(),
                     now=NOW,
                     max_files=1,
-                    time_budget_s=0.001,
+                    time_budget_s=1.0,
                 )
             with (
-                mock.patch.object(reaper, "MAX_SCAN_FILES", 2),
-                mock.patch.object(
-                    reaper.time,
-                    "perf_counter",
-                    side_effect=[0.0, 0.002],
-                ),
+                mock.patch.object(reaper, "MAX_SCAN_FILES", 1),
+                mock.patch.object(Path, "unlink", autospec=True, side_effect=fail_blocked),
             ):
                 second = reaper.reap_state(
                     state_dir=root,
@@ -405,15 +413,15 @@ class TestStateReaper(unittest.TestCase):
                     live_session_ids=set(),
                     now=NOW,
                     max_files=1,
-                    time_budget_s=0.001,
+                    time_budget_s=1.0,
                 )
 
             self.assertEqual(first["deleted"], 0)
-            self.assertTrue(plan.exists())
+            self.assertTrue(blocked.exists())
             self.assertEqual(second["deleted"], 1)
             self.assertFalse(eligible.exists())
 
-    def test_bounded_candidate_heap_checks_each_candidates_exact_binding_lease(self):
+    def test_candidate_selection_excludes_exact_fresh_binding_lease(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plan = root / "session_plan_live.json"
@@ -455,8 +463,8 @@ class TestStateReaper(unittest.TestCase):
                     time_budget_s=1.0,
                 )
 
-            self.assertTrue(summary["file_limit_hit"])
             self.assertTrue(plan.exists())
+            self.assertGreaterEqual(summary["skipped_live"], 1)
             lease.assert_called_with(
                 "live",
                 state_dir=root,

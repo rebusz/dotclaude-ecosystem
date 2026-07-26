@@ -421,11 +421,11 @@ class TestLifecyclePersistence(unittest.TestCase):
                     state_dir=root,
                 )
 
-    def test_newest_pending_verdict_is_found_beyond_four_hundred_files(self):
+    def test_newest_pending_verdict_is_found_beyond_former_five_thousand_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            base_timestamp = NOW.timestamp() - 1000
-            for index in range(450):
+            base_timestamp = NOW.timestamp() - 10_000
+            for index in range(5_005):
                 lifecycle.write_verdict(
                     {
                         "schema_version": lifecycle.VERDICT_SCHEMA,
@@ -449,7 +449,7 @@ class TestLifecyclePersistence(unittest.TestCase):
             )
 
             assert pending is not None
-            self.assertEqual(pending["session_id"], "previous-449")
+            self.assertEqual(pending["session_id"], "previous-5004")
 
     def test_surface_and_consume_are_distinct_idempotent_events(self):
         with tempfile.TemporaryDirectory() as tmp:

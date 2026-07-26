@@ -485,12 +485,14 @@ and, bounded and throttled, from `SessionStart`.
 **A bounded prefix is not a bounded reaper.** Truncating the native `scandir` order restarts at
 the same directory prefix on every process invocation and can starve the unseen tail forever.
 The implementation instead completes a lightweight directory pass while retaining only the
-globally oldest bounded heap. Verdict priority uses its bounded `created_at` payload rather
-than mutable filesystem mtime, and a single atomic cursor capped at 1 KiB rotates processing
-past an old but protected candidate on the next invocation. The cursor is self-replacing
-singleton metadata rather than a per-session file family. The post-selection delete/evidence
-phase remains bounded by count and 150 ms; the complete operation remains inside the
-separately asserted 1.5-second full SessionStart ceiling.
+next bounded window of currently deletable candidates. Live sessions, fresh transcript leases,
+and unconsumed verdicts inside the 90-day outer bound are excluded before the window is formed,
+so they cannot occupy all of its slots. Verdict order uses its bounded `created_at` payload
+rather than mutable filesystem mtime, and a single atomic cursor capped at 1 KiB advances the
+selection key beyond deletion errors and candidate-limit boundaries on the next invocation.
+The cursor is self-replacing singleton metadata rather than a per-session file family. The
+post-selection delete/evidence phase remains bounded by count and 150 ms; the complete
+operation remains inside the separately asserted 1.5-second full SessionStart ceiling.
 
 **Gate:** the 1,944-file backlog is cleared; a live session's files survive a concurrent
 reap; verdicts are correct across merged-clean, merged-dirty, and unmerged fixtures; a
@@ -1611,13 +1613,13 @@ packet was frozen:
   class, named test artifacts must match their full executed test scope without basename-only
   collisions, shell-masked test invocations are rejected, and a test pass requires a positive
   executed-test count rather than a bare `OK`;
-- the reaper completes a lightweight directory pass while retaining only the globally oldest
-  bounded candidate heap, prioritises verdicts by `created_at`, and persists a cursor through
-  that heap so time-budgeted runs cannot restart forever at the same protected file; it checks
-  each candidate's exact sibling binding, includes binding and stale lock files in its owned
-  state, and still enforces the 90-day verdict hard bound for a live session; on the current
-  1,947-file state directory the read-only candidate pass measured 205.618 ms cold and
-  11.669-11.795 ms warm, inside the 1.5-second full SessionStart ceiling;
+- the reaper completes a lightweight directory pass while retaining only a bounded fair window
+  of currently deletable candidates; protected sessions and undelivered verdicts are excluded
+  before selection, verdict order uses `created_at`, and a persisted key cursor advances beyond
+  failed deletions and candidate-limit boundaries; it includes binding and stale lock files in
+  its owned state and still enforces the 90-day verdict hard bound for a live session; three
+  read-only passes over the current 1,947-file state directory measured 62.216-74.043 ms,
+  inside the 1.5-second full SessionStart ceiling;
 - verdict surfacing and consumption serialize their read-modify-write cycles so a stale
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
 - a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
@@ -1627,11 +1629,13 @@ packet was frozen:
   attributable change evidence, so pre-existing operator work cannot be claimed as verified;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
   by a squash landing, instead of using per-commit `git cherry`;
-- verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
-  discoverable beyond 400 files.
+- verdict values are an exact enum including `UNKNOWN`; pending-verdict discovery completes the
+  directory scan while retaining only the newest bounded result heap, so the newest
+  unconsumed verdict remains discoverable beyond both 400 results and the former 5,000-entry
+  prefix.
 
 Implementation validation after the external-review repairs: curator suite
-`43 passed, 4 subtests passed`; full `scripts/tests` suite `302 passed, 6 subtests passed`;
+`43 passed, 4 subtests passed`; full `scripts/tests` suite `303 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 

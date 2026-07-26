@@ -33,7 +33,6 @@ MAX_VERDICT_BYTES = 64 * 1024
 MAX_TRANSCRIPT_SCAN_BYTES = 4 * 1024 * 1024
 SESSION_END_WORK_DEADLINE_S = 1.2
 VERDICT_VALUES = {"NO-OP", "ARCHIVE-OK", "HANDOFF", "CHECKPOINT", "UNKNOWN"}
-_MAX_PENDING_SCAN = 5000
 _MAX_PENDING_RESULTS = 400
 _VERDICT_LOCK_TIMEOUT_S = 0.2
 _VERDICT_LOCK_STALE_S = 5.0
@@ -204,37 +203,35 @@ def _pending_verdicts(
 ) -> list[tuple[Path, dict[str, Any]]]:
     candidates: list[tuple[float, str, Path, dict[str, Any]]] = []
     try:
-        paths: list[Path] = []
         with os.scandir(state_dir) as entries:
             for entry in entries:
-                if len(paths) >= _MAX_PENDING_SCAN:
-                    break
-                if (
+                if not (
                     entry.name.startswith("session_verdict_")
                     and entry.name.endswith(".json")
+                    and not entry.is_symlink()
                     and entry.is_file(follow_symlinks=False)
                 ):
-                    paths.append(Path(entry.path))
+                    continue
+                path = Path(entry.path)
+                verdict = read_verdict(path)
+                if (
+                    verdict is None
+                    or verdict.get("repo") != repo
+                    or verdict.get("session_id") == current_session_id
+                    or verdict.get("consumed_at")
+                ):
+                    continue
+                try:
+                    modified = entry.stat(follow_symlinks=False).st_mtime
+                except OSError:
+                    continue
+                item = (modified, path.name, path, verdict)
+                if len(candidates) < _MAX_PENDING_RESULTS:
+                    heapq.heappush(candidates, item)
+                elif (modified, path.name) > (candidates[0][0], candidates[0][1]):
+                    heapq.heapreplace(candidates, item)
     except OSError:
         return []
-    for path in paths:
-        verdict = read_verdict(path)
-        if (
-            verdict is None
-            or verdict.get("repo") != repo
-            or verdict.get("session_id") == current_session_id
-            or verdict.get("consumed_at")
-        ):
-            continue
-        try:
-            modified = path.stat().st_mtime
-        except OSError:
-            continue
-        item = (modified, path.name, path, verdict)
-        if len(candidates) < _MAX_PENDING_RESULTS:
-            heapq.heappush(candidates, item)
-        elif modified > candidates[0][0]:
-            heapq.heapreplace(candidates, item)
     candidates.sort(key=lambda item: item[0], reverse=True)
     return [(path, verdict) for _, _, path, verdict in candidates]
 

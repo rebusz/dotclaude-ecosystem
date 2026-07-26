@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -139,28 +140,44 @@ def _binding_transcript_is_fresh(
     return transcript_modified >= retention_cutoff
 
 
-def _candidate_priority(path: Path, *, modified_timestamp: float) -> float:
-    if path.name.startswith("session_verdict_") and path.name.endswith(".json"):
-        modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
-        return _verdict_created_at(
-            _read_verdict(path),
-            modified=modified,
-        ).timestamp()
-    return modified_timestamp
+def _retain_oldest(
+    heap: list[_NewestFirst],
+    candidate: _Candidate,
+    *,
+    limit: int,
+) -> None:
+    import heapq
+
+    item = _NewestFirst(candidate)
+    if len(heap) < limit:
+        heapq.heappush(heap, item)
+        return
+    newest_retained = heap[0].candidate
+    if (candidate.priority_timestamp, candidate.name) < (
+        newest_retained.priority_timestamp,
+        newest_retained.name,
+    ):
+        heapq.heapreplace(heap, item)
 
 
-def _oldest_candidates(
+def _candidate_window(
     state_dir: Path,
     *,
     limit: int,
-) -> tuple[list[_Candidate], bool]:
-    """Return the globally oldest bounded candidates from a complete name scan."""
-
-    import heapq
+    after_key: tuple[float, str] | None,
+    live_session_ids: set[str],
+    retention_cutoff: datetime,
+    outer_cutoff: datetime,
+) -> tuple[list[_Candidate], bool, int]:
+    """Return a fair bounded window of currently deletable candidates."""
 
     limit = max(1, limit)
-    heap: list[_NewestFirst] = []
-    owned_count = 0
+    after_heap: list[_NewestFirst] = []
+    wrap_heap: list[_NewestFirst] = []
+    eligible_count = 0
+    skipped_live = 0
+    live = set(live_session_ids)
+    binding_liveness: dict[str, bool] = {}
     with os.scandir(state_dir) as iterator:
         for entry in iterator:
             if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
@@ -172,38 +189,87 @@ def _oldest_candidates(
             except FileNotFoundError:
                 continue
             path = Path(entry.path)
+            session_id = _session_id(entry.name)
+            if session_id is None:
+                continue
+            modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
+            is_verdict = entry.name.startswith("session_verdict_") and entry.name.endswith(
+                ".json"
+            )
+            verdict = _read_verdict(path) if is_verdict else None
+            verdict_created = (
+                _verdict_created_at(verdict, modified=modified)
+                if is_verdict
+                else modified
+            )
+            verdict_hard_expired = is_verdict and verdict_created < outer_cutoff
+            delete = (
+                entry.name.startswith(
+                    (
+                        "turn_counter_",
+                        "session_plan_",
+                        "session_binding_",
+                        "session_verdict_lock_",
+                    )
+                )
+                and modified < retention_cutoff
+            )
+            if is_verdict:
+                delete = verdict_hard_expired or (
+                    verdict is not None
+                    and bool(verdict.get("consumed_at"))
+                    and modified < retention_cutoff
+                )
+            if not delete:
+                continue
+            if session_id not in live and not verdict_hard_expired:
+                is_fresh = binding_liveness.get(session_id)
+                if is_fresh is None:
+                    is_fresh = _binding_transcript_is_fresh(
+                        session_id,
+                        state_dir=state_dir,
+                        retention_cutoff=retention_cutoff,
+                    )
+                    binding_liveness[session_id] = is_fresh
+                if is_fresh:
+                    live.add(session_id)
+            if session_id in live and not verdict_hard_expired:
+                skipped_live += 1
+                continue
             candidate = _Candidate(
-                priority_timestamp=_candidate_priority(
-                    path,
-                    modified_timestamp=modified_timestamp,
-                ),
+                priority_timestamp=verdict_created.timestamp(),
                 name=entry.name,
                 modified_timestamp=modified_timestamp,
                 path=path,
             )
-            owned_count += 1
-            item = _NewestFirst(candidate)
-            if len(heap) < limit:
-                heapq.heappush(heap, item)
-                continue
-            newest_retained = heap[0].candidate
-            if (candidate.priority_timestamp, candidate.name) < (
-                newest_retained.priority_timestamp,
-                newest_retained.name,
-            ):
-                heapq.heapreplace(heap, item)
-    candidates = sorted(
-        (item.candidate for item in heap),
+            eligible_count += 1
+            _retain_oldest(wrap_heap, candidate, limit=limit)
+            candidate_key = (candidate.priority_timestamp, candidate.name)
+            if after_key is None or candidate_key > after_key:
+                _retain_oldest(after_heap, candidate, limit=limit)
+    after_candidates = sorted(
+        (item.candidate for item in after_heap),
         key=lambda item: (item.priority_timestamp, item.name),
     )
-    return candidates, owned_count > limit
+    if len(after_candidates) < limit:
+        selected_names = {item.name for item in after_candidates}
+        wrap_candidates = sorted(
+            (item.candidate for item in wrap_heap),
+            key=lambda item: (item.priority_timestamp, item.name),
+        )
+        after_candidates.extend(
+            item
+            for item in wrap_candidates
+            if item.name not in selected_names
+        )
+    return after_candidates[:limit], eligible_count > limit, skipped_live
 
 
 def _scan_cursor_path(state_dir: Path) -> Path:
     return state_dir / SCAN_CURSOR_NAME
 
 
-def _read_scan_cursor(state_dir: Path) -> str | None:
+def _read_scan_cursor(state_dir: Path) -> tuple[float, str] | None:
     path = _scan_cursor_path(state_dir)
     try:
         if path.is_symlink():
@@ -217,18 +283,23 @@ def _read_scan_cursor(state_dir: Path) -> str | None:
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != SCAN_CURSOR_SCHEMA
+        or not isinstance(value.get("after_priority"), (int, float))
         or not isinstance(value.get("after_name"), str)
     ):
         return None
-    return value["after_name"]
+    priority = float(value["after_priority"])
+    if not math.isfinite(priority):
+        return None
+    return priority, value["after_name"]
 
 
-def _write_scan_cursor(state_dir: Path, after_name: str) -> None:
+def _write_scan_cursor(state_dir: Path, candidate: _Candidate) -> None:
     payload = (
         json.dumps(
             {
                 "schema_version": SCAN_CURSOR_SCHEMA,
-                "after_name": after_name,
+                "after_priority": candidate.priority_timestamp,
+                "after_name": candidate.name,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -238,19 +309,6 @@ def _write_scan_cursor(state_dir: Path, after_name: str) -> None:
     if len(payload) > MAX_CURSOR_BYTES:
         raise ValueError("reaper cursor exceeds size bound")
     atomic_write_bytes(_scan_cursor_path(state_dir), payload)
-
-
-def _rotate_after_cursor(
-    candidates: list[_Candidate],
-    after_name: str | None,
-) -> list[_Candidate]:
-    if not candidates or after_name is None:
-        return candidates
-    for index, candidate in enumerate(candidates):
-        if candidate.name == after_name:
-            split = index + 1
-            return candidates[split:] + candidates[:split]
-    return candidates
 
 
 def reap_state(
@@ -290,12 +348,16 @@ def reap_state(
     }
 
     try:
-        entries, candidate_limit_hit = _oldest_candidates(
+        entries, candidate_limit_hit, scan_skipped_live = _candidate_window(
             state_dir,
             limit=MAX_SCAN_FILES,
+            after_key=_read_scan_cursor(state_dir),
+            live_session_ids=live,
+            retention_cutoff=retention_cutoff,
+            outer_cutoff=outer_cutoff,
         )
         summary["file_limit_hit"] = candidate_limit_hit
-        entries = _rotate_after_cursor(entries, _read_scan_cursor(state_dir))
+        summary["skipped_live"] = scan_skipped_live
     except FileNotFoundError:
         return summary
     except OSError as exc:
@@ -304,7 +366,7 @@ def reap_state(
         return summary
 
     binding_liveness: dict[str, bool] = {}
-    last_scanned_name: str | None = None
+    last_scanned: _Candidate | None = None
     for candidate in entries:
         if int(summary["scanned"]) > 0 and time.perf_counter() >= deadline:
             summary["time_budget_hit"] = True
@@ -313,7 +375,7 @@ def reap_state(
             summary["file_limit_hit"] = True
             break
         summary["scanned"] = int(summary["scanned"]) + 1
-        last_scanned_name = candidate.name
+        last_scanned = candidate
         modified_timestamp = candidate.modified_timestamp
         path = candidate.path
         session_id = _session_id(path.name)
@@ -372,9 +434,9 @@ def reap_state(
                 f"{path.name}:{type(exc).__name__}",
                 state_dir=state_dir,
             )
-    if last_scanned_name is not None:
+    if last_scanned is not None:
         try:
-            _write_scan_cursor(state_dir, last_scanned_name)
+            _write_scan_cursor(state_dir, last_scanned)
         except (OSError, ValueError) as exc:
             summary["errors"] = int(summary["errors"]) + 1
             append_hook_error("REAPER_CURSOR_WRITE_FAILED", type(exc).__name__, state_dir=state_dir)
