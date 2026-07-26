@@ -1,0 +1,16 @@
+{
+  "schema_version": "session.registry.v1",
+  "repositories": [
+    {
+      "name": "dotclaude-ecosystem",
+      "root": "D:/dotclaude/dotclaude-ecosystem",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    }
+  ]
+}

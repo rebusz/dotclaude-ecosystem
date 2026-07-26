@@ -302,6 +302,13 @@ covers `dotclaude-ecosystem`, which `plan_context_loader.py` cannot detect.
 builds: interpreter startup, one `git` spawn, and a registry plus scratch read. That is the
 **floor** every SessionStart pays before the router does anything.
 
+**Measured during S1 implementation (Windows, Python 3.14.3, 60 external runs):**
+interpreter plus `session_state` import p50 64.474 ms / p95 97.532 ms; the one `git
+rev-parse` spawn p50 31.433 ms / p95 66.626 ms; registry plus missing-scratch read p50
+0.048 ms / p95 0.124 ms; full floor p50 99.871 ms / p95 156.229 ms / max 213.526 ms.
+This is the S1 floor, not the SessionStart budget. S2 must measure the completed router,
+including its bounded reap, before setting that ceiling.
+
 > **Stage 3b correction (Codex C1).** The eng review originally put the *full* `SessionStart`
 > measurement here. That is circular - S1 cannot measure a full run that S2 has not built yet.
 > The full-run measurement belongs to S2, against the real router. S1 owns the floor; S2 owns
@@ -511,8 +518,8 @@ adding it, and removes the finding's only real risk, which was a confident false
 `VERIFIED`; an unrunnable check or a stale snapshot yields `UNVERIFIED` and never `VERIFIED`;
 a secret nested inside a tool-result content array does not survive redaction; a missing or
 dangling `transcript_path` yields `UNVERIFIED` and never resolves to another session's
-transcript; with zero, one, and both hook entries present the wiring check names exactly the
-absent ones and is silent when fully wired.
+transcript; the wiring report reads no settings file, states only whether this session has
+direct scratch-file evidence of a router run, and refers the operator to `/hooks`.
 
 ### S5 - Exact-head review and landing
 
@@ -537,7 +544,8 @@ pending work would misrepresent what is left to build.
 | Session starts outside the registry | one line, no scratch file, zero injected context |
 | Session starts in a directory that is not a repo | one line, no raise |
 | **`SessionStart` with `source: compact`** | **goal re-injected with `updated_at` visible** |
-| `SessionStart` with `source: resume` or `fork` | existing scratch file read, never clobbered |
+| `SessionStart` with `source: resume` | existing scratch file read, never clobbered |
+| `SessionStart` with `source: fork` | fresh scratch file created; parent never guessed |
 | Scratch file has unrecognised `schema_version` | treated as absent **and** `UNRECOGNIZED_VERSION` logged |
 | Scratch file malformed or truncated | treated as absent, no raise |
 | Write killed mid-flight (Windows handle held) | previous good file still readable |
@@ -562,12 +570,13 @@ assertions from issue 5.
 | **Unconsumed verdict, reap runs past the retention window** | **file survives; delivery still possible** |
 | Consumed verdict, reap runs past the retention window | file removed |
 | Verdict past the hard outer bound, never consumed | file removed; bound exists so nothing leaks forever |
-| Rendering a verdict (either delivery path) | `consumed_at` stamped, exactly once |
-| `startup`/`clear` | `transcript_path` recorded from the event payload |
-| `resume`/`compact`/`fork` | `transcript_path` left untouched |
+| Surfacing a verdict from SessionStart | `surfaced_at` stamped, `consumed_at` untouched |
+| Rendering a verdict through `/curator` | `consumed_at` stamped, exactly once |
+| `startup`/`clear`/`fork` | own `transcript_path` recorded from the event payload |
+| `resume`/`compact` | `transcript_path` left untouched |
 | **Curator with `transcript_path` absent** | **`UNVERIFIED` claims, logged; never globs for a substitute** |
 | Curator with `transcript_path` pointing at a deleted file | `UNVERIFIED` claims, logged, no raise |
-| Curator wiring check, zero / one / both hook entries present | names exactly the absent ones; silent when fully wired |
+| Curator wiring report | reads no settings file and refers to the authoritative `/hooks` browser |
 | **SessionStart full run, registered repo** | **injected payload within its measured character ceiling** |
 | SessionStart outside the registry | injected payload within the minimal-branch ceiling |
 
@@ -647,14 +656,13 @@ eng review promised both and then described only one, and its task T6 verified o
 
 Raising a ceiling stays possible and becomes a deliberate argument rather than a silent drift.
 
-**The 2-second hook ceiling is self-imposed** (Stage 3b, **Codex C16 refuted**). Codex read the
-plan's `<= 2 seconds each` against a claimed 1.5-second SessionEnd default and called it a
-conflict. **There is no such default.** The hooks reference gives command hooks a **600-second**
-default, lowered only for `UserPromptSubmit` (30 s) and `MessageDisplay` (10 s); `SessionEnd`
-carries no special timeout and is not mentioned. Nothing in the harness will kill a 2-second
-lifecycle hook. The 2 s ceiling and the sub-second startup target are therefore **ours**, chosen
-for the operator's experience, not constraints imposed on us - which is the right reason to keep
-them and the wrong reason to panic about them.
+**Implementation-time documentation recheck (2026-07-25): C16 is no longer refuted.** The
+current official hooks reference now documents a **1.5-second default timeout for
+`SessionEnd`**, while the common command-hook default remains 600 seconds. The reference also
+says a per-hook `timeout` raises the SessionEnd budget. S5 must therefore configure
+`timeout: 2` explicitly for this hook, while the implementation still targets comfortably
+below 1.5 seconds. This preserves the plan's 2-second acceptance ceiling without resting on a
+stale harness claim.
 
 **Why the 400 ms p95 was withdrawn** (eng review, issue 6). CEO Finding 7 set 400 ms as the
 registered-case target, and the fact list in S2 was specified separately and never priced
@@ -695,9 +703,11 @@ order.
 
 - [ ] Session intent is written to disk, survives compaction, and is re-injected at
       `SessionStart` with `source: compact`.
-- [ ] The scratch file carries `transcript_path`, recorded on `startup`/`clear` only.
+- [ ] The scratch file carries its own `transcript_path`, recorded on
+      `startup`/`clear`/`fork` and preserved on `resume`/`compact`.
 - [ ] No hook in this plan can block a turn or end a session.
-- [ ] `SessionEnd` produces a three-way verdict and never archives on its own.
+- [ ] `SessionEnd` produces `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, or `CHECKPOINT` and never
+      archives on its own.
 - [ ] The SessionEnd verdict is persisted and reaches the operator by at least one of the
       two delivery paths, because `SessionEnd` itself cannot speak.
 - [ ] An unconsumed verdict is never reaped on age alone; a consumed one is; a hard outer
@@ -708,12 +718,12 @@ order.
       marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
 - [ ] `/curator` locates the transcript via `transcript_path` and never globs for a
       substitute.
-- [ ] `/curator` names any of this plan's two hook entries that are absent from
-      `settings.json`.
+- [ ] `/curator` reads no settings file, reports only direct scratch-file evidence, and
+      points the operator to `/hooks` for the authoritative merged hook view.
 - [ ] Redaction traverses nested transcript structure, not lines.
 - [ ] Session titles follow the convention automatically at start.
-- [ ] Every token budget is measured in S1, written from that measurement, and **asserted in
-      tests** so it cannot regress silently.
+- [ ] The S1 floor and S2 full router are measured separately; the SessionStart budget is
+      written from the S2 measurement and **asserted in tests** so it cannot regress silently.
 - [ ] Removing the two hook entries restores pre-plan behavior exactly.
 - [ ] Exact-head review, CI, merge, and operator checkout sync are complete.
 
