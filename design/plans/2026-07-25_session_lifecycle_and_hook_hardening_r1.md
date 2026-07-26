@@ -323,8 +323,18 @@ One hook, five matchers, three behaviours:
 | `startup` | full run: facts + instruction to write the scratch file; sets `sessionTitle` |
 | `clear` | same as `startup` |
 | **`compact`** | **re-injects the existing scratch file** - this is the compaction-survival path |
-| `resume` | reads the existing file, never clobbers it |
-| `fork` | reads the existing file, never clobbers it |
+| `resume` | reads the existing file, never clobbers it (same `session_id`) |
+| `fork` | **creates a fresh file, like `startup`** - see below |
+
+> **Stage 3b correction (Codex C3, verified against the hooks reference).** `fork` was tabled
+> as "reads the existing file". It cannot. `SessionStart` delivers the **new** session's
+> `session_id` and carries **no parent or originating session id** in any documented field, so
+> a forked session has no way to name `session_plan_<parent_id>`. The only way to "find" it
+> would be to guess by recency - the exact unsafe lookup this plan rejects for transcripts, and
+> for the same reason. **Resolved:** `fork` behaves as `startup`. The capability lost is real
+> and stated plainly rather than papered over: **a forked session does not inherit its
+> parent's declared intent.** Recovering it would need a parent pointer the harness does not
+> provide.
 
 **Compaction survival lives here, not in `PreCompact`.** `PreCompact` has exactly one output
 channel, `decision: "block"`, plus the universal fields; it has no `additionalContext` and
