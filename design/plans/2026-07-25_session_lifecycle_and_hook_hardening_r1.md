@@ -1470,6 +1470,33 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Verify: entry names all three prior deferrals and their reasoning
   - **Applied during the review itself; listed for the record.**
 
+From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them together.
+
+- [ ] **T9 (P1, human: ~45min / CC: ~10min)** - `session_router.py` - `fork` creates a fresh scratch file and records its own `transcript_path`
+  - Surfaced by: Codex C3 and C7 - `SessionStart` carries no parent session id, verified against the hooks reference
+  - Files: `scripts/session_router.py`, `scripts/tests/test_session_router.py`
+  - Verify: `fork` writes a new file and never reads `session_plan_<parent>`; no recency-based lookup exists in the source
+- [ ] **T10 (P1, human: ~30min / CC: ~5min)** - `state_reaper.py` - split `surfaced_at` from `consumed_at`; only `consumed_at` permits a reap
+  - Surfaced by: Codex C4 - injecting a verdict into a session's context is not the operator reading it
+  - Files: `scripts/session_lifecycle.py`, `scripts/state_reaper.py`, `scripts/session_router.py`, `scripts/tests/test_state_reaper.py`
+  - Verify: a verdict surfaced ten times and never curated still survives a reap; only `/curator` stamps `consumed_at`
+- [ ] **T11 (P1, human: ~1h / CC: ~15min)** - `session_lifecycle.py` - attribute the verdict to the session, add `NO-OP`
+  - Surfaced by: Codex C5 - the verdict graded repository state, so a session that did nothing scored `ARCHIVE-OK`
+  - Files: `scripts/session_lifecycle.py`, `scripts/tests/test_session_lifecycle.py`
+  - Verify: session opening on clean `main` that changes nothing yields `NO-OP`; unrelated pre-existing dirt does not force `HANDOFF`
+- [ ] **T12 (P1, human: ~30min / CC: ~5min)** - `S1`/`S2` - move the full-run measurement to S2, leave the floor in S1
+  - Surfaced by: Codex C1 - S1 cannot measure a router S2 has not built yet
+  - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`, `scripts/tests/test_session_router.py`
+  - Verify: the reap's cost is inside the SessionStart budget, not beside it
+- [ ] **T13 (P2, human: ~30min / CC: ~5min)** - `/curator` - delete the `settings.json` parser; point at `/hooks`
+  - Surfaced by: Codex C9 - hooks resolve from seven sources, so one file cannot prove absence, and `/hooks` already ships
+  - Files: `skills/curator/SKILL.md`, `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
+  - Verify: no code reads `settings.json`; `/curator` reports scratch-file evidence and refers to `/hooks`
+- [ ] **T14 (P2, human: ~45min / CC: ~10min)** - `curator_claims.py` - report the transcript's observed tail, never claim completeness
+  - Surfaced by: Codex C8 - the transcript "may lag the in-memory conversation", verified verbatim
+  - Files: `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
+  - Verify: a fixture whose newest turn is missing from the transcript yields no `VERIFIED` for that turn's claims
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
