@@ -98,6 +98,25 @@ def _verdict_past_outer_bound(
     ) < outer_cutoff
 
 
+def _binding_transcript_is_fresh(
+    session_id: str,
+    *,
+    state_dir: Path,
+    retention_cutoff: datetime,
+) -> bool:
+    binding = read_session_binding(session_id, state_dir=state_dir)
+    if binding is None:
+        return False
+    try:
+        transcript_modified = datetime.fromtimestamp(
+            Path(binding["transcript_path"]).stat().st_mtime,
+            tz=UTC,
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+    return transcript_modified >= retention_cutoff
+
+
 def reap_state(
     *,
     state_dir: Path,
@@ -155,31 +174,7 @@ def reap_state(
         summary["errors"] = 1
         return summary
 
-    # A fresh transcript is the observable lease for a session that may still
-    # be alive in another process. Build the protection set before deleting
-    # any member of that session's state family.
-    for _, path in entries:
-        if time.perf_counter() >= deadline:
-            summary["time_budget_hit"] = True
-            break
-        if not path.name.startswith("session_binding_"):
-            continue
-        session_id = _session_id(path.name)
-        if session_id is None:
-            continue
-        binding = read_session_binding(session_id, state_dir=state_dir)
-        if binding is None:
-            continue
-        try:
-            transcript_modified = datetime.fromtimestamp(
-                Path(binding["transcript_path"]).stat().st_mtime,
-                tz=UTC,
-            )
-        except (KeyError, OSError, TypeError, ValueError):
-            continue
-        if transcript_modified >= retention_cutoff:
-            live.add(session_id)
-
+    binding_liveness: dict[str, bool] = {}
     for modified_timestamp, path in entries:
         if time.perf_counter() >= deadline:
             summary["time_budget_hit"] = True
@@ -191,6 +186,20 @@ def reap_state(
         session_id = _session_id(path.name)
         if session_id is None:
             continue
+        if session_id not in live:
+            is_fresh = binding_liveness.get(session_id)
+            if is_fresh is None:
+                is_fresh = _binding_transcript_is_fresh(
+                    session_id,
+                    state_dir=state_dir,
+                    retention_cutoff=retention_cutoff,
+                )
+                binding_liveness[session_id] = is_fresh
+            if is_fresh:
+                live.add(session_id)
+        if time.perf_counter() >= deadline:
+            summary["time_budget_hit"] = True
+            break
         modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
         is_verdict = path.name.startswith("session_verdict_") and path.name.endswith(".json")
         verdict_hard_expired = is_verdict and _verdict_past_outer_bound(

@@ -1578,8 +1578,9 @@ packet was frozen:
   class, named test artifacts must match their full executed test scope without basename-only
   collisions, and shell-masked test invocations are rejected;
 - the reaper checks its deadline while enumerating, protects sessions with a fresh bound
-  transcript, includes binding and stale lock files in its owned bounded state, and still
-  enforces the 90-day verdict hard bound for a live session;
+  transcript by checking each candidate's exact sibling binding even when scanning truncates,
+  includes binding and stale lock files in its owned bounded state, and still enforces the
+  90-day verdict hard bound for a live session;
 - verdict surfacing and consumption serialize their read-modify-write cycles so a stale
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
 - a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
@@ -1589,8 +1590,8 @@ packet was frozen:
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
-Implementation validation after the external-review repairs: focused curator/reaper suites
-`48 passed, 4 subtests passed`; full `scripts/tests` suite `293 passed, 6 subtests passed`;
+Implementation validation after the external-review repairs: reaper suite `12 passed`; full
+`scripts/tests` suite `294 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 
