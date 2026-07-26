@@ -16,9 +16,9 @@ advisory/best-effort boundaries and explicitly authorized hook activation:
 1. **C11** - a `SessionStart` hook cannot compel the model to write the scratch file.
    `additionalContext` is a reminder the harness does not enforce, so "declared intent at
    session start" is best-effort by construction.
-2. **C14** - headline goal 2 promises claims are confronted "before anything is called done",
-   but `/curator` is optional and `SessionEnd` alone is coarse. The goal was corrected to the
-   accepted advisory contract.
+2. **C14** - the former headline goal 2 promised claims were confronted "before anything is
+   called done", but `/curator` is optional and `SessionEnd` alone is coarse. The goal was
+   corrected to the accepted advisory contract.
 
 ## Settled - do not re-litigate
 

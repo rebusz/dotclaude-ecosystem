@@ -1672,8 +1672,9 @@ Implementation validation after the external-review repairs: curator suite
 `43 passed, 4 subtests passed`; Windows/Python 3.12 workflow-equivalent suite
 `117 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
 runs; full `scripts/tests` suite `308 passed, 6 subtests passed`; scoped Ruff, `compileall`,
-and `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending
-C11 and C14.
+and `git diff --check` all exit 0. At that validation point, hook configuration remained
+deliberately untouched pending C11 and C14; activation followed the operator's acceptance
+and is recorded under S5 above.
 
 ## GSTACK REVIEW REPORT
 
