@@ -1548,13 +1548,21 @@ From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them toge
   against the hooks reference rather than asserted.
 
 **UNRESOLVED DECISIONS:**
-
-**UNRESOLVED DECISIONS:**
-- ~~The Codex CLI frontier lane has not returned.~~ **Resolved 2026-07-25:** the lane hangs in
-  Codex's own Windows sandbox helper, not in our runner. Operator chose to proceed to Stage 3 on
-  the Kimi lane; the lane defect is filed against `_shared/audit`. See `## Stage 2b`.
+- ~~The Codex CLI frontier lane has not returned.~~ **Closed 2026-07-25:** two runner defects
+  fixed in `_shared/audit` (Windows sandbox mode discarded by `--ignore-user-config`; prompt
+  truncated at its first newline by argv). The lane ran and its findings are folded as Stage 3b.
+- **Open, needs the operator before implementation (Codex C11).** A `SessionStart` hook can
+  inject an instruction to write the scratch file, but `additionalContext` is a reminder the
+  harness does not enforce - nothing compels the model to perform an unsolicited write before
+  the first prompt. "Declared intent at session start" is therefore best-effort by construction,
+  not a guarantee. The plan should either accept that in writing or find a mechanism that does
+  not depend on model compliance.
+- **Open, strategic (Codex C14).** Headline goal 2 says claims are "confronted with repository
+  evidence before anything is called done", but the only thorough path is `/curator`, which is
+  optional, and `SessionEnd` alone produces a coarse verdict. The plan does not enforce its own
+  headline promise. Worth settling before implementation rather than discovering it after.
 - CDP web-UI lanes silently degrade long plan input, which cost two of three Perplexity lanes
   in this run. The cause is downstream of `_shared/audit`, so it cannot be fixed by editing the
   runner; the available lever is lane selection - prefer CLI lanes for plans past a size the
-  web UI mishandles. Out of scope here, recorded so the next panel does not repeat it. This
-  plan grew during the review and will hit the same wall on any future panel.
+  web UI mishandles. This plan has now more than doubled in size and will hit that wall on any
+  future CDP panel; the CLI lanes read from the working tree and are unaffected.
