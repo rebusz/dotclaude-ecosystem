@@ -33,7 +33,7 @@ lifecycle of a *session*. This plan fills that gap with two hooks, one session-s
 scratch file, and one skill, all advisory.
 
 **Plan-writing authorization:** granted by the operator on 2026-07-25 after a `/grill-me`
-interview (seven decisions recorded below).
+interview (seven grill decisions recorded below; D8 was added during implementation review).
 **Implementation authorization:** not implied. The operator selected `/fwp` for review.
 
 **Current implementation boundary (Codex handoff, 2026-07-25):** this PR lands the
@@ -41,6 +41,16 @@ independently removable S1-S4 code slice only. S5 hook registration, including
 `SessionEnd timeout: 2`, is intentionally excluded until the operator settles C11 and C14.
 Merging this inactive core does not claim activation or complete the plan's DoD; it preserves
 the reviewed code while the product decisions remain open.
+
+**Binding trust boundary (operator decision A, 2026-07-25):** the session binding is
+hook-produced and write-once through `session_state.py`. Atomic create protects cooperative
+same-user sessions from accidental clobbering and concurrent-writer races. It is **not** a
+security boundary against an agent or process running as the same OS user that deliberately
+replaces the file directly. That hostile same-user case is outside this R1 plan's threat
+model. Consumers validate the schema and cross-check the repository or event facts available
+to them, but `start_sha` and the dirty baseline remain cooperative-session metadata rather
+than tamper-proof attestations. A future requirement for hostile-agent integrity needs a
+separately planned external trust root.
 
 ## Consequence, downside, reversibility
 
@@ -194,6 +204,7 @@ Baseline at plan creation:
 | D5 | Design chain | Routing rule inside the router. No `/fwd` command |
 | D6 | `/sweep` output | `IDEA_BOX.md`. GitHub issues only on explicit operator request |
 | D7 | Router reach | Repo registry: full run in registered repositories, one line elsewhere |
+| D8 | Binding trust model | Cooperative same-user model (option A): race/accident protection, not hostile same-user tamper resistance |
 
 ## Architecture
 
@@ -213,7 +224,8 @@ SessionStart ---> session_router.py (facts only)
          ~/.claude/state/session_binding_<id>.json
           { repo, worktree_root, start_sha, transcript_path,
             start_branch, start_dirty_paths[], created_at }
-          immutable hook-owned provenance
+          hook-produced, API-write-once provenance
+          (cooperative same-user trust model)
                         |
               +---------+---------+
               |                   |
@@ -283,7 +295,7 @@ removable.
 `templates/session_registry.json.template`, `scripts/tests/test_session_state.py`.
 
 `session_state.py` owns the operations every consumer needs and nobody reimplements:
-resolve the registry, read-and-validate the scratch file, manage the immutable provenance
+resolve the registry, read-and-validate the scratch file, manage the write-once provenance
 binding, and write state atomically. Writes go to a
 same-directory temp file then `os.replace`, so a process killed mid-write leaves the previous
 good file intact - the Windows failure mode where a terminated subprocess has not released its
@@ -296,15 +308,20 @@ authoritative. Registry resolution lives in `session_state.py` and nowhere else.
 allowed exactly the four operations named here; anything a later slice wants to add belongs in
 that slice's own module, so this does not become the junk drawer.
 
-The scratch file records **`transcript_path`** for operator visibility, while an immutable
-`session.binding.v1` file is the only authority consumed by SessionEnd and `/curator`.
+The scratch file records **`transcript_path`** for operator visibility, while a
+hook-produced `session.binding.v1` file is the exact per-session source consumed by
+SessionEnd and `/curator`.
 `SessionStart` receives
 the transcript path in its event payload; `/curator` is a skill and receives no payload, so
-without this binding the plan's most security-sensitive consumer has no defined way to find its
-input. Recording it at start makes provenance explicit and per-session, and prevents a
-model-editable scratch file from redirecting evidence to another repo, SHA, or transcript. A
-session created before this binding existed, a mismatched Git root, or a transcript path that
-no longer resolves degrades to `UNVERIFIED`/`UNKNOWN` rather than a guess or a raise.
+without this binding `/curator` has no defined way to find its input. Recording it at start
+makes provenance explicit and per-session, and prevents the ordinary model-editable intent
+file from redirecting evidence to another repo, SHA, or transcript. Atomic create prevents
+accidental replacement and concurrent creators from overwriting each other. Under D8 this
+does not defend against deliberate direct replacement by a same-user process; the curator
+therefore cross-checks the bound Git top-level and SessionEnd cross-checks the event's
+repository, worktree, and transcript facts. A session created before this binding existed, a
+mismatched Git root, or a transcript path that no longer resolves degrades to
+`UNVERIFIED`/`UNKNOWN` rather than a guess or a raise.
 
 The scratch file carries `schema_version: "session.plan.v1"`. An unrecognised version is
 treated as absent **and** appends `UNRECOGNIZED_VERSION` to `hook_errors.log`, so a stale
@@ -739,9 +756,10 @@ order.
 
 - [ ] Session intent is written to disk, survives compaction, and is re-injected at
       `SessionStart` with `source: compact`.
-- [ ] An immutable hook-owned binding carries `repo`, `worktree_root`, `start_sha`,
-      `transcript_path`, and the dirty baseline on `startup`/`clear`/`fork`; scratch edits
-      cannot redirect SessionEnd or `/curator`.
+- [ ] A hook-produced, API-write-once binding carries `repo`, `worktree_root`, `start_sha`,
+      `transcript_path`, and the dirty baseline on `startup`/`clear`/`fork`; atomic create
+      prevents accidental clobbering and concurrent-writer races, while deliberate same-user
+      file replacement remains explicitly outside the D8 threat model.
 - [ ] No hook in this plan can block a turn or end a session.
 - [ ] `SessionEnd` produces exactly `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT`, or
       `UNKNOWN` and never archives on its own.
@@ -753,7 +771,7 @@ order.
 - [ ] A session killed without `SessionEnd` is still reaped.
 - [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
       marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
-- [ ] `/curator` locates the transcript via the immutable binding and never globs for a
+- [ ] `/curator` locates the transcript via the exact per-session binding and never globs for a
       substitute.
 - [ ] `/curator` reads no settings file, reports only direct scratch-file evidence, and
       points the operator to `/hooks` for the authoritative merged hook view.
@@ -1474,7 +1492,7 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 - **C11 - a hook cannot compel the model to write the scratch file.** True, and it goes to the
   foundation: `additionalContext` is a reminder, not an instruction the harness enforces. The
   declared-intent mechanism is best-effort by construction. Worth the operator's attention
-  before implementation begins.
+  before hook activation.
 - **C12 - deferring installer ownership leaves the feature machine-local.** True; in
   `IDEA_BOX.md`.
 - **C13 - the registry is a second stale-config surface** rather than a fix to repository
@@ -1565,10 +1583,11 @@ From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them toge
 The exact-head local review found and closed the following ship blockers before the review
 packet was frozen:
 
-- model-editable scratch is no longer provenance; `session.binding.v1` owns repo, worktree,
-  start SHA, transcript, branch, and dirty baseline through atomic create-if-absent; malformed
-  or concurrent bindings can never be overwritten, and `/curator` accepts any working
-  directory contained by that bound Git top-level;
+- model-editable intent is no longer the ordinary provenance source; `session.binding.v1`
+  carries repo, worktree, start SHA, transcript, branch, and dirty baseline through atomic
+  create-if-absent; the API never overwrites malformed or concurrent bindings, and `/curator`
+  accepts any working directory contained by that bound Git top-level; per D8, deliberate
+  direct replacement by a same-user process remains outside the threat model;
 - Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
   filenames; traversal-like claim paths are rejected and incomplete collection cannot produce
   `REFUTED`;

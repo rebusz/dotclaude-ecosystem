@@ -1003,7 +1003,7 @@ def prepare_curator_report(
 
     truth_snapshot: dict[str, Any] | None = None
     truth_error: str | None = (
-        "disabled" if binding_valid else "immutable session binding unavailable or mismatched"
+        "disabled" if binding_valid else "session binding unavailable or mismatched"
     )
     if run_truth and binding_valid:
         truth_snapshot, truth_error = run_truth_snapshot(observed_root)

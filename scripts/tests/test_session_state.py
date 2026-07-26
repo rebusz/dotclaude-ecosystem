@@ -212,7 +212,7 @@ class TestSessionState(unittest.TestCase):
             self.assertEqual(loaded, _plan())
             self.assertFalse(list(state_dir.glob("*.tmp")))
 
-    def test_session_binding_is_immutable_and_idempotent(self):
+    def test_session_binding_is_write_once_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / "state"
             root = Path(tmp) / "repo"
@@ -231,7 +231,7 @@ class TestSessionState(unittest.TestCase):
                 state.read_session_binding("session-a", state_dir=state_dir),
                 original,
             )
-            with self.assertRaisesRegex(ValueError, "immutable"):
+            with self.assertRaisesRegex(ValueError, "write-once"):
                 state.write_session_binding(
                     "session-a",
                     _binding(root, start_sha="b" * 40),
@@ -252,7 +252,7 @@ class TestSessionState(unittest.TestCase):
             original = b'{"schema_version":'
             path.write_bytes(original)
 
-            with self.assertRaisesRegex(ValueError, "existing immutable"):
+            with self.assertRaisesRegex(ValueError, "existing write-once"):
                 state.write_session_binding(
                     "session-a",
                     _binding(root),

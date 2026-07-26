@@ -131,7 +131,7 @@ def _atomic_create_bytes(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         # A hard link publishes the already-complete inode and fails atomically
-        # if another hook process created the immutable destination first.
+        # if another cooperative writer created the write-once destination first.
         os.link(temporary_path, path)
     finally:
         try:
@@ -232,7 +232,7 @@ def read_session_binding(
     *,
     state_dir: Path | None = None,
 ) -> dict[str, Any] | None:
-    """Read the immutable hook-owned provenance binding for one session."""
+    """Read the hook-produced, write-once provenance binding for one session."""
 
     target_dir = Path(state_dir) if state_dir is not None else _default_state_dir()
     try:
@@ -260,11 +260,15 @@ def write_session_binding(
     *,
     state_dir: Path | None = None,
 ) -> Path:
-    """Create an immutable session provenance binding.
+    """Create a write-once session provenance binding.
 
     A repeated identical write is idempotent. Any attempt to change an
-    existing binding is rejected so model-editable scratch cannot redirect
-    evidence collection.
+    existing binding through this API is rejected, preventing accidental
+    clobbering and concurrent-writer races.
+
+    This is not a security boundary against a same-user process deliberately
+    replacing the file directly. Consumers must still validate the schema and
+    cross-check the repository or event facts available to them.
     """
 
     target_dir = Path(state_dir) if state_dir is not None else _default_state_dir()
@@ -284,9 +288,9 @@ def write_session_binding(
     except FileExistsError:
         existing = read_session_binding(safe_session_id, state_dir=target_dir)
         if existing is None:
-            raise ValueError("existing immutable session binding is invalid") from None
+            raise ValueError("existing write-once session binding is invalid") from None
         if existing != normalized:
-            raise ValueError("immutable session binding mismatch")
+            raise ValueError("write-once session binding mismatch")
         return path
 
 
