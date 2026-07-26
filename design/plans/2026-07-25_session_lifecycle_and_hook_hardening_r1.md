@@ -458,16 +458,23 @@ regexes would miss a secret nested one level down. The patterns come from
 paths that replaced the channel `SessionEnd` does not have. Rendering a verdict stamps its
 `consumed_at`, which is what makes it reapable (S3).
 
-**Hook-wiring check** (eng review, issue 2). `/curator` reports which of this plan's two hook
-entries are present in `settings.json` and names any that are absent. Stage 2's A9 put this
-check in `session_router.py`; Stage 2b's K3 correctly killed that, because the router is
-delivered *by* the hook whose absence it was meant to detect, so in the exact failure state it
-never runs. K3 re-homed the check to "the installer or a status command" - neither of which any
-slice builds, which would have left an applied finding owned by nobody. `/curator` is
-operator-invoked and therefore runs whether or not a single hook is wired, which makes it the
-one existing surface where the check actually executes in the failure case. It buys detection,
-not prevention: the underlying cause - hook entries are hand-edited config outside version
-control - is recorded in `IDEA_BOX.md` and is not solved here.
+**Hook-wiring check** (eng review issue 2, **rewritten in Stage 3b per Codex C9**). `/curator`
+does **not** parse `settings.json`. It points the operator at **`/hooks`**, the built-in
+read-only browser Claude Code already ships, and renders whether this session saw a router run.
+
+The eng review had `/curator` read `settings.json` and name absent entries. Verified against the
+hooks reference, that is wrong twice over. Hooks resolve from **seven** sources - user settings,
+project settings, local settings, managed policy, plugin `hooks/hooks.json`, skill frontmatter
+and agent frontmatter - so a reader of one file reports **false absence** for a hook that is
+configured and running. And the capability already exists: *"Type `/hooks` in Claude Code to
+open a read-only browser for your configured hooks"*, with per-entry `User`/`Project`/`Local`/
+`Plugin` source labels. Building a worse version of a shipped feature is the opposite of
+boring-by-default.
+
+**Resolved:** `/curator` states what it actually knows - whether a scratch file exists for this
+session, which is direct evidence the router ran - and refers the operator to `/hooks` for the
+authoritative merged view. It never asserts that a hook is absent. This deletes code rather than
+adding it, and removes the finding's only real risk, which was a confident false negative.
 
 **Gate:** a fixture session claiming an unmade fix yields `REFUTED`; a genuine fix yields
 `VERIFIED`; an unrunnable check or a stale snapshot yields `UNVERIFIED` and never `VERIFIED`;
