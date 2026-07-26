@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -240,6 +241,56 @@ class TestSessionState(unittest.TestCase):
                 state.read_session_binding("session-a", state_dir=state_dir),
                 original,
             )
+
+    def test_malformed_existing_binding_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "state"
+            state_dir.mkdir()
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            path = state_dir / "session_binding_session-a.json"
+            original = b'{"schema_version":'
+            path.write_bytes(original)
+
+            with self.assertRaisesRegex(ValueError, "existing immutable"):
+                state.write_session_binding(
+                    "session-a",
+                    _binding(root),
+                    state_dir=state_dir,
+                )
+
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_concurrent_binding_creators_cannot_overwrite_each_other(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "state"
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            barrier = threading.Barrier(2)
+            payloads = [
+                _binding(root, start_sha="a" * 40),
+                _binding(root, start_sha="b" * 40),
+            ]
+
+            def create(payload: dict[str, object]) -> str:
+                barrier.wait()
+                try:
+                    state.write_session_binding(
+                        "session-a",
+                        payload,
+                        state_dir=state_dir,
+                    )
+                    return "created"
+                except ValueError:
+                    return "rejected"
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(create, payloads))
+
+            self.assertCountEqual(outcomes, ["created", "rejected"])
+            loaded = state.read_session_binding("session-a", state_dir=state_dir)
+            assert loaded is not None
+            self.assertIn(loaded["start_sha"], {"a" * 40, "b" * 40})
 
     def test_git_nul_parsers_preserve_control_characters_and_rename_target(self):
         status = "\0".join(

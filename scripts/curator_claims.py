@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -38,14 +39,17 @@ TRUTH_TIMEOUT_S = 20.0
 
 _CLAIM_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _COMMIT_RE = re.compile(r"\bcommit(?:ted)?(?:\s+as)?\s+([0-9a-fA-F]{7,40})\b", re.I)
-_PASS_COUNT_RE = re.compile(r"\b(\d+)\s+(?:tests?\s+)?passed\b", re.I)
+_PASS_COUNT_RE = re.compile(r"\b(\d+)\s+(?:tests?\b.{0,120}?\b)?passed\b", re.I)
 _ARTIFACT_RE = re.compile(r"`([^`\r\n]{1,240})`")
 _CHANGE_RE = re.compile(
     r"\b(fixed|implemented|changed|added|removed|updated|created|deleted)\b",
     re.I,
 )
 _CI_RE = re.compile(r"\bci\b.*\b(passed|green|succeeded|successful)\b", re.I)
-_TEST_RE = re.compile(r"\btests?\s+passed\b|\b\d+\s+passed\b", re.I)
+_TEST_RE = re.compile(
+    r"\btests?\s+passed\b|\b\d+\s+(?:tests?\b.{0,120}?\b)?passed\b",
+    re.I,
+)
 _SENSITIVE_KEY_RE = re.compile(
     r"^(api[_-]?key|authorization|bearer|cookie|password|passwd|secret|token)$",
     re.I,
@@ -326,6 +330,11 @@ def extract_claims(messages: Iterable[str]) -> list[dict[str, Any]]:
                     "kind": kind,
                     "evidence_classes": evidence_classes,
                     "requires_change_evidence": bool(_CHANGE_RE.search(text)),
+                    "test_scope_artifacts": (
+                        artifacts
+                        if "test" in evidence_classes and "change" not in evidence_classes
+                        else []
+                    ),
                     "commit": commit.group(1) if commit else None,
                     "artifacts": artifacts[:10],
                     "expected_pass_count": int(pass_count.group(1)) if pass_count else None,
@@ -591,6 +600,27 @@ def verify_claims(
                 if _is_test_command(item.command)
             ]
             latest = relevant[-1] if relevant else None
+            test_scope_artifacts = [
+                item
+                for item in claim.get("test_scope_artifacts", [])
+                if isinstance(item, str)
+            ]
+            if (
+                latest is not None
+                and test_scope_artifacts
+                and not _test_command_covers_artifacts(
+                    latest.command,
+                    test_scope_artifacts,
+                )
+            ):
+                results.append(
+                    _result(
+                        claim,
+                        "UNVERIFIED",
+                        "The test command scope does not cover every named test artifact.",
+                    )
+                )
+                continue
             expected_output = (
                 latest is not None
                 and (
@@ -735,6 +765,60 @@ def _is_test_command(command: str) -> bool:
         r"(?:^|[;&|]\s*)dotnet\s+test(?:\s|$)",
     )
     return any(re.search(pattern, normalized, re.I) for pattern in patterns)
+
+
+def _test_command_covers_artifacts(
+    command: str,
+    artifacts: Iterable[str],
+) -> bool:
+    try:
+        tokens = [
+            token.strip("\"'").replace("\\", "/")
+            for token in shlex.split(command, posix=False)
+        ]
+    except ValueError:
+        return False
+    targets: list[str] = []
+    skip_value = False
+    for token in tokens:
+        if skip_value:
+            skip_value = False
+            continue
+        lowered = token.lower()
+        if lowered in {
+            "-k",
+            "-m",
+            "--basetemp",
+            "--rootdir",
+            "--confcutdir",
+            "--ignore",
+            "--deselect",
+        }:
+            skip_value = True
+            continue
+        if token.startswith("-"):
+            continue
+        normalized = token.split("::", 1)[0].rstrip("/")
+        if (
+            "/" in normalized
+            or re.search(r"\.(?:py|js|jsx|ts|tsx|rs|go|cs)$", normalized, re.I)
+            or PurePath(normalized).name.lower() in {"test", "tests"}
+        ):
+            targets.append(normalized.lstrip("./"))
+    if not targets:
+        return False
+    for raw in artifacts:
+        artifact = re.sub(r":\d+(?::\d+)?$", "", raw.strip()).replace("\\", "/")
+        artifact = artifact.lstrip("./")
+        basename = PurePath(artifact).name
+        if not any(
+            artifact == target
+            or artifact.startswith(target.rstrip("/") + "/")
+            or basename == PurePath(target).name
+            for target in targets
+        ):
+            return False
+    return True
 
 
 def changed_paths(repo_root: Path, start_sha: str) -> ChangedPathEvidence:

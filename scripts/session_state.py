@@ -115,6 +115,31 @@ def atomic_write_bytes(path: Path, payload: bytes) -> None:
             pass
 
 
+def _atomic_create_bytes(path: Path, payload: bytes) -> None:
+    """Publish complete bytes only when the destination does not already exist."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".create",
+        dir=path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # A hard link publishes the already-complete inode and fails atomically
+        # if another hook process created the immutable destination first.
+        os.link(temporary_path, path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def parse_nul_paths(payload: str) -> tuple[str, ...]:
     """Parse a NUL-delimited Git path list without interpreting path contents."""
 
@@ -253,13 +278,16 @@ def write_session_binding(
     if len(encoded) > MAX_SESSION_BINDING_BYTES:
         raise ValueError("session binding exceeds size bound")
     path = session_binding_path(safe_session_id, target_dir)
-    existing = read_session_binding(safe_session_id, state_dir=target_dir)
-    if existing is not None:
+    try:
+        _atomic_create_bytes(path, encoded)
+        return path
+    except FileExistsError:
+        existing = read_session_binding(safe_session_id, state_dir=target_dir)
+        if existing is None:
+            raise ValueError("existing immutable session binding is invalid") from None
         if existing != normalized:
             raise ValueError("immutable session binding mismatch")
         return path
-    atomic_write_bytes(path, encoded)
-    return path
 
 
 def append_hook_error(

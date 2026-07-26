@@ -555,6 +555,60 @@ class TestClaimVerification(unittest.TestCase):
         self.assertEqual(verified[0]["state"], "VERIFIED")
         self.assertEqual(refuted[0]["state"], "REFUTED")
 
+    def test_named_test_artifact_requires_matching_command_scope(self):
+        claims = curator.extract_claims(
+            ["5 tests in `tests/test_a.py` passed."]
+        )
+        wrong_scope = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="pytest -q tests/test_b.py",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+        right_scope = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="pytest -q tests/test_a.py",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+        directory_scope = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="python -m pytest -q tests",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(wrong_scope[0]["state"], "UNVERIFIED")
+        self.assertEqual(right_scope[0]["state"], "VERIFIED")
+        self.assertEqual(directory_scope[0]["state"], "VERIFIED")
+
     def test_latest_test_failure_cannot_be_hidden_by_earlier_green_run(self):
         claims = curator.extract_claims(["Tests passed."])
         results = curator.verify_claims(
