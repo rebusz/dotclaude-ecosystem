@@ -407,12 +407,22 @@ exclusion list above is about liveness, and being *unread* is not liveness - so 
 written, a verdict written in a repository the operator visits less often than the retention
 window would be swept up before its only delivery trigger ever fired. That is headline goal 2
 failing silently, and failing hardest in exactly the repositories where a forgotten session is
-most likely. **Resolved:** a verdict file carries a `consumed_at` stamp, set by whichever
-delivery path renders it first - the next `SessionStart` in that repository (S2) or `/curator`
-(S4). The reaper deletes a verdict only when it is consumed, or when it passes a hard outer
-bound that exists solely so nothing leaks forever. This is Finding 2.1's rule - age alone never
-authorises a delete - applied to a second file family rather than a new principle invented for
-one.
+most likely. **Resolved:** a verdict file carries a `consumed_at` stamp, and the reaper deletes a
+verdict only when it is consumed, or when it passes a hard outer bound that exists solely so
+nothing leaks forever. This is Finding 2.1's rule - age alone never authorises a delete -
+applied to a second file family rather than a new principle invented for one.
+
+> **Stage 3b correction (Codex C4).** The eng review let *either* delivery path stamp
+> `consumed_at`, "whichever renders it first". That conflates two different events.
+> `SessionStart` injecting a verdict puts it in **the model's** context; it is no evidence the
+> **operator** read anything, and the goal is that the operator "will meet it". Under the
+> original wording a verdict could be injected into a session the operator never looked at, be
+> stamped consumed, and be deleted unread - reintroducing the exact defect issue 1 was raised to
+> close, one layer further in. **Two stamps, two meanings:** `surfaced_at`, written when the
+> router injects it, which is telemetry and authorises nothing; and `consumed_at`, written only
+> by `/curator`, which the operator invokes deliberately. **Only `consumed_at` makes a verdict
+> reapable.** A verdict that is surfaced forever but never curated is bounded by the hard outer
+> bound and by nothing else, which is the correct conservative failure.
 
 **The reaper cannot rely on `SessionEnd`.** A killed session, an IDE crash, or a closed
 terminal never fires it - and on Windows that is the ordinary exit, which is precisely why
