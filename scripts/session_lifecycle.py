@@ -9,10 +9,11 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from session_state import (
     RepositoryRegistration,
@@ -34,6 +35,8 @@ SESSION_END_WORK_DEADLINE_S = 1.2
 VERDICT_VALUES = {"NO-OP", "ARCHIVE-OK", "HANDOFF", "CHECKPOINT", "UNKNOWN"}
 _MAX_PENDING_SCAN = 5000
 _MAX_PENDING_RESULTS = 400
+_VERDICT_LOCK_TIMEOUT_S = 0.2
+_VERDICT_LOCK_STALE_S = 5.0
 
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 _CLOSED_STATUSES = {"done", "closed", "complete", "completed", "resolved", "shipped"}
@@ -76,6 +79,67 @@ def _safe_session_id(value: object) -> str:
 
 def _verdict_path(session_id: str, state_dir: Path) -> Path:
     return state_dir / f"session_verdict_{_safe_session_id(session_id)}.json"
+
+
+@contextmanager
+def _verdict_lock(
+    session_id: str,
+    *,
+    state_dir: Path,
+    timeout_s: float = _VERDICT_LOCK_TIMEOUT_S,
+) -> Iterator[bool]:
+    """Serialize one verdict's read-modify-write cycle across hook processes."""
+
+    safe_session_id = _safe_session_id(session_id)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / f"session_verdict_lock_{safe_session_id}"
+    deadline = time.perf_counter() + max(0.001, timeout_s)
+    token = f"{os.getpid()}:{time.time_ns()}:{os.urandom(8).hex()}"
+    acquired = False
+    while not acquired:
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                stale = time.time() - path.stat().st_mtime > _VERDICT_LOCK_STALE_S
+                if stale:
+                    path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+            if time.perf_counter() >= deadline:
+                append_hook_error(
+                    "VERDICT_LOCK_TIMEOUT",
+                    safe_session_id,
+                    state_dir=state_dir,
+                )
+                yield False
+                return
+            time.sleep(0.005)
+        except OSError as exc:
+            append_hook_error(
+                "VERDICT_LOCK_FAILED",
+                type(exc).__name__,
+                state_dir=state_dir,
+            )
+            yield False
+            return
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(token)
+                handle.flush()
+                os.fsync(handle.fileno())
+            acquired = True
+    try:
+        yield True
+    finally:
+        try:
+            if path.read_text(encoding="utf-8") == token:
+                path.unlink()
+        except (FileNotFoundError, OSError, UnicodeError):
+            pass
 
 
 def read_verdict(path: Path) -> dict[str, Any] | None:
@@ -190,10 +254,22 @@ def surface_pending_verdict(
     if not pending:
         return None
     path, verdict = pending[0]
-    if not verdict.get("surfaced_at"):
-        verdict["surfaced_at"] = surfaced_at
-        write_verdict(verdict, state_dir=state_dir)
-    return read_verdict(path)
+    session_id = str(verdict["session_id"])
+    with _verdict_lock(session_id, state_dir=state_dir) as acquired:
+        if not acquired:
+            return read_verdict(path)
+        current = read_verdict(path)
+        if (
+            current is None
+            or current.get("repo") != repo
+            or current.get("session_id") == current_session_id
+            or current.get("consumed_at")
+        ):
+            return None
+        if not current.get("surfaced_at"):
+            current["surfaced_at"] = surfaced_at
+            write_verdict(current, state_dir=state_dir)
+        return read_verdict(path)
 
 
 def pending_verdict(
@@ -229,9 +305,12 @@ def consume_pending_verdict(
         )
         if not pending:
             return None
-        _, verdict = pending[0]
+        path, verdict = pending[0]
+        target_session_id = str(verdict["session_id"])
     else:
-        verdict = read_verdict(_verdict_path(expected_session_id, state_dir))
+        target_session_id = _safe_session_id(expected_session_id)
+        path = _verdict_path(target_session_id, state_dir)
+        verdict = read_verdict(path)
         if (
             verdict is None
             or verdict.get("repo") != repo
@@ -243,9 +322,24 @@ def consume_pending_verdict(
             )
         ):
             return None
-    verdict["consumed_at"] = consumed_at
-    write_verdict(verdict, state_dir=state_dir)
-    return verdict
+    with _verdict_lock(target_session_id, state_dir=state_dir) as acquired:
+        if not acquired:
+            return None
+        current = read_verdict(path)
+        if (
+            current is None
+            or current.get("repo") != repo
+            or current.get("session_id") == current_session_id
+            or current.get("consumed_at")
+            or (
+                expected_created_at is not None
+                and current.get("created_at") != expected_created_at
+            )
+        ):
+            return None
+        current["consumed_at"] = consumed_at
+        write_verdict(current, state_dir=state_dir)
+        return current
 
 
 def _open_items(plan: dict[str, Any]) -> tuple[str, ...]:

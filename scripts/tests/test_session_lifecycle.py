@@ -8,7 +8,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -475,6 +478,78 @@ class TestLifecyclePersistence(unittest.TestCase):
             )
             assert consumed is not None
             self.assertEqual(consumed["consumed_at"], "2026-07-25T19:00:00Z")
+
+    def test_surface_and_consume_serialize_without_losing_consumed_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle.write_verdict(
+                {
+                    "schema_version": lifecycle.VERDICT_SCHEMA,
+                    "session_id": "previous",
+                    "repo": "repo",
+                    "verdict": "HANDOFF",
+                    "created_at": "2026-07-25T17:00:00Z",
+                    "surfaced_at": None,
+                    "consumed_at": None,
+                },
+                state_dir=root,
+            )
+            original_write = lifecycle.write_verdict
+            active_writers = 0
+            max_active_writers = 0
+            counter_lock = threading.Lock()
+            start = threading.Barrier(2)
+
+            def delayed_write(
+                payload: dict[str, object],
+                *,
+                state_dir: Path,
+            ) -> Path:
+                nonlocal active_writers, max_active_writers
+                with counter_lock:
+                    active_writers += 1
+                    max_active_writers = max(max_active_writers, active_writers)
+                try:
+                    time.sleep(0.02)
+                    return original_write(payload, state_dir=state_dir)
+                finally:
+                    with counter_lock:
+                        active_writers -= 1
+
+            def surface() -> dict[str, object] | None:
+                start.wait()
+                return lifecycle.surface_pending_verdict(
+                    repo="repo",
+                    current_session_id="current",
+                    state_dir=root,
+                    surfaced_at="2026-07-25T18:00:00Z",
+                )
+
+            def consume() -> dict[str, object] | None:
+                start.wait()
+                return lifecycle.consume_pending_verdict(
+                    repo="repo",
+                    current_session_id="current",
+                    state_dir=root,
+                    consumed_at="2026-07-25T19:00:00Z",
+                    expected_session_id="previous",
+                    expected_created_at="2026-07-25T17:00:00Z",
+                )
+
+            with (
+                mock.patch.object(lifecycle, "write_verdict", side_effect=delayed_write),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                futures = [pool.submit(surface), pool.submit(consume)]
+                for future in futures:
+                    future.result(timeout=2)
+
+            verdict = lifecycle.read_verdict(
+                root / "session_verdict_previous.json"
+            )
+            assert verdict is not None
+            self.assertEqual(max_active_writers, 1)
+            self.assertEqual(verdict["consumed_at"], "2026-07-25T19:00:00Z")
 
             self.assertIsNone(
                 lifecycle.surface_pending_verdict(

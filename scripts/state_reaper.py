@@ -22,6 +22,7 @@ OWNED_PREFIXES = (
     "session_plan_",
     "session_binding_",
     "session_verdict_",
+    "session_verdict_lock_",
 )
 
 
@@ -34,6 +35,8 @@ def _session_id(name: str) -> str | None:
         return name.removeprefix("session_binding_").removesuffix(".json") or None
     if name.startswith("session_verdict_") and name.endswith(".json"):
         return name.removeprefix("session_verdict_").removesuffix(".json") or None
+    if name.startswith("session_verdict_lock_"):
+        return name.removeprefix("session_verdict_lock_") or None
     return None
 
 
@@ -170,10 +173,17 @@ def reap_state(
             continue
         modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
         delete = (
-            path.name.startswith(("turn_counter_", "session_plan_", "session_binding_"))
+            path.name.startswith(
+                (
+                    "turn_counter_",
+                    "session_plan_",
+                    "session_binding_",
+                    "session_verdict_lock_",
+                )
+            )
             and modified < retention_cutoff
         )
-        if path.name.startswith("session_verdict_"):
+        if path.name.startswith("session_verdict_") and path.name.endswith(".json"):
             delete = _should_delete_verdict(
                 path,
                 modified=modified,
