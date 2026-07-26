@@ -596,10 +596,29 @@ breaches its budget is not shipped until it fits.
 once, at landing, and nothing re-checked it afterwards. A ceiling nobody enforces is
 documentation: the first later edit that adds one more useful fact to the router regrows the
 injection permanently, on every session in every repository, with no test going red. That is
-precisely the regression this plan exists to prevent, so the character ceilings and the wall-time
-budgets are unit-test assertions on the router's own return value - no clock dependence for the
-character counts, no I/O, no flake surface. Raising a ceiling stays possible and becomes a
-deliberate argument rather than a silent drift.
+precisely the regression this plan exists to prevent.
+
+Two kinds of assertion, because they have different flake profiles (**Stage 3b, Codex C6** - the
+eng review promised both and then described only one, and its task T6 verified only characters):
+
+- **Character ceilings:** asserted on the router's own returned string. Pure function, no clock,
+  no I/O, no flake surface. These are hard failures.
+- **Wall time:** asserted too, per the operator's decision, but as a **generous ceiling** rather
+  than a tight p95 - a loaded Windows box running several agents cannot support a tight timing
+  assertion without flaking. It catches an order-of-magnitude regression, which is the failure
+  that matters, and does not pretend to catch a 20% drift. The precise p95 stays a recorded
+  measurement from S2.
+
+Raising a ceiling stays possible and becomes a deliberate argument rather than a silent drift.
+
+**The 2-second hook ceiling is self-imposed** (Stage 3b, **Codex C16 refuted**). Codex read the
+plan's `<= 2 seconds each` against a claimed 1.5-second SessionEnd default and called it a
+conflict. **There is no such default.** The hooks reference gives command hooks a **600-second**
+default, lowered only for `UserPromptSubmit` (30 s) and `MessageDisplay` (10 s); `SessionEnd`
+carries no special timeout and is not mentioned. Nothing in the harness will kill a 2-second
+lifecycle hook. The 2 s ceiling and the sub-second startup target are therefore **ours**, chosen
+for the operator's experience, not constraints imposed on us - which is the right reason to keep
+them and the wrong reason to panic about them.
 
 **Why the 400 ms p95 was withdrawn** (eng review, issue 6). CEO Finding 7 set 400 ms as the
 registered-case target, and the fact list in S2 was specified separately and never priced
