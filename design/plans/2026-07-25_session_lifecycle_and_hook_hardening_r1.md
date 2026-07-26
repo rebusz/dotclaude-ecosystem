@@ -1569,15 +1569,17 @@ packet was frozen:
   start SHA, transcript, branch, and dirty baseline through atomic create-if-absent; malformed
   or concurrent bindings can never be overwritten;
 - Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
-  filenames; incomplete collection cannot produce `REFUTED`;
+  filenames; traversal-like claim paths are rejected and incomplete collection cannot produce
+  `REFUTED`;
 - the curator's model-facing window is assistant text only, while test exit evidence requires
   a correlated structured tool result and a recognised test runner; a compound change claim
   verifies only when every named artifact is matched, mixed change/test claims must satisfy
   both evidence classes, every other compound claim must satisfy every detected evidence
-  class, named test artifacts must match the executed test scope, and shell-masked test
-  invocations are rejected;
+  class, named test artifacts must match their full executed test scope without basename-only
+  collisions, and shell-masked test invocations are rejected;
 - the reaper checks its deadline while enumerating, protects sessions with a fresh bound
-  transcript, and includes binding and stale lock files in its owned bounded state;
+  transcript, includes binding and stale lock files in its owned bounded state, and still
+  enforces the 90-day verdict hard bound for a live session;
 - verdict surfacing and consumption serialize their read-modify-write cycles so a stale
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
 - a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
@@ -1587,8 +1589,8 @@ packet was frozen:
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
-Implementation validation after the external-review repairs: focused binding/curator suites
-`54 passed, 4 subtests passed`; full `scripts/tests` suite `290 passed, 6 subtests passed`;
+Implementation validation after the external-review repairs: focused curator/reaper suites
+`48 passed, 4 subtests passed`; full `scripts/tests` suite `293 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 

@@ -414,6 +414,22 @@ class TestClaimVerification(unittest.TestCase):
         self.assertIn("One or more", partial[0]["reason"])
         self.assertEqual(complete[0]["state"], "VERIFIED")
 
+    def test_traversal_artifact_cannot_normalize_into_a_changed_repo_path(self):
+        claims = curator.extract_claims(
+            ["Implemented `../scripts/new.py`."]
+        )
+        results = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths={"scripts/new.py"},
+            command_evidence=(),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(results[0]["state"], "REFUTED")
+
     def test_mixed_change_and_test_claim_requires_change_evidence_too(self):
         claims = curator.extract_claims(
             ["Updated `scripts/missing.py`; 5 tests passed."]
@@ -608,6 +624,28 @@ class TestClaimVerification(unittest.TestCase):
         self.assertEqual(wrong_scope[0]["state"], "UNVERIFIED")
         self.assertEqual(right_scope[0]["state"], "VERIFIED")
         self.assertEqual(directory_scope[0]["state"], "VERIFIED")
+
+    def test_named_test_path_does_not_match_same_basename_in_another_directory(self):
+        claims = curator.extract_claims(
+            ["5 tests in `tests/test_same.py` passed."]
+        )
+        results = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="pytest -q other/test_same.py",
+                    exit_code=0,
+                    output="5 passed",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(results[0]["state"], "UNVERIFIED")
 
     def test_latest_test_failure_cannot_be_hidden_by_earlier_green_run(self):
         claims = curator.extract_claims(["Tests passed."])

@@ -15,7 +15,7 @@ import tempfile
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Iterable
 
 from session_lifecycle import consume_pending_verdict, pending_verdict
@@ -395,7 +395,11 @@ def _match_artifacts(
     changed_paths: set[str],
     repo_root: Path,
 ) -> tuple[set[str], bool, bool]:
-    normalized_changes = {item.replace("\\", "/").lstrip("./") for item in changed_paths}
+    normalized_changes = {
+        normalized
+        for item in changed_paths
+        if (normalized := _normalize_relative_artifact(item)) is not None
+    }
     matches: set[str] = set()
     ambiguous = False
     artifact_values = list(dict.fromkeys(artifacts))
@@ -410,7 +414,10 @@ def _match_artifacts(
                 ).as_posix()
             except (OSError, ValueError):
                 continue
-        value = value.lstrip("./")
+        normalized_value = _normalize_relative_artifact(value)
+        if normalized_value is None:
+            continue
+        value = normalized_value
         if value in normalized_changes:
             matches.add(value)
             matched_artifacts += 1
@@ -611,6 +618,7 @@ def verify_claims(
                 and not _test_command_covers_artifacts(
                     latest.command,
                     test_scope_artifacts,
+                    repo_root=repo_root,
                 )
             ):
                 results.append(
@@ -767,9 +775,21 @@ def _is_test_command(command: str) -> bool:
     return any(re.search(pattern, normalized, re.I) for pattern in patterns)
 
 
+def _normalize_relative_artifact(value: str) -> str | None:
+    normalized = value.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    path = PurePosixPath(normalized)
+    if not normalized or path.is_absolute() or ".." in path.parts:
+        return None
+    return path.as_posix()
+
+
 def _test_command_covers_artifacts(
     command: str,
     artifacts: Iterable[str],
+    *,
+    repo_root: Path,
 ) -> bool:
     try:
         tokens = [
@@ -798,23 +818,37 @@ def _test_command_covers_artifacts(
             continue
         if token.startswith("-"):
             continue
-        normalized = token.split("::", 1)[0].rstrip("/")
+        raw_target = token.split("::", 1)[0].rstrip("/")
         if (
-            "/" in normalized
-            or re.search(r"\.(?:py|js|jsx|ts|tsx|rs|go|cs)$", normalized, re.I)
-            or PurePath(normalized).name.lower() in {"test", "tests"}
+            "/" in raw_target
+            or re.search(r"\.(?:py|js|jsx|ts|tsx|rs|go|cs)$", raw_target, re.I)
+            or PurePath(raw_target).name.lower() in {"test", "tests"}
         ):
-            targets.append(normalized.lstrip("./"))
+            candidate = Path(raw_target)
+            if candidate.is_absolute():
+                try:
+                    target = candidate.resolve(strict=False).relative_to(
+                        repo_root.resolve(strict=False)
+                    ).as_posix()
+                except (OSError, ValueError):
+                    continue
+            else:
+                target = _normalize_relative_artifact(raw_target)
+                if target is None:
+                    continue
+            targets.append(target)
     if not targets:
         return False
     for raw in artifacts:
-        artifact = re.sub(r":\d+(?::\d+)?$", "", raw.strip()).replace("\\", "/")
-        artifact = artifact.lstrip("./")
-        basename = PurePath(artifact).name
+        raw_artifact = re.sub(r":\d+(?::\d+)?$", "", raw.strip())
+        artifact = _normalize_relative_artifact(raw_artifact)
+        if artifact is None:
+            return False
+        basename_only = "/" not in artifact
         if not any(
             artifact == target
             or artifact.startswith(target.rstrip("/") + "/")
-            or basename == PurePath(target).name
+            or (basename_only and artifact == PurePath(target).name)
             for target in targets
         ):
             return False

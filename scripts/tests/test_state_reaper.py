@@ -247,6 +247,52 @@ class TestStateReaper(unittest.TestCase):
             self.assertFalse(plan.exists())
             self.assertFalse(binding.exists())
 
+    def test_live_session_cannot_extend_verdict_hard_outer_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transcript = root / "live.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            os.utime(transcript, (NOW.timestamp(), NOW.timestamp()))
+            plan = root / "session_plan_live.json"
+            plan.write_text("{}", encoding="utf-8")
+            state.write_session_binding(
+                "live",
+                {
+                    "schema_version": state.SESSION_BINDING_SCHEMA,
+                    "session_id": "live",
+                    "repo": "repo",
+                    "worktree_root": str(root.resolve()),
+                    "start_sha": "a" * 40,
+                    "transcript_path": str(transcript.resolve()),
+                    "start_branch": "main",
+                    "start_dirty_paths": [],
+                    "created_at": "2026-07-01T00:00:00Z",
+                },
+                state_dir=root,
+            )
+            binding = root / "session_binding_live.json"
+            verdict = root / "session_verdict_live.json"
+            _verdict(
+                verdict,
+                session_id="live",
+                created_days_ago=reaper.VERDICT_OUTER_BOUND_DAYS + 1,
+            )
+            _old(plan, days=30)
+            _old(binding, days=30)
+
+            reaper.reap_state(
+                state_dir=root,
+                current_session_id="current",
+                live_session_ids=set(),
+                now=NOW,
+                max_files=200,
+                time_budget_s=1.0,
+            )
+
+            self.assertTrue(plan.exists())
+            self.assertTrue(binding.exists())
+            self.assertFalse(verdict.exists())
+
     def test_scan_loop_honors_time_budget_before_enumerating_backlog(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

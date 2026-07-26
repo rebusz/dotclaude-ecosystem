@@ -59,20 +59,43 @@ def _should_delete_verdict(
     outer_cutoff: datetime,
 ) -> bool:
     verdict = _read_verdict(path)
+    created = _verdict_created_at(verdict, modified=modified)
+    if created < outer_cutoff:
+        return True
+    return (
+        verdict is not None
+        and bool(verdict.get("consumed_at"))
+        and modified < retention_cutoff
+    )
+
+
+def _verdict_created_at(
+    verdict: dict[str, Any] | None,
+    *,
+    modified: datetime,
+) -> datetime:
     if verdict is None:
-        return modified < outer_cutoff
-    created = modified
+        return modified
     raw_created = verdict.get("created_at")
     if isinstance(raw_created, str):
         try:
             created = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=UTC)
+            return created if created.tzinfo is not None else created.replace(tzinfo=UTC)
         except ValueError:
             pass
-    if created < outer_cutoff:
-        return True
-    return bool(verdict.get("consumed_at")) and modified < retention_cutoff
+    return modified
+
+
+def _verdict_past_outer_bound(
+    path: Path,
+    *,
+    modified: datetime,
+    outer_cutoff: datetime,
+) -> bool:
+    return _verdict_created_at(
+        _read_verdict(path),
+        modified=modified,
+    ) < outer_cutoff
 
 
 def reap_state(
@@ -168,10 +191,16 @@ def reap_state(
         session_id = _session_id(path.name)
         if session_id is None:
             continue
-        if session_id in live:
+        modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
+        is_verdict = path.name.startswith("session_verdict_") and path.name.endswith(".json")
+        verdict_hard_expired = is_verdict and _verdict_past_outer_bound(
+            path,
+            modified=modified,
+            outer_cutoff=outer_cutoff,
+        )
+        if session_id in live and not verdict_hard_expired:
             summary["skipped_live"] = int(summary["skipped_live"]) + 1
             continue
-        modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
         delete = (
             path.name.startswith(
                 (
@@ -183,7 +212,7 @@ def reap_state(
             )
             and modified < retention_cutoff
         )
-        if path.name.startswith("session_verdict_") and path.name.endswith(".json"):
+        if is_verdict:
             delete = _should_delete_verdict(
                 path,
                 modified=modified,
