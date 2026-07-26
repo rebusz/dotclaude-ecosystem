@@ -1115,8 +1115,8 @@ class TestCuratorReport(unittest.TestCase):
 
             self.assertTrue(report["binding_evidence"])
             self.assertEqual(report["claims"][0]["state"], "VERIFIED")
-            truth.assert_called_once_with(root)
-            changed.assert_called_once_with(root, "a" * 40, [])
+            truth.assert_called_once_with(root.resolve())
+            changed.assert_called_once_with(root.resolve(), "a" * 40, [])
 
     def test_invalid_session_id_is_rejected_before_default_handoff_path(self):
         with tempfile.TemporaryDirectory() as tmp:

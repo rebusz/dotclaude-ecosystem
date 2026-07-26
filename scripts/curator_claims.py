@@ -1038,6 +1038,10 @@ def prepare_curator_report(
     requested_root = repo_root.resolve(strict=False)
     observed_root = current_git_root(requested_root)
     try:
+        observed_root = observed_root.resolve(strict=False) if observed_root is not None else None
+    except (OSError, RuntimeError):
+        observed_root = None
+    try:
         bound_root = (
             Path(binding["worktree_root"]).resolve(strict=False)
             if binding is not None

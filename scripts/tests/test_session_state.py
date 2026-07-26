@@ -382,7 +382,10 @@ class TestSessionState(unittest.TestCase):
             original = _plan(goal="original")
             state.write_session_plan("session-a", original, state_dir=state_dir)
 
-            with mock.patch.object(state.os, "replace", side_effect=PermissionError("held")):
+            with (
+                mock.patch.object(state.os, "replace", side_effect=PermissionError("held")),
+                mock.patch.object(state.time, "sleep"),
+            ):
                 with self.assertRaises(PermissionError):
                     state.write_session_plan(
                         "session-a",
@@ -391,6 +394,60 @@ class TestSessionState(unittest.TestCase):
                     )
 
             self.assertEqual(state.read_session_plan("session-a", state_dir=state_dir), original)
+            self.assertFalse(list(state_dir.glob("*.tmp")))
+
+    def test_transient_replace_contention_is_retried_without_partial_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            original_replace = state.os.replace
+            attempts = 0
+
+            def replace_after_contention(source: Path, destination: Path) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 4:
+                    transient = PermissionError("temporarily held")
+                    transient.winerror = 5
+                    raise transient
+                original_replace(source, destination)
+
+            with (
+                mock.patch.object(state.os, "replace", side_effect=replace_after_contention),
+                mock.patch.object(state.time, "sleep") as sleep,
+            ):
+                state.write_session_plan(
+                    "session-a",
+                    _plan(goal="replacement"),
+                    state_dir=state_dir,
+                )
+
+            self.assertEqual(attempts, 4)
+            self.assertEqual(sleep.call_count, 3)
+            self.assertEqual(
+                state.read_session_plan("session-a", state_dir=state_dir),
+                _plan(goal="replacement"),
+            )
+            self.assertFalse(list(state_dir.glob("*.tmp")))
+
+    def test_non_transient_replace_permission_error_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            failure = PermissionError("invalid parameter")
+            failure.winerror = 87
+
+            with (
+                mock.patch.object(state.os, "replace", side_effect=failure) as replace,
+                mock.patch.object(state.time, "sleep") as sleep,
+            ):
+                with self.assertRaises(PermissionError):
+                    state.write_session_plan(
+                        "session-a",
+                        _plan(goal="replacement"),
+                        state_dir=state_dir,
+                    )
+
+            replace.assert_called_once()
+            sleep.assert_not_called()
             self.assertFalse(list(state_dir.glob("*.tmp")))
 
     def test_concurrent_writers_never_leave_partial_json(self):

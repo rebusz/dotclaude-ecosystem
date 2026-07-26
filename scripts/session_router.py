@@ -148,6 +148,7 @@ def _safe_registered_path(
 
 
 def _active_plans(registration: RepositoryRegistration) -> list[str]:
+    registered_root = registration.worktree_root.resolve(strict=False)
     candidates: list[Path] = []
     for relative in registration.plan_paths:
         folder = _safe_registered_path(registration, relative)
@@ -174,8 +175,8 @@ def _active_plans(registration: RepositoryRegistration) -> list[str]:
             continue
         title = _clean_fact(raw.get("title") or path.stem.replace("_", " "), 90)
         try:
-            relative = path.relative_to(registration.worktree_root).as_posix()
-        except ValueError:
+            relative = path.relative_to(registered_root).as_posix()
+        except (OSError, RuntimeError, ValueError):
             continue
         active.append(f"{status}: {title} ({relative})")
         if len(active) >= _MAX_FACT_ITEMS:
@@ -207,6 +208,7 @@ def _open_ideas(registration: RepositoryRegistration) -> list[str]:
 
 
 def _recent_handoff(registration: RepositoryRegistration) -> str:
+    registered_root = registration.worktree_root.resolve(strict=False)
     folder = _safe_registered_path(registration, Path("design") / "handoffs")
     if folder is None:
         return ""
@@ -219,8 +221,8 @@ def _recent_handoff(registration: RepositoryRegistration) -> str:
         if not candidates:
             return ""
         newest = max(candidates, key=lambda path: path.stat().st_mtime)
-        return newest.relative_to(registration.worktree_root).as_posix()
-    except (OSError, ValueError):
+        return newest.relative_to(registered_root).as_posix()
+    except (OSError, RuntimeError, ValueError):
         return ""
 
 

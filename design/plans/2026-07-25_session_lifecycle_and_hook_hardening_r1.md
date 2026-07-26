@@ -1635,12 +1635,19 @@ packet was frozen:
 - verdict values are an exact enum including `UNKNOWN`; pending-verdict discovery completes the
   directory scan while retaining only the newest bounded result heap, so the newest
   unconsumed verdict remains discoverable beyond both 400 results and the former 5,000-entry
-  prefix.
+  prefix;
+- Windows path comparisons canonicalize both sides before provenance and repository-relative
+  checks, so an 8.3 alias such as `RUNNER~1` cannot hide the active plan/handoff or invalidate
+  a correct binding; atomic replacement retries only bounded transient access/sharing
+  failures long enough to tolerate concurrent writers and filesystem scanners without ever
+  exposing partial JSON.
 
 Implementation validation after the external-review repairs: curator suite
-`43 passed, 4 subtests passed`; full `scripts/tests` suite `304 passed, 6 subtests passed`;
-scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
-deliberately untouched pending C11 and C14.
+`43 passed, 4 subtests passed`; Windows/Python 3.12 workflow-equivalent suite
+`115 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
+runs; full `scripts/tests` suite `306 passed, 6 subtests passed`; scoped Ruff, `compileall`,
+and `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending
+C11 and C14.
 
 ## GSTACK REVIEW REPORT
 

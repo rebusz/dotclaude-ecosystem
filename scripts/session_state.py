@@ -29,6 +29,11 @@ MAX_REGISTRY_BYTES = 128 * 1024
 MAX_ERROR_LOG_BYTES = 128 * 1024
 MAX_ERROR_LINE_CHARS = 1000
 
+_ATOMIC_REPLACE_ATTEMPTS = 12
+_ATOMIC_REPLACE_INITIAL_BACKOFF_S = 0.005
+_ATOMIC_REPLACE_MAX_BACKOFF_S = 0.05
+_TRANSIENT_WINDOWS_REPLACE_ERRORS = {5, 32}
+
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUIRED_PLAN_TYPES: dict[str, type | tuple[type, ...]] = {
     "session_id": str,
@@ -98,16 +103,26 @@ def atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        for attempt in range(5):
+        for attempt in range(_ATOMIC_REPLACE_ATTEMPTS):
             try:
                 os.replace(temporary_path, path)
                 break
-            except PermissionError:
-                if attempt == 4:
+            except PermissionError as exc:
+                winerror = getattr(exc, "winerror", None)
+                if (
+                    attempt == _ATOMIC_REPLACE_ATTEMPTS - 1
+                    or winerror not in _TRANSIENT_WINDOWS_REPLACE_ERRORS
+                ):
                     raise
-                # Windows can briefly hold the destination while another
-                # reader or writer closes it. Keep the retry bounded.
-                time.sleep(0.005 * (attempt + 1))
+                # Windows can briefly hold either path while another writer or
+                # a filesystem scanner closes it. Preserve atomic replacement,
+                # but keep the exceptional-path delay bounded below the hook's
+                # generous wall-time ceiling.
+                delay = min(
+                    _ATOMIC_REPLACE_INITIAL_BACKOFF_S * (2**attempt),
+                    _ATOMIC_REPLACE_MAX_BACKOFF_S,
+                )
+                time.sleep(delay)
     finally:
         try:
             temporary_path.unlink()
