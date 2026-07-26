@@ -63,8 +63,9 @@ read those pairs together, and where they conflict, Stage 3b wins.
 
 The five things most likely to be built wrong, all of which you caught:
 
-- `fork` creates a fresh scratch file. It cannot read the parent's - no parent session id
-  exists. Never guess by recency.
+- A CLI fork arrives as `source: resume` with a new session ID and creates a fresh scratch
+  file. It cannot read the parent's because no parent session ID exists. Never guess by
+  recency.
 - `surfaced_at` and `consumed_at` are different events. Only `/curator` writes `consumed_at`,
   and only `consumed_at` makes a verdict reapable.
 - The verdict is attributed to the session against `start_sha`. An empty attributable set is
