@@ -449,6 +449,15 @@ with concurrent sessions that resolves to another session's transcript, and Find
 established that a transcript can hold pasted credentials and environment dumps. A missing or
 dangling path yields `UNVERIFIED` claims and a line in `hook_errors.log`.
 
+**The transcript lags, and the curator must say so** (Stage 3b, Codex C8, verified). The hooks
+reference states the file *"is written asynchronously and may lag the in-memory conversation, so
+it may not yet include the current turn's most recent messages"*. A claim-checker that presents
+its extraction as complete while silently missing the newest turns is exactly the confident
+misinformation `/curator` exists to prevent - and the newest turns are where "I fixed it" lives.
+**Resolved:** `/curator` reports the last message timestamp it actually saw, and never claims
+completeness over a window it cannot prove it read. Claims from a turn the transcript has not
+yet caught up with are absent, not `VERIFIED`.
+
 Redaction walks the **parsed structure**, not lines. A session transcript is nested JSONL -
 message objects containing content arrays containing tool-result blocks - and flat-string
 regexes would miss a secret nested one level down. The patterns come from
