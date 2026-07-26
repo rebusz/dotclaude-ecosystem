@@ -6,17 +6,21 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from session_state import append_hook_error, read_session_binding
+from session_state import append_hook_error, atomic_write_bytes, read_session_binding
 
 
 RETENTION_DAYS = 7
 VERDICT_OUTER_BOUND_DAYS = 90
 MAX_VERDICT_BYTES = 64 * 1024
 MAX_SCAN_FILES = 5000
+MAX_CURSOR_BYTES = 1024
+SCAN_CURSOR_SCHEMA = "session.reaper.cursor.v1"
+SCAN_CURSOR_NAME = ".session_reaper_cursor.json"
 OWNED_PREFIXES = (
     "turn_counter_",
     "session_plan_",
@@ -24,6 +28,24 @@ OWNED_PREFIXES = (
     "session_verdict_",
     "session_verdict_lock_",
 )
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    priority_timestamp: float
+    name: str
+    modified_timestamp: float
+    path: Path
+
+
+@dataclass(frozen=True)
+class _NewestFirst:
+    candidate: _Candidate
+
+    def __lt__(self, other: _NewestFirst) -> bool:
+        mine = (self.candidate.priority_timestamp, self.candidate.name)
+        theirs = (other.candidate.priority_timestamp, other.candidate.name)
+        return mine > theirs
 
 
 def _session_id(name: str) -> str | None:
@@ -117,6 +139,120 @@ def _binding_transcript_is_fresh(
     return transcript_modified >= retention_cutoff
 
 
+def _candidate_priority(path: Path, *, modified_timestamp: float) -> float:
+    if path.name.startswith("session_verdict_") and path.name.endswith(".json"):
+        modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
+        return _verdict_created_at(
+            _read_verdict(path),
+            modified=modified,
+        ).timestamp()
+    return modified_timestamp
+
+
+def _oldest_candidates(
+    state_dir: Path,
+    *,
+    limit: int,
+) -> tuple[list[_Candidate], bool]:
+    """Return the globally oldest bounded candidates from a complete name scan."""
+
+    import heapq
+
+    limit = max(1, limit)
+    heap: list[_NewestFirst] = []
+    owned_count = 0
+    with os.scandir(state_dir) as iterator:
+        for entry in iterator:
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                continue
+            if not entry.name.startswith(OWNED_PREFIXES):
+                continue
+            try:
+                modified_timestamp = entry.stat(follow_symlinks=False).st_mtime
+            except FileNotFoundError:
+                continue
+            path = Path(entry.path)
+            candidate = _Candidate(
+                priority_timestamp=_candidate_priority(
+                    path,
+                    modified_timestamp=modified_timestamp,
+                ),
+                name=entry.name,
+                modified_timestamp=modified_timestamp,
+                path=path,
+            )
+            owned_count += 1
+            item = _NewestFirst(candidate)
+            if len(heap) < limit:
+                heapq.heappush(heap, item)
+                continue
+            newest_retained = heap[0].candidate
+            if (candidate.priority_timestamp, candidate.name) < (
+                newest_retained.priority_timestamp,
+                newest_retained.name,
+            ):
+                heapq.heapreplace(heap, item)
+    candidates = sorted(
+        (item.candidate for item in heap),
+        key=lambda item: (item.priority_timestamp, item.name),
+    )
+    return candidates, owned_count > limit
+
+
+def _scan_cursor_path(state_dir: Path) -> Path:
+    return state_dir / SCAN_CURSOR_NAME
+
+
+def _read_scan_cursor(state_dir: Path) -> str | None:
+    path = _scan_cursor_path(state_dir)
+    try:
+        if path.is_symlink():
+            return None
+        raw = path.read_bytes()
+        if len(raw) > MAX_CURSOR_BYTES:
+            return None
+        value = json.loads(raw)
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != SCAN_CURSOR_SCHEMA
+        or not isinstance(value.get("after_name"), str)
+    ):
+        return None
+    return value["after_name"]
+
+
+def _write_scan_cursor(state_dir: Path, after_name: str) -> None:
+    payload = (
+        json.dumps(
+            {
+                "schema_version": SCAN_CURSOR_SCHEMA,
+                "after_name": after_name,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(payload) > MAX_CURSOR_BYTES:
+        raise ValueError("reaper cursor exceeds size bound")
+    atomic_write_bytes(_scan_cursor_path(state_dir), payload)
+
+
+def _rotate_after_cursor(
+    candidates: list[_Candidate],
+    after_name: str | None,
+) -> list[_Candidate]:
+    if not candidates or after_name is None:
+        return candidates
+    for index, candidate in enumerate(candidates):
+        if candidate.name == after_name:
+            split = index + 1
+            return candidates[split:] + candidates[:split]
+    return candidates
+
+
 def reap_state(
     *,
     state_dir: Path,
@@ -128,7 +264,12 @@ def reap_state(
     max_files: int = 200,
     time_budget_s: float = 0.15,
 ) -> dict[str, int | bool]:
-    """Delete only old owned state, respecting liveness and verdict delivery."""
+    """Delete only old owned state, respecting liveness and verdict delivery.
+
+    Candidate selection is a complete bounded-memory pass so directory order
+    cannot starve old files. ``time_budget_s`` bounds the subsequent evidence
+    and deletion phase; the caller separately bounds the full hook wall time.
+    """
 
     started = time.perf_counter()
     deadline = started + max(0.001, time_budget_s)
@@ -149,24 +290,12 @@ def reap_state(
     }
 
     try:
-        entries = []
-        with os.scandir(state_dir) as iterator:
-            for entry in iterator:
-                if time.perf_counter() >= deadline:
-                    summary["time_budget_hit"] = True
-                    break
-                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
-                    continue
-                if not entry.name.startswith(OWNED_PREFIXES):
-                    continue
-                try:
-                    entries.append((entry.stat(follow_symlinks=False).st_mtime, Path(entry.path)))
-                except FileNotFoundError:
-                    continue
-                if len(entries) >= MAX_SCAN_FILES:
-                    summary["file_limit_hit"] = True
-                    break
-        entries.sort(key=lambda item: item[0])
+        entries, candidate_limit_hit = _oldest_candidates(
+            state_dir,
+            limit=MAX_SCAN_FILES,
+        )
+        summary["file_limit_hit"] = candidate_limit_hit
+        entries = _rotate_after_cursor(entries, _read_scan_cursor(state_dir))
     except FileNotFoundError:
         return summary
     except OSError as exc:
@@ -175,14 +304,18 @@ def reap_state(
         return summary
 
     binding_liveness: dict[str, bool] = {}
-    for modified_timestamp, path in entries:
-        if time.perf_counter() >= deadline:
+    last_scanned_name: str | None = None
+    for candidate in entries:
+        if int(summary["scanned"]) > 0 and time.perf_counter() >= deadline:
             summary["time_budget_hit"] = True
             break
         if int(summary["deleted"]) >= max(0, max_files):
             summary["file_limit_hit"] = True
             break
         summary["scanned"] = int(summary["scanned"]) + 1
+        last_scanned_name = candidate.name
+        modified_timestamp = candidate.modified_timestamp
+        path = candidate.path
         session_id = _session_id(path.name)
         if session_id is None:
             continue
@@ -197,9 +330,6 @@ def reap_state(
                 binding_liveness[session_id] = is_fresh
             if is_fresh:
                 live.add(session_id)
-        if time.perf_counter() >= deadline:
-            summary["time_budget_hit"] = True
-            break
         modified = datetime.fromtimestamp(modified_timestamp, tz=UTC)
         is_verdict = path.name.startswith("session_verdict_") and path.name.endswith(".json")
         verdict_hard_expired = is_verdict and _verdict_past_outer_bound(
@@ -242,4 +372,10 @@ def reap_state(
                 f"{path.name}:{type(exc).__name__}",
                 state_dir=state_dir,
             )
+    if last_scanned_name is not None:
+        try:
+            _write_scan_cursor(state_dir, last_scanned_name)
+        except (OSError, ValueError) as exc:
+            summary["errors"] = int(summary["errors"]) + 1
+            append_hook_error("REAPER_CURSOR_WRITE_FAILED", type(exc).__name__, state_dir=state_dir)
     return summary

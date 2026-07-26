@@ -482,6 +482,16 @@ terminal never fires it - and on Windows that is the ordinary exit, which is pre
 exits cannot clean up after unclean ones. The reaper therefore runs from **both** `SessionEnd`
 and, bounded and throttled, from `SessionStart`.
 
+**A bounded prefix is not a bounded reaper.** Truncating the native `scandir` order restarts at
+the same directory prefix on every process invocation and can starve the unseen tail forever.
+The implementation instead completes a lightweight directory pass while retaining only the
+globally oldest bounded heap. Verdict priority uses its bounded `created_at` payload rather
+than mutable filesystem mtime, and a single atomic cursor capped at 1 KiB rotates processing
+past an old but protected candidate on the next invocation. The cursor is self-replacing
+singleton metadata rather than a per-session file family. The post-selection delete/evidence
+phase remains bounded by count and 150 ms; the complete operation remains inside the
+separately asserted 1.5-second full SessionStart ceiling.
+
 **Gate:** the 1,944-file backlog is cleared; a live session's files survive a concurrent
 reap; verdicts are correct across merged-clean, merged-dirty, and unmerged fixtures; a
 session killed without `SessionEnd` is still reaped on the next `SessionStart`; an unconsumed
@@ -649,9 +659,10 @@ The hooks are a permanent tax on every session, so budgets are acceptance criter
 - SessionStart, compact re-injection: <= 1,500 characters (the scratch file plus its
   `updated_at` stamp, so a stale plan reads as stale);
 - SessionStart, outside the registry: <= 120 characters; p95 wall time <= 150 ms;
-- SessionStart opportunistic reap: <= 200 files per invocation, <= 150 ms, **counted inside the
-  SessionStart budget, not beside it** (Stage 3b, Codex C2 - output is processed on process
-  exit, so nothing the hook does before exiting is off the hot path);
+- SessionStart opportunistic reap: complete oldest-candidate selection plus <= 200 deletions;
+  post-selection processing <= 150 ms and the complete operation is **counted inside the
+  1.5-second SessionStart budget, not beside it** (Stage 3b, Codex C2 - output is processed on
+  process exit, so nothing the hook does before exiting is off the hot path);
 - **curator claim extraction: <= 20,000 characters of redacted transcript window
   (the most recent turns), one model call per invocation, no retry on timeout.**
   This is the plan's only model call and therefore the only place a cost ceiling has to
@@ -735,7 +746,8 @@ built).
 
 1. Remove the two hook entries from `settings.json`. This is the kill switch, and it is
    sufficient on its own; every capability here is delivered through a hook.
-2. Delete `~/.claude/state/session_plan_*` and `session_binding_*`. Nothing else reads them.
+2. Delete `~/.claude/state/session_plan_*`, `session_binding_*`, `session_verdict_*`, and
+   `.session_reaper_cursor.json`. Nothing else reads them.
 3. Revert the merged commits to restore `plan_keyword_detector.py` and the footer.
 4. `/curator` is invoked explicitly and is inert when not called.
 
@@ -1598,10 +1610,13 @@ packet was frozen:
   class, named test artifacts must match their full executed test scope without basename-only
   collisions, shell-masked test invocations are rejected, and a test pass requires a positive
   executed-test count rather than a bare `OK`;
-- the reaper checks its deadline while enumerating, protects sessions with a fresh bound
-  transcript by checking each candidate's exact sibling binding even when scanning truncates,
-  includes binding and stale lock files in its owned bounded state, and still enforces the
-  90-day verdict hard bound for a live session;
+- the reaper completes a lightweight directory pass while retaining only the globally oldest
+  bounded candidate heap, prioritises verdicts by `created_at`, and persists a cursor through
+  that heap so time-budgeted runs cannot restart forever at the same protected file; it checks
+  each candidate's exact sibling binding, includes binding and stale lock files in its owned
+  state, and still enforces the 90-day verdict hard bound for a live session; on the current
+  1,947-file state directory the read-only candidate pass measured 205.618 ms cold and
+  11.669-11.795 ms warm, inside the 1.5-second full SessionStart ceiling;
 - verdict surfacing and consumption serialize their read-modify-write cycles so a stale
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
 - a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
@@ -1615,7 +1630,7 @@ packet was frozen:
   discoverable beyond 400 files.
 
 Implementation validation after the external-review repairs: curator suite
-`42 passed, 4 subtests passed`; full `scripts/tests` suite `299 passed, 6 subtests passed`;
+`42 passed, 4 subtests passed`; full `scripts/tests` suite `301 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 

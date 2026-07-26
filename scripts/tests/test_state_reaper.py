@@ -293,11 +293,13 @@ class TestStateReaper(unittest.TestCase):
             self.assertTrue(binding.exists())
             self.assertFalse(verdict.exists())
 
-    def test_scan_loop_honors_time_budget_before_enumerating_backlog(self):
+    def test_expired_budget_still_makes_one_candidate_of_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(50):
-                (root / f"turn_counter_dead-{index}").write_text("1", encoding="utf-8")
+                path = root / f"turn_counter_dead-{index}"
+                path.write_text("1", encoding="utf-8")
+                _old(path, days=30)
 
             with mock.patch.object(
                 reaper.time,
@@ -314,9 +316,104 @@ class TestStateReaper(unittest.TestCase):
                 )
 
             self.assertTrue(summary["time_budget_hit"])
-            self.assertEqual(summary["scanned"], 0)
+            self.assertEqual(summary["scanned"], 1)
+            self.assertEqual(summary["deleted"], 1)
 
-    def test_truncated_scan_checks_each_candidates_exact_binding_lease(self):
+    def test_global_oldest_selection_finds_hard_expired_verdict_beyond_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(5):
+                path = root / f"turn_counter_prefix-{index}"
+                path.write_text("1", encoding="utf-8")
+                _old(path, days=30)
+            verdict = root / "session_verdict_tail.json"
+            _verdict(
+                verdict,
+                session_id="tail",
+                created_days_ago=reaper.VERDICT_OUTER_BOUND_DAYS + 1,
+            )
+            os.utime(verdict, (NOW.timestamp(), NOW.timestamp()))
+
+            with mock.patch.object(reaper, "MAX_SCAN_FILES", 1):
+                summary = reaper.reap_state(
+                    state_dir=root,
+                    current_session_id="current",
+                    live_session_ids=set(),
+                    now=NOW,
+                    max_files=1,
+                    time_budget_s=1.0,
+                )
+
+            self.assertTrue(summary["file_limit_hit"])
+            self.assertFalse(verdict.exists())
+
+    def test_persisted_cursor_prevents_live_oldest_candidate_starvation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = root / "session_plan_live.json"
+            plan.write_text("{}", encoding="utf-8")
+            _old(plan, days=40)
+            eligible = root / "turn_counter_eligible"
+            eligible.write_text("1", encoding="utf-8")
+            _old(eligible, days=30)
+            transcript = root / "live.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            os.utime(transcript, (NOW.timestamp(), NOW.timestamp()))
+            state.write_session_binding(
+                "live",
+                {
+                    "schema_version": state.SESSION_BINDING_SCHEMA,
+                    "session_id": "live",
+                    "repo": "repo",
+                    "worktree_root": str(root.resolve()),
+                    "start_sha": "a" * 40,
+                    "transcript_path": str(transcript.resolve()),
+                    "start_branch": "main",
+                    "start_dirty_paths": [],
+                    "created_at": "2026-07-01T00:00:00Z",
+                },
+                state_dir=root,
+            )
+
+            with (
+                mock.patch.object(reaper, "MAX_SCAN_FILES", 2),
+                mock.patch.object(
+                    reaper.time,
+                    "perf_counter",
+                    side_effect=[0.0, 0.002],
+                ),
+            ):
+                first = reaper.reap_state(
+                    state_dir=root,
+                    current_session_id="current",
+                    live_session_ids=set(),
+                    now=NOW,
+                    max_files=1,
+                    time_budget_s=0.001,
+                )
+            with (
+                mock.patch.object(reaper, "MAX_SCAN_FILES", 2),
+                mock.patch.object(
+                    reaper.time,
+                    "perf_counter",
+                    side_effect=[0.0, 0.002],
+                ),
+            ):
+                second = reaper.reap_state(
+                    state_dir=root,
+                    current_session_id="current",
+                    live_session_ids=set(),
+                    now=NOW,
+                    max_files=1,
+                    time_budget_s=0.001,
+                )
+
+            self.assertEqual(first["deleted"], 0)
+            self.assertTrue(plan.exists())
+            self.assertEqual(second["deleted"], 1)
+            self.assertFalse(eligible.exists())
+
+    def test_bounded_candidate_heap_checks_each_candidates_exact_binding_lease(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             plan = root / "session_plan_live.json"
