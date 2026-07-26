@@ -1534,12 +1534,20 @@ From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them toge
   Perplexity web product the CDP lanes drive - Kimi K2.6 described its input as "compacted
   away", not truncated. The harness sends the whole plan; the browser-side consumer does not
   honour it. The exact downstream mechanism is not pinned down, only our harness ruled out.
-- **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED + **ENG CLEARED**. Plan cut to
-  core by operator decision and reconciled with its own record by the eng review; two hooks,
-  **five modules**, one skill. Seven eng-review issues resolved, zero critical gaps, twelve test
-  gaps closed. Cleared to implement. One caveat carried openly: no independent frontier
-  reviewer graded this review's own findings, for the reason recorded under
-  `## Eng Review Record - Stage 3`.
+- **CROSS-MODEL, Stage 3b:** the Codex frontier lane and the eng review disagree, and the lane
+  is mostly right. Five of the eng review's seven fixes were overturned or repaired, two of them
+  for building on hook behaviour nobody looked up - the third time that pattern has cost this
+  plan, and the first time the reviewer committed it. Every hook-mechanism claim on both sides
+  was then checked against the official reference before folding, which refuted one of the
+  lane's own findings (the 1.5-second `SessionEnd` budget does not exist). Cross-model
+  disagreement resolved by consulting the source, not by preferring a model.
+- **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED + ENG CLEARED + **STAGE 3b
+  FOLDED**. Plan cut to core by operator decision, reconciled with its own record by the eng
+  review, and corrected by an independent frontier lane that graded the review itself; two
+  hooks, **five modules**, one skill. Cleared to implement, with the mechanism claims verified
+  against the hooks reference rather than asserted.
+
+**UNRESOLVED DECISIONS:**
 
 **UNRESOLVED DECISIONS:**
 - ~~The Codex CLI frontier lane has not returned.~~ **Resolved 2026-07-25:** the lane hangs in
