@@ -298,11 +298,14 @@ install on a second machine is discoverable instead of looking identical to a fi
 The registry names repositories that get a full run and their plan/vision/idea paths. It
 covers `dotclaude-ecosystem`, which `plan_context_loader.py` cannot detect.
 
-**Measurement spike (eng review, issue 6).** S1 also produces the cost baseline the token
-budget depends on: the measured p95 wall time of a full `SessionStart` run on Windows, broken
-down into interpreter startup, each `git` subprocess, the plan-directory scan, and the file
-reads. The budget numbers in `## Token budget` are written **from** this measurement, not
-guessed ahead of it - see that section for why the original 400 ms could not hold.
+**Floor measurement (eng review issue 6, corrected in Stage 3b).** S1 measures only what S1
+builds: interpreter startup, one `git` spawn, and a registry plus scratch read. That is the
+**floor** every SessionStart pays before the router does anything.
+
+> **Stage 3b correction (Codex C1).** The eng review originally put the *full* `SessionStart`
+> measurement here. That is circular - S1 cannot measure a full run that S2 has not built yet.
+> The full-run measurement belongs to S2, against the real router. S1 owns the floor; S2 owns
+> the total and writes the budget from it.
 
 **Gate:** validation rejects malformed, truncated, and wrong-version files without raising;
 concurrent writers never produce a partial file; a registry miss resolves cleanly to the
