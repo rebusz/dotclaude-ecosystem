@@ -112,6 +112,22 @@ class TestVerdictRules(unittest.TestCase):
         result = lifecycle.decide_verdict(plan, evidence)
         self.assertEqual(result.verdict, "UNKNOWN")
 
+    def test_disappeared_preexisting_dirt_can_never_be_reported_as_no_op(self):
+        plan = _plan(start_dirty_paths=["operator-notes.md"])
+        evidence = _evidence(
+            commit_shas=(),
+            committed_paths=(),
+            dirty_paths=(),
+            transcript_complete=False,
+            head="a" * 40,
+        )
+
+        result = lifecycle.decide_verdict(plan, evidence)
+
+        self.assertEqual(result.verdict, "UNKNOWN")
+        self.assertIn("operator-notes.md", result.attributable_paths)
+        self.assertIn("disappeared", result.reason)
+
     def test_transcript_write_to_preexisting_dirty_path_is_attributable(self):
         plan = _plan(start_dirty_paths=["shared.py"])
         evidence = _evidence(

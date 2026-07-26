@@ -367,6 +367,7 @@ def decide_verdict(plan: dict[str, Any], evidence: SessionEvidence) -> VerdictDe
     current_dirty = set(evidence.dirty_paths)
     transcript_writes = set(evidence.transcript_written_paths)
     attributable_dirty = (current_dirty - baseline_dirty) | (current_dirty & transcript_writes)
+    disappeared_baseline = baseline_dirty - current_dirty
     attributable_paths = tuple(
         sorted(set(evidence.committed_paths) | attributable_dirty)
     )
@@ -377,6 +378,13 @@ def decide_verdict(plan: dict[str, Any], evidence: SessionEvidence) -> VerdictDe
             "UNKNOWN",
             "Git evidence was incomplete or timed out.",
             attributable_paths,
+            open_items,
+        )
+    if disappeared_baseline:
+        return VerdictDecision(
+            "UNKNOWN",
+            "Pre-existing dirty paths disappeared, so destructive session activity cannot be excluded.",
+            tuple(sorted(set(attributable_paths) | disappeared_baseline)),
             open_items,
         )
     no_work = not evidence.commit_shas and not attributable_paths

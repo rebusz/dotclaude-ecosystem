@@ -1577,13 +1577,15 @@ packet was frozen:
   transcript, and includes binding and stale lock files in its owned bounded state;
 - verdict surfacing and consumption serialize their read-modify-write cycles so a stale
   `surfaced_at` write cannot erase a concurrent `consumed_at`;
+- a pre-existing dirty path that disappears during the session forces `UNKNOWN`, preventing
+  destructive cleanup of operator work from being misreported as `NO-OP`;
 - trunk proof compares the cumulative session effect, including multi-commit work represented
   by a squash landing, instead of using per-commit `git cherry`;
 - verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
   discoverable beyond 400 files.
 
 Implementation validation after the external-review repairs: focused curator suite
-`33 passed, 4 subtests passed`; full `scripts/tests` suite `285 passed, 6 subtests passed`;
+`33 passed, 4 subtests passed`; full `scripts/tests` suite `286 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and
 `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending C11
 and C14.
