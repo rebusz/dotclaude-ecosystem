@@ -38,7 +38,7 @@ TRUTH_TIMEOUT_S = 20.0
 
 _CLAIM_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _COMMIT_RE = re.compile(r"\bcommit(?:ted)?(?:\s+as)?\s+([0-9a-fA-F]{7,40})\b", re.I)
-_PASS_COUNT_RE = re.compile(r"\b(\d+)\s+passed\b", re.I)
+_PASS_COUNT_RE = re.compile(r"\b(\d+)\s+(?:tests?\s+)?passed\b", re.I)
 _ARTIFACT_RE = re.compile(r"`([^`\r\n]{1,240})`")
 _CHANGE_RE = re.compile(
     r"\b(fixed|implemented|changed|added|removed|updated|created|deleted)\b",
@@ -296,6 +296,7 @@ def extract_claims(messages: Iterable[str]) -> list[dict[str, Any]]:
                 continue
             commit = _COMMIT_RE.search(text)
             pass_count = _PASS_COUNT_RE.search(text)
+            evidence_classes: list[str] = []
             if commit:
                 kind = "commit"
             elif _CI_RE.search(text):
@@ -306,6 +307,14 @@ def extract_claims(messages: Iterable[str]) -> list[dict[str, Any]]:
                 kind = "change"
             else:
                 continue
+            if commit:
+                evidence_classes.append("commit")
+            if _CI_RE.search(text):
+                evidence_classes.append("ci")
+            if _TEST_RE.search(text):
+                evidence_classes.append("test")
+            if _CHANGE_RE.search(text):
+                evidence_classes.append("change")
             artifacts = [
                 value.replace("\\", "/")
                 for value in _ARTIFACT_RE.findall(text)
@@ -315,6 +324,7 @@ def extract_claims(messages: Iterable[str]) -> list[dict[str, Any]]:
                 {
                     "text": text[:500],
                     "kind": kind,
+                    "evidence_classes": evidence_classes,
                     "requires_change_evidence": bool(_CHANGE_RE.search(text)),
                     "commit": commit.group(1) if commit else None,
                     "artifacts": artifacts[:10],
@@ -452,6 +462,48 @@ def verify_claims(
             )
             continue
         kind = claim["kind"]
+        evidence_classes = claim.get("evidence_classes")
+        if not isinstance(evidence_classes, list):
+            evidence_classes = [kind]
+        classes = tuple(
+            dict.fromkeys(
+                item
+                for item in evidence_classes
+                if item in {"commit", "ci", "test", "change"}
+            )
+        )
+        if len(classes) > 1:
+            facet_results: list[dict[str, Any]] = []
+            for evidence_class in classes:
+                facet = dict(claim)
+                facet["kind"] = evidence_class
+                facet["evidence_classes"] = [evidence_class]
+                facet["requires_change_evidence"] = evidence_class == "change"
+                facet_results.extend(
+                    verify_claims(
+                        [facet],
+                        repo_root=repo_root,
+                        start_sha=start_sha,
+                        changed_paths=changed_paths,
+                        command_evidence=command_evidence,
+                        truth_snapshot=truth_snapshot,
+                        truth_fresh=truth_fresh,
+                    )
+                )
+            states = {item["state"] for item in facet_results}
+            combined_state = (
+                "REFUTED"
+                if "REFUTED" in states
+                else "VERIFIED"
+                if states == {"VERIFIED"}
+                else "UNVERIFIED"
+            )
+            combined_reason = "; ".join(
+                f"{item['kind']}: {item['state']} ({item['reason']})"
+                for item in facet_results
+            )
+            results.append(_result(claim, combined_state, combined_reason))
+            continue
         if claim.get("requires_change_evidence"):
             artifacts = {
                 str(item).replace("\\", "/")

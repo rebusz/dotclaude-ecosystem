@@ -485,6 +485,49 @@ class TestClaimVerification(unittest.TestCase):
         self.assertEqual(verified[0]["state"], "VERIFIED")
         self.assertEqual(refuted[0]["state"], "REFUTED")
 
+    def test_compound_commit_and_test_claim_requires_both_evidence_classes(self):
+        unsupported = curator.extract_claims(
+            ["Committed as abcdef1; 999 tests passed."]
+        )
+        supported = curator.extract_claims(
+            ["Committed as abcdef1; 5 tests passed."]
+        )
+        command_evidence = (
+            curator.CommandEvidence(
+                command="python -m pytest -q",
+                exit_code=0,
+                output="5 passed",
+            ),
+        )
+        with mock.patch.object(
+            curator,
+            "_session_commit_shas",
+            return_value={"abcdef1234567890abcdef1234567890abcdef12"},
+        ):
+            unsupported_result = curator.verify_claims(
+                unsupported,
+                repo_root=Path("D:/repo"),
+                start_sha="a" * 40,
+                changed_paths=set(),
+                command_evidence=command_evidence,
+                truth_snapshot=_snapshot(),
+                truth_fresh=True,
+            )
+            supported_result = curator.verify_claims(
+                supported,
+                repo_root=Path("D:/repo"),
+                start_sha="a" * 40,
+                changed_paths=set(),
+                command_evidence=command_evidence,
+                truth_snapshot=_snapshot(),
+                truth_fresh=True,
+            )
+
+        self.assertEqual(unsupported_result[0]["state"], "UNVERIFIED")
+        self.assertIn("commit: VERIFIED", unsupported_result[0]["reason"])
+        self.assertIn("test: UNVERIFIED", unsupported_result[0]["reason"])
+        self.assertEqual(supported_result[0]["state"], "VERIFIED")
+
     def test_test_claim_requires_matching_zero_exit_evidence(self):
         claims = curator.extract_claims(["Tests passed: 5 passed."])
         verified = curator.verify_claims(
