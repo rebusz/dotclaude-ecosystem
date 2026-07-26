@@ -355,25 +355,22 @@ minimal branch; a scratch file with a missing or dangling `transcript_path` degr
 
 **Files:** `scripts/session_router.py`, `scripts/tests/test_session_router.py`.
 
-One hook, five matchers, three behaviours:
+One hook, four documented sources, three behaviours:
 
 | `source` | Behaviour |
 |---|---|
 | `startup` | full run: facts + instruction to write the scratch file; sets `sessionTitle` |
 | `clear` | same as `startup` |
 | **`compact`** | **re-injects the existing scratch file** - this is the compaction-survival path |
-| `resume` | reads the existing file, never clobbers it (same `session_id`) |
-| `fork` | **creates a fresh file, like `startup`** - see below |
+| `resume` | reads existing state without clobber; an unseen `session_id` bootstraps fresh state |
 
-> **Stage 3b correction (Codex C3, verified against the hooks reference).** `fork` was tabled
-> as "reads the existing file". It cannot. `SessionStart` delivers the **new** session's
-> `session_id` and carries **no parent or originating session id** in any documented field, so
-> a forked session has no way to name `session_plan_<parent_id>`. The only way to "find" it
-> would be to guess by recency - the exact unsafe lookup this plan rejects for transcripts, and
-> for the same reason. **Resolved:** `fork` behaves as `startup`. The capability lost is real
-> and stated plainly rather than papered over: **a forked session does not inherit its
-> parent's declared intent.** Recovering it would need a parent pointer the harness does not
-> provide.
+> **Exact-head correction (2026-07-26).** `fork` is not a documented `SessionStart.source`.
+> Claude Code exposes only `startup`, `resume`, `clear`, and `compact`; CLI
+> `--fork-session` combines with resume/continue and produces a new session ID, while the hook
+> receives `source: resume`. The router therefore detects the only observable production
+> condition: `resume` plus no state for that new ID. It creates a fresh scratch file and
+> binding from that event and never guesses the parent by recency. A fork does not inherit its
+> parent's declared intent because the hook receives no parent ID.
 
 **Compaction survival lives here, not in `PreCompact`.** `PreCompact` has exactly one output
 channel, `decision: "block"`, plus the universal fields; it has no `additionalContext` and
@@ -387,11 +384,10 @@ open `IDEA_BOX` entries, the most recent unconsumed handoff, **any unconsumed Se
 verdict from the previous session in this repository**, and a proposed skill chain from a
 routing table that includes the design chain settled in D5. Outside the registry: one line.
 
-On `startup`, `clear` **and `fork`** the router records **`transcript_path`** into the scratch
-file from its own event payload, which is the only place that value is available for free (eng
-review issue 3; `fork` added in Stage 3b per Codex C7 - a forked session has its own transcript,
-so inheriting the parent's path would bind `/curator` to the wrong conversation, which is the
-precise failure issue 3 existed to prevent).
+On `startup`, `clear`, and an unseen-ID `resume`, the router records **`transcript_path`**
+into the scratch file from its own event payload, which is the only place that value is
+available for free. An existing-ID `resume` leaves the original binding untouched. This gives
+a CLI fork its own transcript without guessing or inheriting the parent's path.
 
 The router also performs an **opportunistic bounded reap** (see S3) because `SessionStart` is
 the only event guaranteed to fire. **Its cost is inside the hook's wall time**, and the budget
@@ -408,11 +404,12 @@ must accommodate it.
 > class of error the Kimi lane caught twice - a design built on an event behaviour nobody
 > checked - committed this time by the review itself.
 
-**Gate:** each of the five sources behaves as tabled; a compacted session recovers its goal;
-`resume` proves no clobber; an unregistered repository gets only the bounded one-line notice; the title
-matches the convention; `transcript_path` is recorded on `startup`/`clear` and left untouched on
-`resume`/`compact`, while `fork` records its own; the injected payload stays inside its
-measured character ceiling.
+**Gate:** each of the four documented sources behaves as tabled; a compacted session recovers
+its goal; existing-ID `resume` proves no clobber and unseen-ID `resume` bootstraps fresh state;
+an unregistered repository gets only the bounded one-line notice; the title matches the
+convention; `transcript_path` is recorded on `startup`/`clear`/unseen-ID `resume` and left
+untouched on existing-ID `resume`/`compact`; the injected payload stays inside its measured
+character ceiling.
 
 ### S3 - SessionEnd verdict and reaper
 
@@ -591,7 +588,7 @@ pending work would misrepresent what is left to build.
 | Session starts in a directory that is not a repo | one line, no raise |
 | **`SessionStart` with `source: compact`** | **goal re-injected with `updated_at` visible** |
 | `SessionStart` with `source: resume` | existing scratch file read, never clobbered |
-| `SessionStart` with `source: fork` | fresh scratch file created; parent never guessed |
+| CLI fork arrives as `source: resume` with an unseen session ID | fresh state created; parent never guessed |
 | Scratch file has unrecognised `schema_version` | treated as absent **and** `UNRECOGNIZED_VERSION` logged |
 | Scratch file malformed or truncated | treated as absent, no raise |
 | Write killed mid-flight (Windows handle held) | previous good file still readable |
@@ -618,8 +615,8 @@ assertions from issue 5.
 | Verdict past the hard outer bound, never consumed | file removed; bound exists so nothing leaks forever |
 | Surfacing a verdict from SessionStart | `surfaced_at` stamped, `consumed_at` untouched |
 | Rendering a verdict through `/curator` | `consumed_at` stamped, exactly once |
-| `startup`/`clear`/`fork` | own `transcript_path` recorded from the event payload |
-| `resume`/`compact` | `transcript_path` left untouched |
+| `startup`/`clear`/unseen-ID `resume` | own `transcript_path` recorded from the event payload |
+| existing-ID `resume`/`compact` | `transcript_path` left untouched |
 | **Curator with `transcript_path` absent** | **`UNVERIFIED` claims, logged; never globs for a substitute** |
 | Curator with `transcript_path` pointing at a deleted file | `UNVERIFIED` claims, logged, no raise |
 | Curator wiring report | reads no settings file and refers to the authoritative `/hooks` browser |
@@ -630,8 +627,8 @@ Added by Stage 3b, after the Codex frontier lane overturned five of the eng revi
 
 | Scenario | Expected |
 |---|---|
-| **`SessionStart` with `source: fork`** | **fresh scratch file created; parent's file never read or guessed** |
-| `fork` records `transcript_path` | its own, never the parent's |
+| **Unseen-ID `SessionStart` with `source: resume`** | **fresh scratch file created; parent's file never read or guessed** |
+| CLI fork records `transcript_path` | its own event path, never the parent's |
 | Verdict surfaced by the router but never curated | `surfaced_at` set, `consumed_at` unset, **survives every reap** until the hard outer bound |
 | Verdict rendered by `/curator` | `consumed_at` set; now reapable |
 | **Session on clean trunk that changes nothing** | **`NO-OP`, never `ARCHIVE-OK`** |
@@ -772,9 +769,9 @@ order.
 - [ ] Session intent is written to disk, survives compaction, and is re-injected at
       `SessionStart` with `source: compact`.
 - [ ] A hook-produced, API-write-once binding carries `repo`, `worktree_root`, `start_sha`,
-      `transcript_path`, and the dirty baseline on `startup`/`clear`/`fork`; atomic create
-      prevents accidental clobbering and concurrent-writer races, while deliberate same-user
-      file replacement remains explicitly outside the D8 threat model.
+      `transcript_path`, and the dirty baseline on `startup`/`clear`/unseen-ID `resume`;
+      atomic create prevents accidental clobbering and concurrent-writer races, while
+      deliberate same-user file replacement remains explicitly outside the D8 threat model.
 - [ ] No hook in this plan can block a turn or end a session.
 - [ ] `SessionEnd` produces exactly `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT`, or
       `UNKNOWN` and never archives on its own.
@@ -941,8 +938,9 @@ copying prose verbatim.
 
 *Finding 4.1 (resolved).* `SessionStart` fires with `source: resume` as well as `startup`.
 As specified, a resumed session would overwrite its own scratch file and lose the goal it
-was resuming. **Resolved:** on `resume`, `compact`, and `fork`, the router reads the existing
-file and does not clobber it; only `startup` and `clear` create one.
+was resuming. **Resolved:** existing-ID `resume` and `compact` read without clobbering;
+`startup` and `clear` create state. Exact-head review later established that a CLI fork also
+arrives as `resume`, so an unseen-ID resume bootstraps fresh state from its own event.
 
 *Finding 4.2 (resolved).* `SessionStart` in a directory that is not a git repository was
 unspecified. **Resolved:** registry lookup miss and "not a repo" both fall to the same
@@ -1460,7 +1458,7 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 | Claim | Verdict |
 |---|---|
 | Hook stdout is processed only on process exit | **Confirmed.** *"JSON output is only processed on exit 0"* |
-| `SessionStart` carries no parent session id on `fork` | **Confirmed.** No such field is documented |
+| `SessionStart` carries no parent session ID or `fork` source | **Confirmed.** Only `startup`, `resume`, `clear`, and `compact` are documented |
 | Transcript is written asynchronously and may lag | **Confirmed**, verbatim, plus a documented remedy for `Stop` |
 | `/hooks` exists and hooks resolve from many sources | **Confirmed.** Read-only browser; **seven** sources |
 | `SessionEnd` has a 1.5-second default timeout | **Confirmed on implementation re-check.** The current official reference documents the event-specific default; S5 uses `timeout: 2` |
@@ -1472,8 +1470,9 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 - **C2 (P1) - "runs after the injection is emitted" was mechanically false.** Output is read on
   exit, so nothing a hook does before exiting is off the hot path. The reap is now counted
   inside the SessionStart budget. Same class as K1 and K2, committed by the review itself.
-- **C3 (P1) - `fork` could not read its parent's file.** No parent id exists. `fork` now behaves
-  as `startup`, and the lost capability is stated rather than implied.
+- **C3 (P1) - a fork cannot read its parent's file.** No parent ID exists. Exact-head review
+  corrected the mechanism: a CLI fork arrives as unseen-ID `resume`, which bootstraps fresh
+  state without parent lookup.
 - **C4 (P1) - `consumed_at` did not mean what it claimed.** Injecting into a session's context
   is not the operator reading it. Split into `surfaced_at` (telemetry, authorises nothing) and
   `consumed_at` (written only by `/curator`), and only the latter permits a reap.
@@ -1482,8 +1481,8 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
   `ARCHIVE-OK`.
 - **C6 (P2) - issue 5 promised wall-time assertions and described none.** Split into hard
   character assertions and a deliberately generous wall-time ceiling, with the reason stated.
-- **C7 (P2) - `transcript_path` on `fork` bound `/curator` to the parent's transcript.** `fork`
-  now records its own.
+- **C7 (P2) - a fork must not bind `/curator` to the parent's transcript.** Its unseen-ID
+  `resume` now records the transcript path from its own event.
 - **C8 (P2) - the transcript lags and the curator claimed completeness.** It now reports the
   last message it actually saw and never marks an uncaught-up turn `VERIFIED`.
 - **C9 (P2) - the wiring check was a worse copy of a shipped feature.** `/hooks` already exists
@@ -1546,7 +1545,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [x] **T4 (P2, human: ~30min / CC: ~5min)** - `session_router.py` / `curator_claims.py` - record and consume `transcript_path`
   - Surfaced by: Eng review issue 3 - curator's input was unsourced
   - Files: `scripts/session_router.py`, `scripts/curator_claims.py`, `scripts/session_state.py`, tests for both
-  - Verify: recorded fresh on `startup`/`clear`/`fork`, untouched on `resume`/`compact`; missing and dangling both yield `UNVERIFIED`; no glob fallback exists in the source
+  - Verify: recorded fresh on `startup`/`clear`/unseen-ID `resume`, untouched on existing-ID `resume`/`compact`; missing and dangling both yield `UNVERIFIED`; no glob fallback exists in the source
 - [x] **T5 (P2, human: ~45min / CC: ~10min)** - `/curator` - report absent hook entries
   - Surfaced by: Eng review issue 2 - A9's check was circular and K3's replacement had no owner
   - Files: `skills/curator/SKILL.md`, `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
@@ -1568,10 +1567,10 @@ Synthesized from this review's findings. Each task derives from a specific findi
 
 From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them together.
 
-- [x] **T9 (P1, human: ~45min / CC: ~10min)** - `session_router.py` - `fork` creates a fresh scratch file and records its own `transcript_path`
-  - Surfaced by: Codex C3 and C7 - `SessionStart` carries no parent session id, verified against the hooks reference
+- [x] **T9 (P1, human: ~45min / CC: ~10min)** - `session_router.py` - an unseen-ID `resume` (the documented CLI-fork hook shape) creates fresh state and records its own `transcript_path`
+  - Surfaced by: Codex C3 and C7; corrected by exact-head review after the hooks reference confirmed there is no `fork` source or parent session ID
   - Files: `scripts/session_router.py`, `scripts/tests/test_session_router.py`
-  - Verify: `fork` writes a new file and never reads `session_plan_<parent>`; no recency-based lookup exists in the source
+  - Verify: unseen-ID `resume` writes a new file and never reads `session_plan_<parent>`; an undocumented `source: fork` is rejected; no recency-based lookup exists in the source
 - [x] **T10 (P1, human: ~30min / CC: ~5min)** - `state_reaper.py` - split `surfaced_at` from `consumed_at`; only `consumed_at` permits a reap
   - Surfaced by: Codex C4 - injecting a verdict into a session's context is not the operator reading it
   - Files: `scripts/session_lifecycle.py`, `scripts/state_reaper.py`, `scripts/session_router.py`, `scripts/tests/test_state_reaper.py`
@@ -1640,12 +1639,15 @@ packet was frozen:
   checks, so an 8.3 alias such as `RUNNER~1` cannot hide the active plan/handoff or invalidate
   a correct binding; atomic replacement retries only bounded transient access/sharing
   failures long enough to tolerate concurrent writers and filesystem scanners without ever
-  exposing partial JSON.
+  exposing partial JSON;
+- the router accepts only the four documented `SessionStart.source` values; a CLI fork's real
+  hook shape (`resume` with an unseen session ID) bootstraps its own state without clobbering
+  existing resumes or fabricating a fifth source.
 
 Implementation validation after the external-review repairs: curator suite
 `43 passed, 4 subtests passed`; Windows/Python 3.12 workflow-equivalent suite
-`115 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
-runs; full `scripts/tests` suite `306 passed, 6 subtests passed`; scoped Ruff, `compileall`,
+`116 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
+runs; full `scripts/tests` suite `307 passed, 6 subtests passed`; scoped Ruff, `compileall`,
 and `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending
 C11 and C14.
 

@@ -39,7 +39,7 @@ MINIMAL_CONTEXT_MAX_CHARS = 120
 FULL_RUN_P95_TARGET_MS = 350
 GENEROUS_WALL_TIME_CEILING_S = 1.5
 
-_VALID_SOURCES = {"startup", "clear", "compact", "resume", "fork"}
+_VALID_SOURCES = {"startup", "clear", "compact", "resume"}
 _ACTIVE_PLAN_STATUSES = {"draft", "in-progress", "blocked"}
 _MAX_PLAN_FILES = 80
 _MAX_FACT_ITEMS = 3
@@ -398,7 +398,14 @@ def _full_context(
     lines = [
         "[session-lifecycle] Registered repository facts; model judgment still owns intent.",
     ]
-    if source in {"startup", "clear", "fork"}:
+    if source in {"startup", "clear"} or (
+        source == "resume"
+        and plan is not None
+        and not plan.get("goal")
+        and not plan.get("chain")
+        and not plan.get("persona")
+        and not plan.get("risk")
+    ):
         lines.append(
             "Best-effort declaration: update "
             f"{_scratch_path(session_id, state_dir)} with goal, chain, persona, and risk before "
@@ -523,7 +530,8 @@ def handle_event(
             )
 
         facts = _git_facts(registration, state_dir=target_state)
-        if source in {"startup", "clear", "fork"}:
+        plan = read_session_plan(session_id, state_dir=target_state)
+        if source in {"startup", "clear"} or (source == "resume" and plan is None):
             create_scaffold(
                 session_id=session_id,
                 registration=registration,
@@ -532,7 +540,7 @@ def handle_event(
                 state_dir=target_state,
                 now=current_time,
             )
-        plan = read_session_plan(session_id, state_dir=target_state)
+            plan = read_session_plan(session_id, state_dir=target_state)
         context = _full_context(
             registration=registration,
             session_id=session_id,
@@ -543,7 +551,7 @@ def handle_event(
             pending_verdict=pending,
         )
         title = None
-        if source in {"startup", "resume", "fork"} and not event.get("session_title"):
+        if source in {"startup", "resume"} and not event.get("session_title"):
             title = _title(cwd, facts.branch, current_time)
         return _output(context, title=title)
     except Exception as exc:  # noqa: BLE001 - hook must fail open

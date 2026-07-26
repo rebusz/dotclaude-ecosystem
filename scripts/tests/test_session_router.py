@@ -283,7 +283,7 @@ class TestSessionRouter(unittest.TestCase):
             self.assertEqual(verdict["surfaced_at"], "2026-07-25T18:30:00Z")
             self.assertIsNone(verdict["consumed_at"])
 
-    def test_fork_creates_fresh_plan_with_its_own_transcript(self):
+    def test_resume_with_unseen_session_id_bootstraps_fork_without_parent_lookup(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             root.mkdir()
@@ -314,7 +314,7 @@ class TestSessionRouter(unittest.TestCase):
                 output = router.handle_event(
                     _event(
                         session_id="forked",
-                        source="fork",
+                        source="resume",
                         cwd=root,
                         transcript_path="D:/tmp/forked.jsonl",
                     ),
@@ -330,6 +330,24 @@ class TestSessionRouter(unittest.TestCase):
             self.assertEqual(parent_path.read_bytes(), parent_before)
             self.assertFalse(any(call.args[0] == "parent" for call in read.call_args_list))
             self.assertNotIn("Parent-only goal", _context(output))
+            self.assertIn("Best-effort declaration", _context(output))
+
+    def test_undocumented_fork_source_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            output = router.handle_event(
+                _event(source="fork", cwd=root),
+                state_dir=root / "state",
+                now=NOW,
+                run_maintenance=False,
+            )
+
+            self.assertEqual(output, {})
+            self.assertIn(
+                "ROUTER_INVALID_INPUT",
+                (root / "state" / "hook_errors.log").read_text(encoding="utf-8"),
+            )
 
     def test_clear_creates_fresh_plan_but_does_not_emit_ignored_title(self):
         with tempfile.TemporaryDirectory() as tmp:
