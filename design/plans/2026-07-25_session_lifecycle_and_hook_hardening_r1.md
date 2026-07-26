@@ -623,13 +623,16 @@ them and the wrong reason to panic about them.
 **Why the 400 ms p95 was withdrawn** (eng review, issue 6). CEO Finding 7 set 400 ms as the
 registered-case target, and the fact list in S2 was specified separately and never priced
 against it. The arithmetic does not close: interpreter startup on Windows is 150-250 ms by
-Finding 7's own measurement, the opportunistic reap claimed another 150 ms of the same event,
-and what remains has to cover several `git` subprocess spawns, a plan-directory scan and two
-file reads. Combined with the assertions above, keeping 400 ms would have planted a test that
-fails on the day it is written and then gets edited upward until it passes, which destroys the
-point of having a budget. The number is therefore **derived from the S1 measurement** rather
-than asserted ahead of it, and the reap's allowance is separated from the injection's so one
-janitor run cannot consume the other's budget.
+Finding 7's own measurement, the opportunistic reap claims another 150 ms **of the same
+budget** (Codex C2, above), and what remains has to cover several `git` subprocess spawns, a
+plan-directory scan and two file reads. Keeping 400 ms would have planted a test that fails on
+the day it is written and then gets edited upward until it passes, which destroys the point of
+having a budget.
+
+The number is therefore **derived from measurement**: S1 records the floor it owns, and **S2
+records the full run against the real router** and writes the ceiling from it (Stage 3b, Codex
+C1 - the eng review put the full measurement in S1, which cannot measure a router S2 has not
+built).
 
 ## Rollback and emergency off
 
