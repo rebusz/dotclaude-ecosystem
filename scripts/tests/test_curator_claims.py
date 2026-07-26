@@ -663,6 +663,42 @@ class TestClaimVerification(unittest.TestCase):
         )
         self.assertEqual(results[0]["state"], "REFUTED")
 
+    def test_zero_test_unittest_ok_is_not_positive_test_evidence(self):
+        claims = curator.extract_claims(["Tests passed."])
+        zero = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="python -m unittest",
+                    exit_code=0,
+                    output="Ran 0 tests in 0.000s\n\nOK",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+        positive = curator.verify_claims(
+            claims,
+            repo_root=Path("D:/repo"),
+            start_sha="a" * 40,
+            changed_paths=set(),
+            command_evidence=(
+                curator.CommandEvidence(
+                    command="python -m unittest",
+                    exit_code=0,
+                    output="Ran 2 tests in 0.001s\n\nOK",
+                ),
+            ),
+            truth_snapshot=_snapshot(),
+            truth_fresh=True,
+        )
+
+        self.assertEqual(zero[0]["state"], "UNVERIFIED")
+        self.assertEqual(positive[0]["state"], "VERIFIED")
+
     def test_echo_test_is_not_accepted_as_a_test_runner(self):
         claims = curator.extract_claims(["Tests passed."])
         results = curator.verify_claims(

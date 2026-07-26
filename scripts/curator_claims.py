@@ -629,13 +629,11 @@ def verify_claims(
                     )
                 )
                 continue
+            observed_count = _test_pass_count(latest.output) if latest is not None else None
             expected_output = (
-                latest is not None
-                and (
-                    re.search(rf"\b{expected}\s+passed\b", latest.output, re.I)
-                    if expected is not None
-                    else re.search(r"\b(?:\d+\s+passed|ok)\b", latest.output, re.I)
-                )
+                observed_count == expected
+                if expected is not None
+                else observed_count is not None and observed_count > 0
             )
             if latest is not None and latest.exit_code == 0 and expected_output:
                 results.append(
@@ -773,6 +771,19 @@ def _is_test_command(command: str) -> bool:
         r"(?:^|[;&|]\s*)dotnet\s+test(?:\s|$)",
     )
     return any(re.search(pattern, normalized, re.I) for pattern in patterns)
+
+
+def _test_pass_count(output: str) -> int | None:
+    pytest_counts = [
+        int(match)
+        for match in re.findall(r"\b(\d+)\s+passed\b", output, re.I)
+    ]
+    if pytest_counts:
+        return pytest_counts[-1]
+    unittest_matches = re.findall(r"\bRan\s+(\d+)\s+tests?\b", output, re.I)
+    if unittest_matches and re.search(r"(?m)^OK(?:\s|$)", output):
+        return int(unittest_matches[-1])
+    return None
 
 
 def _normalize_relative_artifact(value: str) -> str | None:
