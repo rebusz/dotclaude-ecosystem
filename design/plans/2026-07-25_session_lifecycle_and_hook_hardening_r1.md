@@ -348,14 +348,26 @@ open `IDEA_BOX` entries, the most recent unconsumed handoff, **any unconsumed Se
 verdict from the previous session in this repository**, and a proposed skill chain from a
 routing table that includes the design chain settled in D5. Outside the registry: one line.
 
-On `startup` and `clear` the router records **`transcript_path`** into the scratch file from its
-own event payload, which is the only place that value is available for free (eng review,
-issue 3).
+On `startup`, `clear` **and `fork`** the router records **`transcript_path`** into the scratch
+file from its own event payload, which is the only place that value is available for free (eng
+review issue 3; `fork` added in Stage 3b per Codex C7 - a forked session has its own transcript,
+so inheriting the parent's path would bind `/curator` to the wrong conversation, which is the
+precise failure issue 3 existed to prevent).
 
 The router also performs an **opportunistic bounded reap** (see S3) because `SessionStart` is
-the only event guaranteed to fire. **The reap is budgeted separately from the injection** and
-runs after the injection is emitted, so a slow sweep can never eat the startup budget it shares
-an event with (eng review, issue 6).
+the only event guaranteed to fire. **Its cost is inside the hook's wall time**, and the budget
+must accommodate it.
+
+> **Stage 3b correction (Codex C2, verified against the hooks reference).** The eng review
+> claimed the reap "runs after the injection is emitted, so a slow sweep can never eat the
+> startup budget". That is mechanically false. The reference is explicit that hook output is
+> read only once the process exits - *"JSON output is only processed on exit 0"* - so writing to
+> stdout early releases nothing. Everything the hook does before exiting is on the session's hot
+> path, in order. There is no cheap way around this: keeping the reap off the hot path would
+> need a detached process, which `## Explicit non-goals` forbids. **Resolved:** the reap is
+> counted inside the SessionStart budget and bounded hard enough to fit it. This is the same
+> class of error the Kimi lane caught twice - a design built on an event behaviour nobody
+> checked - committed this time by the review itself.
 
 **Gate:** each of the five sources behaves as tabled; a compacted session recovers its goal;
 `resume` proves no clobber; an unregistered repository costs zero injected tokens; the title
