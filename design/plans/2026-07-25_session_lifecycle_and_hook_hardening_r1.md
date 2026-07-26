@@ -1518,11 +1518,11 @@ From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them toge
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_found | mode: HOLD_SCOPE, 11 findings, 1 critical gap, all resolved |
 | Audit Panel (CDP) | `/fwp` Stage 2 (paid) | Multi-model challenge | 1 | issues_found | 9 lanes, 8 returned, frontier lane failed `captcha_detected`; 10 applied, 11 discarded |
 | Frontier CLI (Kimi K3) | `auditkimi_cli.py` | Independent frontier, full plan | 1 | issues_found | 10 findings; 2 mechanism errors, 1 self-contradiction, 1 scope cut, 1 debt |
-| Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 0 | **failed** | hung in `codex-windows-sandbox-setup`; not re-run, defect filed against `_shared/audit` |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_found | mode: FULL_REVIEW, 7 issues (2 P1), 0 critical gaps, all resolved; 12 test gaps closed |
+| Frontier CLI (Codex GPT) | `auditcodex_cli.py` | Opposite-frontier check | 1 | issues_found | Stage 3b: 16 findings, 10 applied, 1 refuted, 5 recorded as operator decisions |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_found | mode: FULL_REVIEW, 7 issues (2 P1), 0 critical gaps; **5 of its 7 fixes later overturned or repaired by Stage 3b** |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | - | not applicable, no UI scope |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | - | not run |
-| Outside Voice | `/plan-eng-review` | Independent challenge | 0 | **skipped** | Codex lane hangs on this host; Stage 2 + 2b already provide a stronger panel |
+| Outside Voice | Stage 3b Codex lane | Independent challenge | 1 | issues_found | ran after the lane was repaired; graded the eng review itself |
 
 - **CROSS-MODEL:** the CDP panel and the CLI frontier lane disagree sharply in value, and the
   reason is input fidelity rather than model quality. Lanes whose input arrived compacted
