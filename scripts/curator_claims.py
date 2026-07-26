@@ -355,11 +355,11 @@ def _result(claim: dict[str, Any], state: str, reason: str) -> dict[str, Any]:
     }
 
 
-def _session_commit_shas(repo_root: Path, start_sha: str) -> set[str] | None:
+def _start_sha_is_ancestor(repo_root: Path, start_sha: str) -> bool:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", start_sha):
-        return None
+        return False
     try:
-        ancestor = subprocess.run(
+        result = subprocess.run(
             ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", start_sha, "HEAD"],
             capture_output=True,
             text=True,
@@ -368,8 +368,15 @@ def _session_commit_shas(repo_root: Path, start_sha: str) -> set[str] | None:
             timeout=2,
             check=False,
         )
-        if ancestor.returncode != 0:
-            return None
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _session_commit_shas(repo_root: Path, start_sha: str) -> set[str] | None:
+    if not _start_sha_is_ancestor(repo_root, start_sha):
+        return None
+    try:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "rev-list", f"{start_sha}..HEAD"],
             capture_output=True,
@@ -907,6 +914,12 @@ def changed_paths(
     baseline_dirty = {
         item for item in start_dirty_paths if isinstance(item, str)
     }
+    if not _start_sha_is_ancestor(repo_root, start_sha):
+        return ChangedPathEvidence(
+            frozenset(),
+            False,
+            frozenset(baseline_dirty),
+        )
     commands = [
         ["diff", "--name-only", "-z", "--no-renames", f"{start_sha}..HEAD"],
         ["diff", "--name-only", "-z", "--no-renames", "HEAD"],

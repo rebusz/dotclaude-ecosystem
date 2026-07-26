@@ -773,6 +773,7 @@ class TestClaimVerification(unittest.TestCase):
 
     def test_committed_baseline_path_is_attributable_but_uncommitted_baseline_is_not(self):
         results = [
+            mock.Mock(returncode=0, stdout=""),
             mock.Mock(returncode=0, stdout="already-dirty.txt\0committed.py\0"),
             mock.Mock(returncode=0, stdout="already-dirty.txt\0operator-notes.md\0new.py\0"),
             mock.Mock(returncode=0, stdout="new-untracked.txt\0"),
@@ -801,8 +802,30 @@ class TestClaimVerification(unittest.TestCase):
         )
         self.assertTrue(evidence.complete)
 
+    def test_changed_path_collection_fails_closed_when_start_is_not_ancestor(self):
+        with mock.patch.object(
+            curator.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=1, stdout=""),
+        ) as run:
+            evidence = curator.changed_paths(
+                Path("D:/repo"),
+                "a" * 40,
+                ["operator-notes.md"],
+            )
+
+        self.assertEqual(evidence.paths, frozenset())
+        self.assertFalse(evidence.complete)
+        self.assertEqual(
+            evidence.baseline_ambiguous_paths,
+            frozenset({"operator-notes.md"}),
+        )
+        run.assert_called_once()
+        self.assertIn("merge-base", run.call_args.args[0])
+
     def test_changed_path_collection_preserves_nul_paths_and_reports_failures(self):
         results = [
+            mock.Mock(returncode=0, stdout=""),
             mock.Mock(returncode=0, stdout="tracked\nline\0"),
             mock.Mock(returncode=1, stdout=""),
             mock.Mock(returncode=0, stdout="tab\tname\0"),

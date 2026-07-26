@@ -1601,8 +1601,9 @@ packet was frozen:
   accepts any working directory contained by that bound Git top-level; per D8, deliberate
   direct replacement by a same-user process remains outside the threat model;
 - Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
-  filenames; traversal-like claim paths are rejected and incomplete collection cannot produce
-  `REFUTED`;
+  filenames; `start_sha` must be an ancestor of `HEAD` before endpoint differences are treated
+  as session changes; traversal-like claim paths are rejected and incomplete collection cannot
+  produce `REFUTED`;
 - the curator's model-facing window is assistant text only, while test exit evidence requires
   a correlated structured tool result and a recognised test runner; a compound change claim
   verifies only when every named artifact is matched, mixed change/test claims must satisfy
@@ -1630,7 +1631,7 @@ packet was frozen:
   discoverable beyond 400 files.
 
 Implementation validation after the external-review repairs: curator suite
-`42 passed, 4 subtests passed`; full `scripts/tests` suite `301 passed, 6 subtests passed`;
+`43 passed, 4 subtests passed`; full `scripts/tests` suite `302 passed, 6 subtests passed`;
 scoped Ruff, `compileall`, and `git diff --check` all exit 0. Hook configuration remains
 deliberately untouched pending C11 and C14.
 
