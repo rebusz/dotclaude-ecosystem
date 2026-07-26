@@ -10,19 +10,15 @@ Stage 3b first - it is the shortest path to what changed and why.
 
 ## Read this before you start
 
-**Two open items need the operator, not you.** Both are in `**UNRESOLVED DECISIONS:**` at the
-bottom of the plan, and both are yours:
+**C11 and C14 were closed by the operator on 2026-07-26.** The operator accepted both as
+advisory/best-effort boundaries and explicitly authorized hook activation:
 
 1. **C11** - a `SessionStart` hook cannot compel the model to write the scratch file.
    `additionalContext` is a reminder the harness does not enforce, so "declared intent at
-   session start" is best-effort by construction. Do not invent a mechanism that pretends
-   otherwise, and do not quietly build as if the write is guaranteed.
-2. **C14** - headline goal 2 promises claims are confronted "before anything is called done",
-   but `/curator` is optional and `SessionEnd` alone is coarse. The plan does not enforce its
-   own headline.
-
-Build everything that does not depend on these. If you reach a decision point that turns on
-either, stop and ask rather than choosing for the operator.
+   session start" is best-effort by construction.
+2. **C14** - the former headline goal 2 promised claims were confronted "before anything is
+   called done", but `/curator` is optional and `SessionEnd` alone is coarse. The goal was
+   corrected to the accepted advisory contract.
 
 ## Settled - do not re-litigate
 
@@ -44,7 +40,7 @@ Five modules and one skill. All advisory, no hook may return `decision: "block"`
 | Slice | Owns | Depends on |
 |---|---|---|
 | S1 | `session_state.py` (registry resolution, read/validate, atomic write), registry template, floor measurement | - |
-| S2 | `session_router.py` (SessionStart, 5 sources), full-run measurement, budget assertions | S1 |
+| S2 | `session_router.py` (SessionStart, 4 documented sources), full-run measurement, budget assertions | S1 |
 | S3 | `session_lifecycle.py` (SessionEnd verdict), `state_reaper.py` | S1 |
 | S4 | `skills/curator/SKILL.md`, `curator_claims.py` | S1, S3 |
 | S5 | review, landing, hook enablement | S2, S3, S4 |

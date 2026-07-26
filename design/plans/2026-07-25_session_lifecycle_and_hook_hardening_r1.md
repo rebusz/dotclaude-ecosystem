@@ -1,10 +1,10 @@
 ---
 title: Session Lifecycle Core - Compaction Survival and Verified Close
 date: 2026-07-25
-status: in-progress
-status_detail: cut-to-core-2026-07-25-stage-5-exact-head-review
+status: shipped
+status_detail: activated-advisory-best-effort-2026-07-26
 risk: R1
-phase: implementation
+phase: complete
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, hooks, session-lifecycle, compaction, handoff, evidence]
 related:
@@ -34,13 +34,17 @@ scratch file, and one skill, all advisory.
 
 **Plan-writing authorization:** granted by the operator on 2026-07-25 after a `/grill-me`
 interview (seven grill decisions recorded below; D8 was added during implementation review).
-**Implementation authorization:** not implied. The operator selected `/fwp` for review.
+**Implementation authorization:** granted. On 2026-07-26 the operator explicitly accepted
+C11/C14 as advisory/best-effort and instructed Codex to activate the hooks.
 
-**Current implementation boundary (Codex handoff, 2026-07-25):** this PR lands the
-independently removable S1-S4 code slice only. S5 hook registration, including
-`SessionEnd timeout: 2`, is intentionally excluded until the operator settles C11 and C14.
-Merging this inactive core does not claim activation or complete the plan's DoD; it preserves
-the reviewed code while the product decisions remain open.
+**Activation record (2026-07-26):** S1-S4 landed through PR #53 as `cde2da48`; the
+machine-local registry and the two user-level hook entries are active. Both hooks use a
+two-second timeout. A real Claude CLI process with session ID
+`6e26c4db-9203-46b2-a15e-d686f70124fc` produced its binding, scratch plan, and persisted
+`NO-OP` verdict. The CLI was not logged in, so the model call stopped before inference with
+cost zero; lifecycle hooks still ran synchronously. A direct compact event for the same
+binding recovered the 177-character compact context. Existing settings outside
+`SessionStart` and `SessionEnd` compare identically with the pre-activation backup.
 
 **Binding trust boundary (operator decision A, 2026-07-25):** the session binding is
 hook-produced and write-once through `session_state.py`. Atomic create protects cooperative
@@ -76,8 +80,9 @@ an emergency-off path, and a slice order in which every hook is independently re
 
 1. A session declares its goal, skill chain, persona, and risk class at start, on disk.
 2. That declaration survives compaction and is re-injected afterwards.
-3. At close, claims made during the session are confronted with repository evidence before
-   anything is called done, and the outcome is persisted where the operator will meet it.
+3. At close, SessionEnd persists a coarse fail-closed verdict; `/curator` performs the
+   optional thorough confrontation with repository evidence. Both paths are advisory and do
+   not enforce whether an agent calls work done.
 
 Goals about mid-session steering and abandoned-work discovery were in the original draft
 and left with the scope cut; see `## Scope cut`.
@@ -575,6 +580,24 @@ direct scratch-file evidence of a router run, and refers the operator to `/hooks
 - enable hooks in `settings.json` **as the final step**, one event at a time, verifying
   after each that a session still starts, compacts, and ends cleanly.
 
+**Activation evidence (2026-07-26):**
+
+- pre-activation settings backup:
+  `%TEMP%/claude-settings-pre-session-lifecycle-cde2da4.json`,
+  SHA-256 `37F8C2AEE7FA08B1D1E0012273061697420183C2C8A588E2B40454C430A99C64`;
+- active `~/.claude/settings.json` SHA-256
+  `5E1CAFE4BE5914D8E4B5397412CF7C6B79E1C128B6B1D3CFBB691F0531180A6B`;
+- active `~/.claude/session_registry.json` SHA-256
+  `65DA6E500211C3C5960321569850536B81FBC35759A85C8E2862764B2614F306`;
+- semantic comparison after removing the two new event properties proves every pre-existing
+  setting and hook unchanged;
+- SessionStart-only smoke session `fa338f0a-9409-4236-9830-8c3d03cae3af` created a valid
+  `session.plan.v1` and `session.binding.v1` while no SessionEnd entry existed;
+- combined smoke session `6e26c4db-9203-46b2-a15e-d686f70124fc` created plan, binding, and
+  `NO-OP` verdict with `end_reason: other`; a compact replay recovered bounded context;
+- `hook_errors.log` remained absent. Claude CLI authentication was unavailable, but the real
+  CLI process executed both lifecycle events before/after the zero-cost authentication stop.
+
 ## Test plan
 
 Trigger-provenance and pricing scenarios are **not** listed here. They shipped with the
@@ -766,34 +789,34 @@ ruled out listing as pending, three sections earlier in this same document. A ch
 read as instructions, so a stale line there is not a stale narrative, it is a wrong build
 order.
 
-- [ ] Session intent is written to disk, survives compaction, and is re-injected at
+- [x] Session intent is written to disk, survives compaction, and is re-injected at
       `SessionStart` with `source: compact`.
-- [ ] A hook-produced, API-write-once binding carries `repo`, `worktree_root`, `start_sha`,
+- [x] A hook-produced, API-write-once binding carries `repo`, `worktree_root`, `start_sha`,
       `transcript_path`, and the dirty baseline on `startup`/`clear`/unseen-ID `resume`;
       atomic create prevents accidental clobbering and concurrent-writer races, while
       deliberate same-user file replacement remains explicitly outside the D8 threat model.
-- [ ] No hook in this plan can block a turn or end a session.
-- [ ] `SessionEnd` produces exactly `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT`, or
+- [x] No hook in this plan can block a turn or end a session.
+- [x] `SessionEnd` produces exactly `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT`, or
       `UNKNOWN` and never archives on its own.
-- [ ] The SessionEnd verdict is persisted and reaches the operator by at least one of the
+- [x] The SessionEnd verdict is persisted and reaches the operator by at least one of the
       two delivery paths, because `SessionEnd` itself cannot speak.
-- [ ] An unconsumed verdict is never reaped on age alone; a consumed one is; a hard outer
+- [x] An unconsumed verdict is never reaped on age alone; a consumed one is; a hard outer
       bound exists so nothing leaks forever.
-- [ ] `turn_counter_*` backlog is reaped and cannot grow unbounded again.
-- [ ] A session killed without `SessionEnd` is still reaped.
-- [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
+- [x] `turn_counter_*` backlog is reaped and cannot grow unbounded again.
+- [x] A session killed without `SessionEnd` is still reaped.
+- [x] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
       marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
-- [ ] `/curator` locates the transcript via the exact per-session binding and never globs for a
+- [x] `/curator` locates the transcript via the exact per-session binding and never globs for a
       substitute.
-- [ ] `/curator` reads no settings file, reports only direct scratch-file evidence, and
+- [x] `/curator` reads no settings file, reports only direct scratch-file evidence, and
       points the operator to `/hooks` for the authoritative merged hook view.
-- [ ] The model-facing curator window contains only redacted assistant text; raw tool inputs
+- [x] The model-facing curator window contains only redacted assistant text; raw tool inputs
       and results never enter that window, while structured command evidence stays local.
-- [ ] Session titles follow the convention automatically at start.
-- [ ] The S1 floor and S2 full router are measured separately; the SessionStart budget is
+- [x] Session titles follow the convention automatically at start.
+- [x] The S1 floor and S2 full router are measured separately; the SessionStart budget is
       written from the S2 measurement and **asserted in tests** so it cannot regress silently.
-- [ ] Removing the two hook entries restores pre-plan behavior exactly.
-- [ ] Exact-head review, CI, merge, and operator checkout sync are complete.
+- [x] Removing the two hook entries restores pre-plan behavior exactly.
+- [x] Exact-head review, CI, merge, and operator checkout sync are complete.
 
 **Delivered elsewhere, deliberately not gated here.** Trigger provenance and Claude 5 pricing
 shipped in hotfix `ad12cf2` with tests in `scripts/tests/test_hook_trigger_provenance.py`. The
@@ -1503,18 +1526,16 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 - **C10 - the D1 merge premise is arguable.** Codex is right that two modules do not force two
   authoritative resolvers. D1 was an operator decision taken during this review with the
   tradeoff visible, and the counter-argument is recorded here rather than quietly reversed.
-- **C11 - a hook cannot compel the model to write the scratch file.** True, and it goes to the
-  foundation: `additionalContext` is a reminder, not an instruction the harness enforces. The
-  declared-intent mechanism is best-effort by construction. Worth the operator's attention
-  before hook activation.
+- **C11 - a hook cannot compel the model to write the scratch file.** Accepted by the operator
+  on 2026-07-26 as an explicit advisory/best-effort boundary; activation does not claim
+  enforcement.
 - **C12 - deferring installer ownership leaves the feature machine-local.** True; in
   `IDEA_BOX.md`.
 - **C13 - the registry is a second stale-config surface** rather than a fix to repository
   detection. Settled by D7.
-- **C14 - goal 2 is not enforced,** because `/curator` is optional and `SessionEnd` alone is
-  coarse. The sharpest strategic point in the set. The plan is honest that both paths are
-  advisory, but "confronted before anything is called done" promises more than an optional
-  skill delivers.
+- **C14 - the thorough evidence confrontation is not enforced.** Accepted by the operator on
+  2026-07-26. SessionEnd remains coarse and `/curator` optional; the headline goal now states
+  that advisory contract instead of promising an enforcement mechanism.
 
 ### What this changes about the review, not just the plan
 
@@ -1651,8 +1672,9 @@ Implementation validation after the external-review repairs: curator suite
 `43 passed, 4 subtests passed`; Windows/Python 3.12 workflow-equivalent suite
 `117 passed, 4 subtests passed`, including 20 additional consecutive concurrency stress
 runs; full `scripts/tests` suite `308 passed, 6 subtests passed`; scoped Ruff, `compileall`,
-and `git diff --check` all exit 0. Hook configuration remains deliberately untouched pending
-C11 and C14.
+and `git diff --check` all exit 0. At that validation point, hook configuration remained
+deliberately untouched pending C11 and C14; activation followed the operator's acceptance
+and is recorded under S5 above.
 
 ## GSTACK REVIEW REPORT
 
@@ -1691,20 +1713,15 @@ C11 and C14.
   hooks, **five modules**, one skill. Cleared to implement, with the mechanism claims verified
   against the hooks reference rather than asserted.
 
-**UNRESOLVED DECISIONS:**
+**DECISION CLOSURE:**
 - ~~The Codex CLI frontier lane has not returned.~~ **Closed 2026-07-25:** two runner defects
   fixed in `_shared/audit` (Windows sandbox mode discarded by `--ignore-user-config`; prompt
   truncated at its first newline by argv). The lane ran and its findings are folded as Stage 3b.
-- **Open, needs the operator before implementation (Codex C11).** A `SessionStart` hook can
-  inject an instruction to write the scratch file, but `additionalContext` is a reminder the
-  harness does not enforce - nothing compels the model to perform an unsolicited write before
-  the first prompt. "Declared intent at session start" is therefore best-effort by construction,
-  not a guarantee. The plan should either accept that in writing or find a mechanism that does
-  not depend on model compliance.
-- **Open, strategic (Codex C14).** Headline goal 2 says claims are "confronted with repository
-  evidence before anything is called done", but the only thorough path is `/curator`, which is
-  optional, and `SessionEnd` alone produces a coarse verdict. The plan does not enforce its own
-  headline promise. Worth settling before implementation rather than discovering it after.
+- ~~C11 required operator acceptance before activation.~~ **Closed 2026-07-26:** the operator
+  accepted declared intent as advisory/best-effort; no compulsory write is claimed.
+- ~~C14 required a decision on optional evidence enforcement.~~ **Closed 2026-07-26:** the
+  operator accepted coarse SessionEnd plus optional `/curator` as advisory/best-effort, and
+  the goal language was corrected accordingly.
 - CDP web-UI lanes silently degrade long plan input, which cost two of three Perplexity lanes
   in this run. The cause is downstream of `_shared/audit`, so it cannot be fixed by editing the
   runner; the available lever is lane selection - prefer CLI lanes for plans past a size the
