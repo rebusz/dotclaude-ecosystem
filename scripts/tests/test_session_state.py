@@ -53,6 +53,22 @@ def _registry(root: Path) -> dict[str, object]:
     }
 
 
+def _binding(root: Path, **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": state.SESSION_BINDING_SCHEMA,
+        "session_id": "session-a",
+        "repo": "dotclaude-ecosystem",
+        "worktree_root": str(root.resolve(strict=False)),
+        "start_sha": "a" * 40,
+        "transcript_path": str((root / "session.jsonl").resolve(strict=False)),
+        "start_branch": "codex/session-lifecycle-core",
+        "start_dirty_paths": ["operator notes\tline\nbreak.txt"],
+        "created_at": "2026-07-25T12:00:00Z",
+    }
+    payload.update(overrides)
+    return payload
+
+
 class TestSessionState(unittest.TestCase):
     def test_resolve_repository_matches_canonical_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +210,71 @@ class TestSessionState(unittest.TestCase):
             self.assertEqual(written, state_dir / "session_plan_session-a.json")
             self.assertEqual(loaded, _plan())
             self.assertFalse(list(state_dir.glob("*.tmp")))
+
+    def test_session_binding_is_immutable_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "state"
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            original = _binding(root)
+
+            path = state.write_session_binding(
+                "session-a",
+                original,
+                state_dir=state_dir,
+            )
+            state.write_session_binding("session-a", original, state_dir=state_dir)
+
+            self.assertEqual(path, state_dir / "session_binding_session-a.json")
+            self.assertEqual(
+                state.read_session_binding("session-a", state_dir=state_dir),
+                original,
+            )
+            with self.assertRaisesRegex(ValueError, "immutable"):
+                state.write_session_binding(
+                    "session-a",
+                    _binding(root, start_sha="b" * 40),
+                    state_dir=state_dir,
+                )
+            self.assertEqual(
+                state.read_session_binding("session-a", state_dir=state_dir),
+                original,
+            )
+
+    def test_git_nul_parsers_preserve_control_characters_and_rename_target(self):
+        status = "\0".join(
+            [
+                "# branch.oid " + "a" * 40,
+                "# branch.head feature",
+                "1 M. N... 100644 100644 100644 " + "b" * 40 + " " + "c" * 40
+                + " tab\tand\nnewline.txt",
+                "2 R. N... 100644 100644 100644 "
+                + "d" * 40
+                + " "
+                + "e" * 40
+                + " R100 renamed target.txt",
+                "old target.txt",
+                "? untracked ünicode.txt",
+                "",
+            ]
+        )
+
+        branch, head, paths = state.parse_git_status_v2_z(status)
+
+        self.assertEqual(branch, "feature")
+        self.assertEqual(head, "a" * 40)
+        self.assertEqual(
+            paths,
+            (
+                "tab\tand\nnewline.txt",
+                "renamed target.txt",
+                "untracked ünicode.txt",
+            ),
+        )
+        self.assertEqual(
+            state.parse_nul_paths("one\nfile\0tab\tfile\0one\nfile\0"),
+            ("one\nfile", "tab\tfile"),
+        )
 
     def test_malformed_truncated_and_wrong_version_are_absent(self):
         with tempfile.TemporaryDirectory() as tmp:

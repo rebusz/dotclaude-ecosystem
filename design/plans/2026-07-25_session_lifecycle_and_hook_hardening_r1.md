@@ -1,10 +1,10 @@
 ---
 title: Session Lifecycle Core - Compaction Survival and Verified Close
 date: 2026-07-25
-status: draft
-status_detail: cut-to-core-2026-07-25-awaiting-fwp-stage-3
+status: in-progress
+status_detail: cut-to-core-2026-07-25-stage-5-exact-head-review
 risk: R1
-phase: plan
+phase: implementation
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, hooks, session-lifecycle, compaction, handoff, evidence]
 related:
@@ -200,9 +200,14 @@ SessionStart ---> session_router.py (facts only)
                         |
                         v
          ~/.claude/state/session_plan_<id>.json
-          { goal, chain[], persona, risk, repo,
-            start_sha, transcript_path, checkpoints[],
-            claims[] }
+          { goal, chain[], persona, risk, checkpoints[], claims[] }
+                        ^
+                        | model-editable intent only
+                        |
+         ~/.claude/state/session_binding_<id>.json
+          { repo, worktree_root, start_sha, transcript_path,
+            start_branch, start_dirty_paths[], created_at }
+          immutable hook-owned provenance
                         |
               +---------+---------+
               |                   |
@@ -225,6 +230,7 @@ Two hooks only: SessionStart and SessionEnd.
 
 Forbidden edges:
   session_plan  --X--> any gate, any authority, any commit message
+  session_plan  --X--> provenance for repo / start SHA / transcript
   hook          --X--> decision:"block" / continue:false
   pasted text   --X--> trigger match
   PreCompact    --X--> additionalContext   (the event has no such field)
@@ -256,7 +262,7 @@ hotfix `ad12cf2`; `repo_hygiene_nudge.py`, `memory_size_guard.py`, and
 `autoplan_review_workflow.js` are touched only by the split-out plans and travel with them.
 The cut removed the slice rather than shrinking it.
 
-**Resulting shape:** two hooks instead of four, four modules plus one skill instead of seven
+**Resulting shape:** two hooks instead of four, five modules plus one skill instead of seven
 modules. `PreCompact` and `PostToolBatch` are both gone from this plan - the first because it
 cannot carry the payload the plan asked of it, the second because it left with the drift check.
 
@@ -271,7 +277,8 @@ removable.
 `templates/session_registry.json.template`, `scripts/tests/test_session_state.py`.
 
 `session_state.py` owns the operations every consumer needs and nobody reimplements:
-resolve the registry, read-and-validate the scratch file, write it atomically. Writes go to a
+resolve the registry, read-and-validate the scratch file, manage the immutable provenance
+binding, and write state atomically. Writes go to a
 same-directory temp file then `os.replace`, so a process killed mid-write leaves the previous
 good file intact - the Windows failure mode where a terminated subprocess has not released its
 handle degrades to "previous plan still readable", never to "plan lost".
@@ -283,13 +290,15 @@ authoritative. Registry resolution lives in `session_state.py` and nowhere else.
 allowed exactly the four operations named here; anything a later slice wants to add belongs in
 that slice's own module, so this does not become the junk drawer.
 
-The scratch file carries **`transcript_path`** (eng review, issue 3). `SessionStart` receives
+The scratch file records **`transcript_path`** for operator visibility, while an immutable
+`session.binding.v1` file is the only authority consumed by SessionEnd and `/curator`.
+`SessionStart` receives
 the transcript path in its event payload; `/curator` is a skill and receives no payload, so
-without this field the plan's most security-sensitive consumer has no defined way to find its
-input. Recording it at start makes the binding explicit and per-session, which is what stops a
-concurrent session's transcript - and therefore its secrets - from being resolved by mistake. A
-scratch file written before this field existed, or one whose path no longer resolves, degrades
-to `UNVERIFIED` claims rather than a guess or a raise.
+without this binding the plan's most security-sensitive consumer has no defined way to find its
+input. Recording it at start makes provenance explicit and per-session, and prevents a
+model-editable scratch file from redirecting evidence to another repo, SHA, or transcript. A
+session created before this binding existed, a mismatched Git root, or a transcript path that
+no longer resolves degrades to `UNVERIFIED`/`UNKNOWN` rather than a guess or a raise.
 
 The scratch file carries `schema_version: "session.plan.v1"`. An unrecognised version is
 treated as absent **and** appends `UNRECOGNIZED_VERSION` to `hook_errors.log`, so a stale
@@ -377,9 +386,10 @@ must accommodate it.
 > checked - committed this time by the review itself.
 
 **Gate:** each of the five sources behaves as tabled; a compacted session recovers its goal;
-`resume` proves no clobber; an unregistered repository costs zero injected tokens; the title
+`resume` proves no clobber; an unregistered repository gets only the bounded one-line notice; the title
 matches the convention; `transcript_path` is recorded on `startup`/`clear` and left untouched on
-`resume`/`compact`/`fork`; the injected payload stays inside its measured character ceiling.
+`resume`/`compact`, while `fork` records its own; the injected payload stays inside its
+measured character ceiling.
 
 ### S3 - SessionEnd verdict and reaper
 
@@ -541,7 +551,7 @@ pending work would misrepresent what is left to build.
 | Scenario | Expected |
 |---|---|
 | Session starts in a registered repo | full injection, title set, scratch file created |
-| Session starts outside the registry | one line, no scratch file, zero injected context |
+| Session starts outside the registry | one bounded line, no scratch file |
 | Session starts in a directory that is not a repo | one line, no raise |
 | **`SessionStart` with `source: compact`** | **goal re-injected with `updated_at` visible** |
 | `SessionStart` with `source: resume` | existing scratch file read, never clobbered |
@@ -611,8 +621,8 @@ actually ran.
 
 The hooks are a permanent tax on every session, so budgets are acceptance criteria.
 
-- SessionStart, full run: <= 2,000 characters injected; p95 wall time **set from the S1
-  measurement**, not from the original 400 ms (see below);
+- SessionStart, full run: <= 2,000 characters injected; measured p95 219.481 ms,
+  target p95 <= 350 ms, and a generous hard regression ceiling of 1.5 s;
 - SessionStart, compact re-injection: <= 1,500 characters (the scratch file plus its
   `updated_at` stamp, so a stale plan reads as stale);
 - SessionStart, outside the registry: <= 120 characters; p95 wall time <= 150 ms;
@@ -624,6 +634,26 @@ The hooks are a permanent tax on every session, so budgets are acceptance criter
   This is the plan's only model call and therefore the only place a cost ceiling has to
   be stated rather than inherited;
 - hook wall time: <= 2 seconds each, fail-open on timeout.
+
+**Measured during integrated S2/S3 implementation (Windows, Python 3.14.3, 60 external
+process runs per branch):**
+
+| Path | p50 | p95 | max | max injected |
+|---|---:|---:|---:|---:|
+| SessionStart full, registered, reap included | 169.756 ms | 219.481 ms | 263.014 ms | 1,121 chars |
+| SessionStart `compact` | 100.636 ms | 119.021 ms | 201.292 ms | 177 chars |
+| SessionStart unregistered | 98.162 ms | 134.200 ms | 165.961 ms | 68 chars |
+| SessionEnd, no stdout | 174.759 ms | 224.079 ms | 269.957 ms | 0 chars |
+
+The reaper was also measured separately against a maintained 1,944-file backlog over 12
+runs: p50 25.719 ms, p95 26.998 ms, max 28.192 ms, deleting exactly 200 files per run.
+These numbers set the 350 ms full-run p95 target and leave the 1.5 s hard assertion as an
+order-of-magnitude regression detector rather than a flaky performance test.
+
+An end-to-end `/curator` smoke with a fresh, live TruthDeck snapshot completed in
+473.265 ms, produced a 342-character redacted transcript window, verified one named-file
+claim and one test claim from a correlated zero exit, and wrote the temp handoff. The hard
+20,000-character window ceiling remains asserted independently of this small fixture.
 
 The drift check's throttle numbers left with the drift check. They are recorded in
 `2026-07-25_session_drift_check_r1.md` together with the contradiction that has to be
@@ -682,7 +712,7 @@ built).
 
 1. Remove the two hook entries from `settings.json`. This is the kill switch, and it is
    sufficient on its own; every capability here is delivered through a hook.
-2. Delete `~/.claude/state/session_plan_*`. Nothing else reads them.
+2. Delete `~/.claude/state/session_plan_*` and `session_binding_*`. Nothing else reads them.
 3. Revert the merged commits to restore `plan_keyword_detector.py` and the footer.
 4. `/curator` is invoked explicitly and is inert when not called.
 
@@ -703,11 +733,12 @@ order.
 
 - [ ] Session intent is written to disk, survives compaction, and is re-injected at
       `SessionStart` with `source: compact`.
-- [ ] The scratch file carries its own `transcript_path`, recorded on
-      `startup`/`clear`/`fork` and preserved on `resume`/`compact`.
+- [ ] An immutable hook-owned binding carries `repo`, `worktree_root`, `start_sha`,
+      `transcript_path`, and the dirty baseline on `startup`/`clear`/`fork`; scratch edits
+      cannot redirect SessionEnd or `/curator`.
 - [ ] No hook in this plan can block a turn or end a session.
-- [ ] `SessionEnd` produces `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, or `CHECKPOINT` and never
-      archives on its own.
+- [ ] `SessionEnd` produces exactly `NO-OP`, `ARCHIVE-OK`, `HANDOFF`, `CHECKPOINT`, or
+      `UNKNOWN` and never archives on its own.
 - [ ] The SessionEnd verdict is persisted and reaches the operator by at least one of the
       two delivery paths, because `SessionEnd` itself cannot speak.
 - [ ] An unconsumed verdict is never reaped on age alone; a consumed one is; a hard outer
@@ -716,11 +747,12 @@ order.
 - [ ] A session killed without `SessionEnd` is still reaped.
 - [ ] `/curator` takes a fresh snapshot, never reproduces a stale gate as `VERIFIED`, and
       marks every session claim `VERIFIED`, `REFUTED`, or `UNVERIFIED`.
-- [ ] `/curator` locates the transcript via `transcript_path` and never globs for a
+- [ ] `/curator` locates the transcript via the immutable binding and never globs for a
       substitute.
 - [ ] `/curator` reads no settings file, reports only direct scratch-file evidence, and
       points the operator to `/hooks` for the authoritative merged hook view.
-- [ ] Redaction traverses nested transcript structure, not lines.
+- [ ] The model-facing curator window contains only redacted assistant text; raw tool inputs
+      and results never enter that window, while structured command evidence stays local.
 - [ ] Session titles follow the convention automatically at start.
 - [ ] The S1 floor and S2 full router are measured separately; the SessionStart budget is
       written from the S2 measurement and **asserted in tests** so it cannot regress silently.
@@ -1392,7 +1424,7 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 | `SessionStart` carries no parent session id on `fork` | **Confirmed.** No such field is documented |
 | Transcript is written asynchronously and may lag | **Confirmed**, verbatim, plus a documented remedy for `Stop` |
 | `/hooks` exists and hooks resolve from many sources | **Confirmed.** Read-only browser; **seven** sources |
-| `SessionEnd` has a 1.5-second default timeout | **REFUTED.** No such default exists anywhere |
+| `SessionEnd` has a 1.5-second default timeout | **Confirmed on implementation re-check.** The current official reference documents the event-specific default; S5 uses `timeout: 2` |
 
 ### Applied
 
@@ -1421,12 +1453,12 @@ learned from K1 and K2, applied this time to a reviewer's claims instead of an a
 - **C15 (P3) - "all resolved" overstated the eng review.** Two of its issues were deferrals, not
   fixes. Wording corrected below.
 
-### Refuted
+### Corrected after implementation-time source re-check
 
-- **C16 (P3) - the claimed 1.5-second `SessionEnd` budget does not exist.** Command hooks
-  default to 600 s; only `UserPromptSubmit` and `MessageDisplay` lower it. The plan's own 2 s
-  ceiling is self-imposed, which is worth knowing: it is a choice about operator experience, not
-  a constraint to be defended against.
+- **C16 (P3) - the claimed 1.5-second `SessionEnd` budget does exist.** The earlier Stage 3b
+  refutation applied the generic command-hook default and missed the event-specific
+  `SessionEnd` default in the current official reference. S5 therefore configures
+  `timeout: 2`; the measured hook remains below the documented default.
 
 ### Recorded, not applied - these are operator decisions, not defects
 
@@ -1459,36 +1491,37 @@ own work, and does it generously.
 
 Synthesized from this review's findings. Each task derives from a specific finding above.
 
-- [ ] **T1 (P1, human: ~1h / CC: ~10min)** - `state_reaper.py` / `session_lifecycle.py` - add `consumed_at` to the verdict file and make the reaper honour it
+- [x] **T1 (P1, human: ~1h / CC: ~10min)** - `state_reaper.py` / `session_lifecycle.py` - add `consumed_at` to the verdict file and make the reaper honour it
   - Surfaced by: Eng review issue 1 - reaper exclusion list covers liveness, not delivery
   - Files: `scripts/session_lifecycle.py`, `scripts/state_reaper.py`, `scripts/session_state.py`, `scripts/tests/test_state_reaper.py`
   - Verify: `python -m pytest -q scripts/tests/test_state_reaper.py` - unconsumed survives past retention, consumed does not, outer bound removes either way
-- [ ] **T2 (P1, human: ~1h / CC: ~10min)** - plan document - reconcile the Definition of Done and the stale review prose
+- [x] **T2 (P1, human: ~1h / CC: ~10min)** - plan document - reconcile the Definition of Done and the stale review prose
   - Surfaced by: Eng review issue 4 - DoD gates on split-out and already-shipped work
   - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`
   - Verify: every DoD line names work this plan ships; no line duplicates hotfix `ad12cf2`
   - **Applied during the review itself; listed for the record.**
-- [ ] **T3 (P2, human: ~30min / CC: ~5min)** - `session_state.py` - merge registry resolution in, delete the separate module from the slice
+- [x] **T3 (P2, human: ~30min / CC: ~5min)** - `session_state.py` - merge registry resolution in, delete the separate module from the slice
   - Surfaced by: Eng review D1 - Finding 5.2's rule reintroduced the duplication it removed
   - Files: `scripts/session_state.py`, `scripts/tests/test_session_state.py`
   - Verify: `python -m pytest -q scripts/tests/test_session_state.py`; no `session_registry` import anywhere
-- [ ] **T4 (P2, human: ~30min / CC: ~5min)** - `session_router.py` / `curator_claims.py` - record and consume `transcript_path`
+- [x] **T4 (P2, human: ~30min / CC: ~5min)** - `session_router.py` / `curator_claims.py` - record and consume `transcript_path`
   - Surfaced by: Eng review issue 3 - curator's input was unsourced
   - Files: `scripts/session_router.py`, `scripts/curator_claims.py`, `scripts/session_state.py`, tests for both
-  - Verify: recorded on `startup`/`clear`, untouched on `resume`/`compact`/`fork`; missing and dangling both yield `UNVERIFIED`; no glob fallback exists in the source
-- [ ] **T5 (P2, human: ~45min / CC: ~10min)** - `/curator` - report absent hook entries
+  - Verify: recorded fresh on `startup`/`clear`/`fork`, untouched on `resume`/`compact`; missing and dangling both yield `UNVERIFIED`; no glob fallback exists in the source
+- [x] **T5 (P2, human: ~45min / CC: ~10min)** - `/curator` - report absent hook entries
   - Surfaced by: Eng review issue 2 - A9's check was circular and K3's replacement had no owner
   - Files: `skills/curator/SKILL.md`, `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
-  - Verify: zero / one / both entries present each produce the right report; unreadable `settings.json` reports uncertainty, never "wired"
-- [ ] **T6 (P2, human: ~1h / CC: ~10min)** - test suite - assert token and wall-time budgets
+  - Verify: historical acceptance text superseded; T13 is the executable contract
+  - **Superseded by T13.** The implementation deliberately removes this parser and points to the authoritative `/hooks` view instead.
+- [x] **T6 (P2, human: ~1h / CC: ~10min)** - test suite - assert token and wall-time budgets
   - Surfaced by: Eng review issue 5 - budgets measured once, never enforced
   - Files: `scripts/tests/test_session_router.py`
   - Verify: assertions fail when the injected payload exceeds its ceiling
-- [ ] **T7 (P2, human: ~3h / CC: ~25min)** - `S1` - measure `SessionStart` p95 on Windows and write the budget from it
+- [x] **T7 (P2, human: ~3h / CC: ~25min)** - `S1` - measure `SessionStart` p95 on Windows and write the budget from it
   - Surfaced by: Eng review issue 6 - 400 ms did not fit its own workload
   - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`, `scripts/tests/test_session_router.py`
-  - Verify: recorded breakdown for interpreter startup, each `git` spawn, the scan and the reads; budget in the plan matches the measurement; reap excluded from the injection budget
-- [ ] **T8 (P3, human: ~10min / CC: ~2min)** - `IDEA_BOX.md` - capture the installer-managed hook block
+  - Verify: recorded breakdown for interpreter startup, each `git` spawn, the scan and the reads; budget in the plan matches the measurement; reap counted inside the full SessionStart budget
+- [x] **T8 (P3, human: ~10min / CC: ~2min)** - `IDEA_BOX.md` - capture the installer-managed hook block
   - Surfaced by: Eng review issue 7
   - Files: `IDEA_BOX.md`
   - Verify: entry names all three prior deferrals and their reasoning
@@ -1496,30 +1529,53 @@ Synthesized from this review's findings. Each task derives from a specific findi
 
 From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them together.
 
-- [ ] **T9 (P1, human: ~45min / CC: ~10min)** - `session_router.py` - `fork` creates a fresh scratch file and records its own `transcript_path`
+- [x] **T9 (P1, human: ~45min / CC: ~10min)** - `session_router.py` - `fork` creates a fresh scratch file and records its own `transcript_path`
   - Surfaced by: Codex C3 and C7 - `SessionStart` carries no parent session id, verified against the hooks reference
   - Files: `scripts/session_router.py`, `scripts/tests/test_session_router.py`
   - Verify: `fork` writes a new file and never reads `session_plan_<parent>`; no recency-based lookup exists in the source
-- [ ] **T10 (P1, human: ~30min / CC: ~5min)** - `state_reaper.py` - split `surfaced_at` from `consumed_at`; only `consumed_at` permits a reap
+- [x] **T10 (P1, human: ~30min / CC: ~5min)** - `state_reaper.py` - split `surfaced_at` from `consumed_at`; only `consumed_at` permits a reap
   - Surfaced by: Codex C4 - injecting a verdict into a session's context is not the operator reading it
   - Files: `scripts/session_lifecycle.py`, `scripts/state_reaper.py`, `scripts/session_router.py`, `scripts/tests/test_state_reaper.py`
   - Verify: a verdict surfaced ten times and never curated still survives a reap; only `/curator` stamps `consumed_at`
-- [ ] **T11 (P1, human: ~1h / CC: ~15min)** - `session_lifecycle.py` - attribute the verdict to the session, add `NO-OP`
+- [x] **T11 (P1, human: ~1h / CC: ~15min)** - `session_lifecycle.py` - attribute the verdict to the session, add `NO-OP`
   - Surfaced by: Codex C5 - the verdict graded repository state, so a session that did nothing scored `ARCHIVE-OK`
   - Files: `scripts/session_lifecycle.py`, `scripts/tests/test_session_lifecycle.py`
   - Verify: session opening on clean `main` that changes nothing yields `NO-OP`; unrelated pre-existing dirt does not force `HANDOFF`
-- [ ] **T12 (P1, human: ~30min / CC: ~5min)** - `S1`/`S2` - move the full-run measurement to S2, leave the floor in S1
+- [x] **T12 (P1, human: ~30min / CC: ~5min)** - `S1`/`S2` - move the full-run measurement to S2, leave the floor in S1
   - Surfaced by: Codex C1 - S1 cannot measure a router S2 has not built yet
   - Files: `design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md`, `scripts/tests/test_session_router.py`
   - Verify: the reap's cost is inside the SessionStart budget, not beside it
-- [ ] **T13 (P2, human: ~30min / CC: ~5min)** - `/curator` - delete the `settings.json` parser; point at `/hooks`
+- [x] **T13 (P2, human: ~30min / CC: ~5min)** - `/curator` - delete the `settings.json` parser; point at `/hooks`
   - Surfaced by: Codex C9 - hooks resolve from seven sources, so one file cannot prove absence, and `/hooks` already ships
   - Files: `skills/curator/SKILL.md`, `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
   - Verify: no code reads `settings.json`; `/curator` reports scratch-file evidence and refers to `/hooks`
-- [ ] **T14 (P2, human: ~45min / CC: ~10min)** - `curator_claims.py` - report the transcript's observed tail, never claim completeness
+- [x] **T14 (P2, human: ~45min / CC: ~10min)** - `curator_claims.py` - report the transcript's observed tail, never claim completeness
   - Surfaced by: Codex C8 - the transcript "may lag the in-memory conversation", verified verbatim
   - Files: `scripts/curator_claims.py`, `scripts/tests/test_curator_claims.py`
   - Verify: a fixture whose newest turn is missing from the transcript yields no `VERIFIED` for that turn's claims
+
+### Implementation review hardening - 2026-07-25
+
+The exact-head local review found and closed the following ship blockers before the review
+packet was frozen:
+
+- model-editable scratch is no longer provenance; `session.binding.v1` owns repo, worktree,
+  start SHA, transcript, branch, and dirty baseline immutably;
+- Git path evidence is NUL-delimited and fail-closed, including Unicode and control-character
+  filenames; incomplete collection cannot produce `REFUTED`;
+- the curator's model-facing window is assistant text only, while test exit evidence requires
+  a correlated structured tool result and a recognised test runner;
+- the reaper checks its deadline while enumerating, protects sessions with a fresh bound
+  transcript, and includes binding files in its owned bounded state;
+- trunk proof compares the cumulative session effect, including multi-commit work represented
+  by a squash landing, instead of using per-commit `git cherry`;
+- verdict values are an exact enum including `UNKNOWN`, and the newest pending verdict remains
+  discoverable beyond 400 files.
+
+Implementation validation at this head: focused lifecycle suite `90 passed`; full
+`scripts/tests` suite `281 passed, 2 subtests passed`; scoped Ruff, `compileall`, and
+`git diff --check` all exit 0. Hook configuration remains deliberately untouched pending C11
+and C14.
 
 ## GSTACK REVIEW REPORT
 
@@ -1548,9 +1604,10 @@ From Stage 3b. These supersede parts of T1, T4, T5 and T7 above - read them toge
   is mostly right. Five of the eng review's seven fixes were overturned or repaired, two of them
   for building on hook behaviour nobody looked up - the third time that pattern has cost this
   plan, and the first time the reviewer committed it. Every hook-mechanism claim on both sides
-  was then checked against the official reference before folding, which refuted one of the
-  lane's own findings (the 1.5-second `SessionEnd` budget does not exist). Cross-model
-  disagreement resolved by consulting the source, not by preferring a model.
+  was then checked against the official reference before folding. The implementation-time
+  source re-check later corrected C16: the current reference does document the 1.5-second
+  `SessionEnd` default. Cross-model disagreement is resolved by consulting the current source,
+  not by preferring a model or preserving an earlier review verdict.
 - **VERDICT:** CEO CLEARED + AUDIT APPLIED + FRONTIER APPLIED + ENG CLEARED + **STAGE 3b
   FOLDED**. Plan cut to core by operator decision, reconciled with its own record by the eng
   review, and corrected by an independent frontier lane that graded the review itself; two
