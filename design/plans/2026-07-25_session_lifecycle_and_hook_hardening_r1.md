@@ -572,7 +572,8 @@ direct scratch-file evidence of a router run, and refers the operator to `/hooks
 - record measured token cost and wall time of every SessionStart branch and of `/curator`;
 - produce the implementation review packet;
 - obtain exact-head review through the operator-selected `/fwp`;
-- fix ship-blocking findings, batch one push, ready the PR once, merge;
+- run the path-scoped `Session Lifecycle CI` workflow on Windows/Python 3.12;
+- fix ship-blocking findings, batch one push, ready the PR once, merge the inactive S1-S4 core;
 - fast-forward the operator checkout;
 - enable hooks in `settings.json` **as the final step**, one event at a time, verifying
   after each that a session still starts, compacts, and ends cleanly.
