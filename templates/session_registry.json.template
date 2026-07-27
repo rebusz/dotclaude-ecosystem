@@ -11,6 +11,115 @@
       "idea_paths": [
         "IDEA_BOX.md"
       ]
+    },
+    {
+      "name": "TSU",
+      "root": "D:/APPS/TSU",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "Tsignal 5.0",
+      "root": "D:/APPS/Tsignal 5.0",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "EcosystemControl",
+      "root": "D:/APPS/EcosystemControl",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [],
+      "idea_paths": []
+    },
+    {
+      "name": "WatchF",
+      "root": "D:/APPS/WatchF",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "TsignalLAB",
+      "root": "D:/APPS/TsignalLAB",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "Obsidian Flow",
+      "root": "D:/APPS/Obsidian Flow",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "Hue Flow",
+      "root": "D:/APPS/Hue Flow",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": []
+    },
+    {
+      "name": "ViF",
+      "root": "D:/APPS/ViF",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
+    },
+    {
+      "name": "Vavo OS",
+      "root": "D:/APPS/Vavo OS",
+      "plan_paths": [
+        "design/plans"
+      ],
+      "vision_paths": [
+        "design/visions"
+      ],
+      "idea_paths": [
+        "IDEA_BOX.md"
+      ]
     }
   ]
 }

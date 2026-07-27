@@ -114,6 +114,66 @@ def _assistant(text: str, timestamp: str = "2026-07-25T19:00:00Z") -> dict[str, 
 
 
 class TestTranscriptWindow(unittest.TestCase):
+    def test_codex_rollout_projects_assistant_claim_and_command_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "rollout.jsonl"
+            _write_transcript(
+                transcript,
+                [
+                    {
+                        "timestamp": "2026-07-27T17:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Implemented scripts/adapter.py. 6 tests passed.",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "timestamp": "2026-07-27T17:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "shell_command",
+                            "call_id": "call-safe-1",
+                            "arguments": (
+                                '{"command":"python -m pytest -q '
+                                'scripts/tests/test_adapter.py"}'
+                            ),
+                        },
+                    },
+                    {
+                        "timestamp": "2026-07-27T17:00:02Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": "call-safe-1",
+                            "output": "Exit code: 0\nOutput:\n6 passed",
+                        },
+                    },
+                ],
+            )
+
+            window = curator.build_transcript_window(transcript)
+
+            self.assertEqual(
+                window.assistant_messages,
+                ("Implemented scripts/adapter.py. 6 tests passed.",),
+            )
+            self.assertEqual(window.observed_tail, "2026-07-27T17:00:02Z")
+            self.assertEqual(len(window.command_evidence), 1)
+            self.assertEqual(
+                window.command_evidence[0].command,
+                "python -m pytest -q scripts/tests/test_adapter.py",
+            )
+            self.assertEqual(window.command_evidence[0].exit_code, 0)
+            self.assertEqual(window.command_evidence[0].output, "6 passed")
+
     def test_nested_secret_is_redacted_before_window_is_assembled(self):
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "session.jsonl"

@@ -213,6 +213,68 @@ class TestVerdictRules(unittest.TestCase):
 
 
 class TestTranscriptAttribution(unittest.TestCase):
+    def test_malformed_codex_write_record_marks_scan_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            transcript = Path(tmp) / "rollout.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "apply_patch",
+                            "call_id": "call-malformed",
+                            "arguments": "not-json",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            paths, complete = lifecycle.transcript_written_paths(
+                transcript,
+                repo_root=root,
+            )
+
+            self.assertEqual(paths, ())
+            self.assertFalse(complete)
+
+    def test_extracts_codex_apply_patch_paths_without_patch_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            transcript = Path(tmp) / "rollout.jsonl"
+            patch = (
+                "*** Begin Patch\n"
+                f"*** Add File: {root / 'src' / 'new.py'}\n"
+                "+API_KEY=must-not-leak\n"
+                f"*** Update File: {Path(tmp) / 'outside.py'}\n"
+                "@@\n"
+                "-old\n"
+                "+new\n"
+                "*** End Patch\n"
+            )
+            record = {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "apply_patch",
+                    "call_id": "call-safe-1",
+                    "arguments": json.dumps({"input": patch}),
+                },
+            }
+            transcript.write_text(json.dumps(record), encoding="utf-8")
+
+            paths, complete = lifecycle.transcript_written_paths(
+                transcript,
+                repo_root=root,
+            )
+
+            self.assertTrue(complete)
+            self.assertEqual(paths, ("src/new.py",))
+
     def test_extracts_only_write_like_tool_paths_without_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"

@@ -26,6 +26,11 @@ from session_state import (
     resolve_repository,
     validate_session_id,
 )
+from transcript_projection import (
+    project_record,
+    projection_complete,
+    write_path_candidates,
+)
 
 
 VERDICT_SCHEMA = "session.verdict.v1"
@@ -37,7 +42,6 @@ _MAX_PENDING_RESULTS = 400
 _VERDICT_LOCK_TIMEOUT_S = 0.2
 _VERDICT_LOCK_STALE_S = 5.0
 
-_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 _CLOSED_STATUSES = {"done", "closed", "complete", "completed", "resolved", "shipped"}
 
 
@@ -469,30 +473,13 @@ def transcript_written_paths(
             continue
         if not isinstance(record, dict):
             continue
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if (
-                not isinstance(block, dict)
-                or block.get("type") != "tool_use"
-                or block.get("name") not in _WRITE_TOOLS
-            ):
-                continue
-            tool_input = block.get("input")
-            if not isinstance(tool_input, dict):
-                continue
-            raw_path = (
-                tool_input.get("file_path")
-                or tool_input.get("path")
-                or tool_input.get("notebook_path")
-            )
-            relative = _relative_repo_path(raw_path, repo_root=repo_root)
-            if relative:
-                paths.append(relative)
+        if not projection_complete(record):
+            complete = False
+        for item in project_record(record):
+            for raw_path in write_path_candidates(item):
+                relative = _relative_repo_path(raw_path, repo_root=repo_root)
+                if relative:
+                    paths.append(relative)
     return tuple(dict.fromkeys(paths)), complete
 
 

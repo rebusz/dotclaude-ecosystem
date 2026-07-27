@@ -1,0 +1,10 @@
+[
+  {
+    "error": "response timeout after 180s",
+    "label": "Gemini current UI model",
+    "model_id": "gemini/current-ui-model",
+    "slug": "01_gemini_current",
+    "source": "gemini_cdp",
+    "success": false
+  }
+]
