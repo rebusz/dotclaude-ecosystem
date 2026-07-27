@@ -206,6 +206,27 @@ def project_record(record: dict[str, Any]) -> tuple[ProjectedItem, ...]:
                 arguments=arguments,
             ),
         )
+    if payload_type == "custom_tool_call":
+        tool_id = payload.get("call_id")
+        tool_name = payload.get("name")
+        raw_input = payload.get("input")
+        if (
+            not isinstance(tool_id, str)
+            or not tool_id
+            or not isinstance(tool_name, str)
+            or not tool_name
+            or not isinstance(raw_input, str)
+        ):
+            return ()
+        return (
+            ProjectedItem(
+                kind="tool_call",
+                timestamp=timestamp,
+                tool_id=tool_id,
+                tool_name=tool_name,
+                arguments={"input": raw_input},
+            ),
+        )
     if payload_type == "function_call_output":
         tool_id = payload.get("call_id")
         raw_output = payload.get("output")
@@ -285,8 +306,14 @@ def projection_complete(record: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
     payload_type = payload.get("type")
-    if payload_type in {"function_call", "function_call_output"}:
+    if payload_type in {
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+    }:
         return bool(project_record(record))
+    if isinstance(payload_type, str) and payload_type.startswith("custom_tool_"):
+        return False
     if payload_type == "message" and payload.get("role") == "assistant":
         return isinstance(payload.get("content"), list)
     return True

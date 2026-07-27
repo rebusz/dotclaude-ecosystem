@@ -148,6 +148,58 @@ class TestTranscriptProjection(unittest.TestCase):
         self.assertEqual(result_items[0].exit_code, 0)
         self.assertEqual(result_items[0].output, "6 passed")
 
+    def test_codex_custom_tool_call_projects_apply_patch_input(self):
+        patch = (
+            "*** Begin Patch\n"
+            "*** Add File: src/new.py\n"
+            "+print('safe')\n"
+            "*** End Patch\n"
+        )
+        record = {
+            "timestamp": "2026-07-27T17:02:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "apply_patch",
+                "call_id": "call-patch-1",
+                "input": patch,
+            },
+        }
+
+        items = projection.project_record(record)
+
+        self.assertEqual(
+            items,
+            (
+                projection.ProjectedItem(
+                    kind="tool_call",
+                    timestamp="2026-07-27T17:02:00Z",
+                    tool_id="call-patch-1",
+                    tool_name="apply_patch",
+                    arguments={"input": patch},
+                ),
+            ),
+        )
+        self.assertTrue(projection.projection_complete(record))
+        self.assertEqual(
+            projection.write_path_candidates(items[0]),
+            ("src/new.py",),
+        )
+
+    def test_malformed_codex_custom_tool_call_is_incomplete(self):
+        record = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "apply_patch",
+                "call_id": "call-patch-1",
+                "input": {"patch": "not-structural"},
+            },
+        }
+
+        self.assertEqual(projection.project_record(record), ())
+        self.assertFalse(projection.projection_complete(record))
+
     def test_claude_tool_use_and_result_keep_existing_semantics(self):
         call = {
             "timestamp": "2026-07-27T17:03:00Z",

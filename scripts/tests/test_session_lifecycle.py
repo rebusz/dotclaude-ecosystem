@@ -275,6 +275,36 @@ class TestTranscriptAttribution(unittest.TestCase):
             self.assertTrue(complete)
             self.assertEqual(paths, ("src/new.py",))
 
+    def test_extracts_codex_custom_apply_patch_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            transcript = Path(tmp) / "rollout.jsonl"
+            patch = (
+                "*** Begin Patch\n"
+                f"*** Add File: {root / 'src' / 'custom.py'}\n"
+                "+TOKEN=must-not-leak\n"
+                "*** End Patch\n"
+            )
+            record = {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "call_id": "call-custom-1",
+                    "input": patch,
+                },
+            }
+            transcript.write_text(json.dumps(record), encoding="utf-8")
+
+            paths, complete = lifecycle.transcript_written_paths(
+                transcript,
+                repo_root=root,
+            )
+
+            self.assertTrue(complete)
+            self.assertEqual(paths, ("src/custom.py",))
+
     def test_extracts_only_write_like_tool_paths_without_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
