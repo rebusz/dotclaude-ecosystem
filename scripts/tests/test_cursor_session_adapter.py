@@ -305,8 +305,9 @@ class TestCursorSessionAdapter(unittest.TestCase):
     def test_zero_or_many_roots_never_guess_a_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
-            for roots in ([], [str(root), str(root / "other")]):
+            for index, roots in enumerate(([], [str(root), str(root / "other")])):
                 with self.subTest(roots=roots):
+                    state_dir = root / f"state-{index}"
                     event = _event(
                         "sessionStart",
                         root=root,
@@ -320,11 +321,12 @@ class TestCursorSessionAdapter(unittest.TestCase):
                             "handle_event",
                         ) as router,
                     ):
-                        output = adapter.handle_event(event, state_dir=root / "state")
+                        output = adapter.handle_event(event, state_dir=state_dir)
 
                     self.assertEqual(output, {})
                     resolve.assert_not_called()
                     router.assert_not_called()
+                    self.assertFalse((state_dir / "hook_errors.log").exists())
 
     def test_cli_adapter_rejects_ide_surface_and_unregistered_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -345,7 +347,11 @@ class TestCursorSessionAdapter(unittest.TestCase):
                     {},
                 )
                 router.assert_not_called()
+            error = (root / "state" / "hook_errors.log").read_text(encoding="utf-8")
+            self.assertIn("CURSOR_ADAPTER_UNSUPPORTED_SURFACE noop", error)
+            self.assertNotIn("CURSOR_ADAPTER_FAILED", error)
 
+            state_dir = root / "unregistered-state"
             with (
                 mock.patch.object(adapter, "resolve_repository", return_value=None),
                 mock.patch.object(
@@ -354,10 +360,11 @@ class TestCursorSessionAdapter(unittest.TestCase):
                 ) as router,
             ):
                 self.assertEqual(
-                    adapter.handle_event(event, state_dir=root / "state"),
+                    adapter.handle_event(event, state_dir=state_dir),
                     {},
                 )
                 router.assert_not_called()
+            self.assertFalse((state_dir / "hook_errors.log").exists())
 
     def test_end_path_mismatch_fails_closed_without_source_swap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -614,6 +621,23 @@ class TestCursorSessionAdapter(unittest.TestCase):
                 )
                 self.assertIn("additional_context", repeated)
                 self.assertEqual(bindings[0].read_bytes(), binding_before)
+
+                compact = _event(
+                    "preCompact",
+                    root=root,
+                    transcript_path=None,
+                )
+                compact_output = adapter.handle_event(
+                    compact,
+                    registry_path=registry,
+                    state_dir=state_dir,
+                )
+                self.assertIn("additional_context", compact_output)
+                self.assertEqual(bindings[0].read_bytes(), binding_before)
+                self.assertEqual(
+                    list(state_dir.glob("session_verdict_*.json")),
+                    [],
+                )
 
                 end = _event(
                     "sessionEnd",

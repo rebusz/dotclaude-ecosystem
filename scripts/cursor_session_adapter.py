@@ -34,7 +34,7 @@ def _registered_workspace(
     *,
     registry_path: Path | None,
     state_dir: Path | None,
-) -> RepositoryRegistration:
+) -> RepositoryRegistration | None:
     roots = event.get("workspace_roots")
     if (
         not isinstance(roots, list)
@@ -42,10 +42,10 @@ def _registered_workspace(
         or not isinstance(roots[0], str)
         or not roots[0].strip()
     ):
-        raise ValueError("Cursor CLI requires exactly one workspace root")
+        return None
     root = Path(roots[0]).expanduser()
     if not root.is_absolute():
-        raise ValueError("Cursor CLI workspace root must be absolute")
+        return None
     normalized_root = root.resolve(strict=False)
     registration = resolve_repository(
         normalized_root,
@@ -56,7 +56,7 @@ def _registered_workspace(
         registration is None
         or registration.worktree_root.resolve(strict=False) != normalized_root
     ):
-        raise ValueError("Cursor CLI workspace root is not an exact registered root")
+        return None
     return registration
 
 
@@ -133,9 +133,14 @@ def handle_event(
 
     try:
         if not isinstance(event, dict):
-            raise ValueError("Cursor event must be an object")
+            raise TypeError("Cursor event must be an object")
         if not _CURSOR_CLI_VERSION_RE.fullmatch(str(event.get("cursor_version") or "")):
-            raise ValueError("unsupported Cursor surface")
+            append_hook_error(
+                "CURSOR_ADAPTER_UNSUPPORTED_SURFACE",
+                "noop",
+                state_dir=state_dir,
+            )
+            return {}
         event_name = event.get("hook_event_name")
         if event_name not in {"sessionStart", "sessionEnd", "preCompact"}:
             return {}
@@ -145,6 +150,8 @@ def handle_event(
             registry_path=registry_path,
             state_dir=state_dir,
         )
+        if registration is None:
+            return {}
         if event_name == "preCompact":
             binding = read_session_binding(session_id, state_dir=state_dir)
             if binding is None:
@@ -224,6 +231,13 @@ def handle_event(
                 state_dir=state_dir,
             )
         )
+    except (TypeError, ValueError) as exc:
+        append_hook_error(
+            "CURSOR_ADAPTER_INVALID_INPUT",
+            type(exc).__name__,
+            state_dir=state_dir,
+        )
+        return {}
     except Exception as exc:  # noqa: BLE001 - host hooks must fail open
         append_hook_error(
             "CURSOR_ADAPTER_FAILED",

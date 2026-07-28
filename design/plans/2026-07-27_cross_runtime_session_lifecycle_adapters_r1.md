@@ -1401,15 +1401,15 @@ activation. The next smallest eligible slice is CLI-only and requires
 | Paid cross-model audit | custom paid, no Antigravity/Kimi | 5 returned, 2 unavailable | CLEAR/PARTIAL | 7 valid contract gaps folded; unavailable lanes disclosed |
 | Eng Review | Cursor amendment `/plan-eng-review` | 1 | CLEAR | 7 issues folded; sequential CU0-L through CU4 gates pinned |
 | CU0-L live capture | native IDE and CLI | 2 surfaces | CLEAR/PARTIAL | CLI promoted; IDE degraded; `preCompact` unproven |
-| Implementation Review | exact-head diff review | 0 | PENDING | CU1 local validation passed; commit and exact-head review still required |
+| Implementation Review | exact-head diff review | 1 | CLEAR/FIXING | `b4ad2cc`: no ship-blocking findings; three in-scope FIX-LATER items folded before final-head review |
 | Design Review | UI/UX | 0 | N/A | No UI scope |
 
 - **BOUNDARY:** CLI adapter source and tests only; no shared lifecycle schema or
   policy edit, installer, user hook, persistent activation, IDE, Antigravity,
   or Kimi action occurred.
-- **NEXT GATE:** exact-head implementation review and R1 landing; no new
-  operator token is required.
-- **VERDICT:** CU1 IMPLEMENTED AND LOCALLY VALIDATED; EXACT-HEAD REVIEW PENDING;
-  IDE HELD DEGRADED.
+- **NEXT GATE:** complete R1 landing only after the corrected exact head passes
+  independent review; no new operator token is required.
+- **VERDICT:** CU1 IMPLEMENTED AND LOCALLY VALIDATED; LANDING REQUIRES A
+  CORRECTED-HEAD REVIEW PASS; IDE HELD DEGRADED.
 
 NO UNRESOLVED DECISIONS
