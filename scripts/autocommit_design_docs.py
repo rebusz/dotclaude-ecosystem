@@ -68,12 +68,18 @@ def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
 
 
 def _push(git_root: str, amended: bool) -> None:
-    """Best-effort push. An amend rewrites the tip, so the branch-local force
-    (lease-guarded) is the only way to keep the remote backup in sync."""
-    res = _git(["push", "origin", "HEAD"], cwd=git_root)
-    if res.returncode == 0 or not amended:
-        return
-    _git(["push", "--force-with-lease", "origin", "HEAD"], cwd=git_root)
+    """Best-effort push, DETACHED — network must not block the tool-call loop
+    (a slow remote used to hold PostToolUse for up to 8s). An amend rewrites
+    the tip, so the lease-guarded force fallback keeps the remote in sync."""
+    cmd = "git push origin HEAD"
+    if amended:
+        cmd += " || git push --force-with-lease origin HEAD"
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    subprocess.Popen(
+        cmd, shell=True, cwd=git_root,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=flags,
+    )
 
 
 def main() -> None:
