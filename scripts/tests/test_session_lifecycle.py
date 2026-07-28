@@ -295,7 +295,21 @@ class TestTranscriptAttribution(unittest.TestCase):
                     "input": patch,
                 },
             }
-            transcript.write_text(json.dumps(record), encoding="utf-8")
+            output = {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-custom-1",
+                    "output": (
+                        '{"output":"Success","metadata":{"exit_code":0,'
+                        '"duration_seconds":0.0}}'
+                    ),
+                },
+            }
+            transcript.write_text(
+                "\n".join((json.dumps(record), json.dumps(output))),
+                encoding="utf-8",
+            )
 
             paths, complete = lifecycle.transcript_written_paths(
                 transcript,

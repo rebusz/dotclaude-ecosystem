@@ -200,6 +200,47 @@ class TestTranscriptProjection(unittest.TestCase):
         self.assertEqual(projection.project_record(record), ())
         self.assertFalse(projection.projection_complete(record))
 
+    def test_codex_custom_tool_output_shapes_are_complete(self):
+        legacy = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-patch-1",
+                "output": (
+                    '{"output":"Success","metadata":{"exit_code":0,'
+                    '"duration_seconds":0.0}}'
+                ),
+            },
+        }
+        current = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-exec-1",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": "Script completed\nExit code: 0\n",
+                    }
+                ],
+            },
+        }
+
+        self.assertTrue(projection.projection_complete(legacy))
+        self.assertTrue(projection.projection_complete(current))
+
+    def test_malformed_codex_custom_tool_output_is_incomplete(self):
+        malformed = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-patch-1",
+                "output": [{"type": "image", "text": 123}],
+            },
+        }
+
+        self.assertFalse(projection.projection_complete(malformed))
+
     def test_claude_tool_use_and_result_keep_existing_semantics(self):
         call = {
             "timestamp": "2026-07-27T17:03:00Z",

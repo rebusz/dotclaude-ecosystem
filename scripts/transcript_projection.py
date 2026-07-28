@@ -312,6 +312,21 @@ def projection_complete(record: dict[str, Any]) -> bool:
         "custom_tool_call",
     }:
         return bool(project_record(record))
+    if payload_type == "custom_tool_call_output":
+        tool_id = payload.get("call_id")
+        raw_output = payload.get("output")
+        if not isinstance(tool_id, str) or not tool_id:
+            return False
+        if isinstance(raw_output, str):
+            return True
+        if not isinstance(raw_output, list):
+            return False
+        return all(
+            isinstance(block, dict)
+            and block.get("type") in {"input_text", "output_text"}
+            and isinstance(block.get("text"), str)
+            for block in raw_output
+        )
     if isinstance(payload_type, str) and payload_type.startswith("custom_tool_"):
         return False
     if payload_type == "message" and payload.get("role") == "assistant":
