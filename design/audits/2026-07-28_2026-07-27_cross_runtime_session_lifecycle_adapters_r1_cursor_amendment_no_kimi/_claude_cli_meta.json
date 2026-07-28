@@ -1,0 +1,7 @@
+{
+  "latency_s": 209.29,
+  "model": "opus",
+  "source": "claude_cli_shared",
+  "success": true,
+  "target": "D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md"
+}

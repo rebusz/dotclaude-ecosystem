@@ -1,0 +1,23 @@
+{
+  "date": "2026-07-28",
+  "mode": "paid_custom_no_antigravity_no_kimi",
+  "scope": "cursor_plan_amendment_review_only",
+  "returned": [
+    {"lane": "openrouter_deepseek_v4_pro", "tokens": 17496},
+    {"lane": "openrouter_mistral_medium_3_5", "tokens": 17442},
+    {"lane": "openrouter_minimax_m3", "tokens": 17036},
+    {"lane": "openrouter_bytedance_seed_1_6", "tokens": 16575},
+    {"lane": "claude_cli_opus", "tokens": null}
+  ],
+  "unavailable": [
+    {"lane": "gemini_current_ui", "reason": "response timeout after 180s"},
+    {"lane": "perplexity_best_sonar", "reason": "cdp_role_busy:chrome_ppl"}
+  ],
+  "excluded_by_operator": [
+    "antigravity",
+    "standalone_kimi",
+    "perplexity_kimi"
+  ],
+  "verdict": "CLEAR_FOR_CU0_L_GATE_PARTIAL_PANEL",
+  "authorization_granted": false
+}

@@ -1,7 +1,22 @@
-# Cross-Runtime Session Lifecycle Adapters — Codex First
+---
+title: Cross-Runtime Session Lifecycle Adapters - Codex Shipped, Cursor Discovery
+date: 2026-07-27
+status: active
+status_detail: cursor-cu1-cli-complete-landing-gated-by-exact-head
+risk: R1
+phase: landing
+repos: [dotclaude-ecosystem]
+tags: [agent-tooling, hooks, session-lifecycle, cursor, codex]
+related:
+  - design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md
+  - design/plans/2026-06-27_global_agent_workflow_os.md
+  - design/plans/2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md
+---
 
-**Date:** 2026-07-27
-**Status:** ACTIVE — Codex slice in implementation workflow
+# Cross-Runtime Session Lifecycle Adapters — Codex Shipped, Cursor Discovery
+
+**Date:** 2026-07-27; amended 2026-07-28
+**Status:** ACTIVE — Codex shipped and live; Cursor CLI CU1 implementation complete, landing gated by exact-head review; IDE degraded
 **Risk:** R1 (advisory local tooling; no broker, order-path, or live-state writes)
 **Workflow:** `/fwp`
 **Owner:** `dotclaude-ecosystem`
@@ -23,8 +38,8 @@ Linked predecessors:
 Runtime rollout order is frozen:
 
 1. Claude Code — shipped and active.
-2. Codex — this implementation slice.
-3. Cursor — discovery and adapter slice after Codex acceptance.
+2. Codex — shipped and active.
+3. Cursor — discovery complete; bounded adapter slice is next.
 4. Antigravity — discovery and adapter slice after Cursor acceptance.
 5. Kimi — discovery and adapter slice after Antigravity acceptance.
 
@@ -54,6 +69,52 @@ smallest native adapter necessary to feed the existing engine.
 - A brand-new persisted Codex session proves the live user-level hook, state
   creation, injected context, and close verdict.
 
+The Codex slice met this definition on 2026-07-27 through PRs #55-#57. The
+machine-local hook and registry remain active at the exact hashes recorded below.
+
+## Definition of done — Cursor slice
+
+- Cursor IDE and Cursor Agent CLI are treated as separate host surfaces. Each
+  surface is claimed only after its own native live acceptance; success on one
+  does not imply success on the other.
+- A native `sessionStart` event supplies a `conversation_id`, explicit
+  workspace roots, and an explicit `transcript_path` or `null`. Identity
+  stability is proven only within one host surface and one conversation across
+  start/resume/preCompact/end; IDE and CLI identities are never compared or
+  assumed globally collision-free.
+- Full lifecycle state is allowed only for exactly one canonical, registered Git
+  root. Zero, multiple, non-Git, invalid, or unregistered roots remain a bounded
+  no-state/degraded path; the adapter never guesses among roots.
+- The adapter maps only the proven host identity into the existing write-once
+  lifecycle binding. A later event with a different transcript path fails closed
+  and cannot replace the start-time binding.
+- A native `sessionEnd` event for the same conversation delegates to the
+  existing coarse close evaluator. Missing end on crash remains reaper-owned;
+  no synthetic close event is fabricated.
+- Resume preserves the existing conversation identity and does not create a
+  second binding. New chat creates a new identity. `preCompact` records a
+  checkpoint against the same identity and never creates a new session; a
+  `preCompact` without a valid existing binding is a bounded no-op.
+- `transcript_path: null` is a deliberate lower-fidelity/no-op path. A non-null
+  path is parsed only after its real format and stability are captured in a
+  sanitized fixture; there is no SQLite scraping, chat-directory scanning, or
+  recency lookup.
+- Cursor `sessionStart` context injection is accepted only when a live probe
+  proves the model received the exact nonce. Hook execution without delivered
+  context is recorded as event-only evidence and context parity fails. The
+  probe nonce is random, stored only in its Temp manifest, returned through the
+  probe-owned `additional_context`, and exact-matched against the model response;
+  it never enters lifecycle persistence. The probe and adapter never emit
+  Cursor's `env` output field.
+- User-level installation preserves unknown hooks, validates the merged config,
+  keeps exact pre-activation bytes and SHA-256, supports emergency-off, and is a
+  semantic no-op when repeated.
+- Claude Code and Codex schemas, adapters, activation, and regression tests
+  remain unchanged.
+- Normal IDE start/end, normal CLI start/end, resume, new chat, compaction,
+  abrupt CLI termination, null transcript, and unregistered workspace each have
+  explicit evidence or an honest unsupported verdict.
+
 ## Verified current state
 
 - Repository head at planning start:
@@ -74,6 +135,71 @@ smallest native adapter necessary to feed the existing engine.
 - The active registry template currently covers only `dotclaude-ecosystem`, so
   global hook activation alone would not provide full ecosystem context.
 
+### Codex closeout evidence — 2026-07-27
+
+- `main == origin/main == 8fc7ac547221bb48d57e2d7a43fb7b3550dab6bd`.
+- PR #55 added the adapter, PR #56 repaired Windows PowerShell invocation, and
+  PR #57 repaired strict `SessionStart` output.
+- `C:/Users/dszub/.codex/hooks.json` is active with SHA-256
+  `AD03F5F7F854628BAD1A71F818452F25381D7C52E048F91D011D46AFFDB5B59A`.
+- `C:/Users/dszub/.claude/session_registry.json` is active with SHA-256
+  `B6712F9EFDBE26F81DBA0D8C8D4DB616FA57305036D502CBFC7A8459D3F2FD35`
+  and ten verified ecosystem roots.
+- Native persisted and ephemeral smokes passed; the final validation record is
+  354 tests plus 9 subtests. Measured p95 was 565 ms for start and 777 ms for
+  end, below the hard 2 s/3 s timeouts but slightly above the aspirational
+  500 ms/750 ms targets.
+
+### Cursor discovery evidence — 2026-07-28
+
+- Installed Cursor IDE: `3.13.21`, commit
+  `55434bd8062ece6fee083b82beed2aee42d253f0`, built
+  `2026-07-27T03:26:14.573Z`.
+- Installed Cursor Agent CLI: `2026.07.23-e383d2b` on Windows x64.
+- No user-level Cursor hook config exists at `~/.cursor/hooks.json`,
+  `~/.cursor/hook.json`, or `%APPDATA%/Cursor/User/hooks.json`. No activation
+  occurred during discovery.
+- Current primary Cursor hook documentation defines `sessionStart`,
+  `sessionEnd`, and `preCompact`. Common input includes `conversation_id`,
+  `generation_id`, model fields, `hook_event_name`, `cursor_version`,
+  `workspace_roots`, `user_email`, and nullable `transcript_path`.
+- The documentation calls `conversation_id` stable. `sessionStart` fires when a
+  new composer conversation is created and is fail-open/fire-and-forget for
+  blocking behavior while allowing `env` and `additional_context` output.
+  `sessionEnd` fires when a composer conversation ends; its response is logged
+  but not used.
+- Cloud agents do not expose the same lifecycle: `sessionEnd` is tied to the IDE
+  session rather than a cloud chat, and cloud `sessionStart` is not a truthful
+  pre-write boundary. Cloud agents are therefore outside this Cursor slice.
+- Local chats are stored under
+  `~/.cursor/chats/<workspace-hash>/<conversation-uuid>/store.db` with
+  `meta.json` containing `schemaVersion`, timestamps, `hasConversation`, and
+  `cwd`. This is not a stable JSONL contract and must not be reverse-engineered
+  as a transcript fallback.
+- A disposable trusted CLI Ask-mode probe used a project-level
+  `.cursor/hooks.json` with `sessionStart`, `sessionEnd`, and `preCompact`.
+  Two successful conversations persisted stable UUID chat directories, but zero
+  hook events were observed. The first model answer (`CONTEXT_SEEN`) was rejected
+  as a false positive because no physical hook event existed; the second
+  returned `UNKNOWN`.
+- The installed CLI bundle contains validators and merge logic for
+  `sessionStart`, `sessionEnd`, `preCompact`, `additional_context`, Claude hook
+  name mapping, and exact call/result identity. This proves schema presence, not
+  project-hook activation.
+- **Discovery verdict:** native Cursor lifecycle support exists, but
+  project-level CLI hook loading and IDE/CLI context delivery are `UNPROVEN` on
+  this machine. User-level activation was deliberately not tested while Cursor
+  was running.
+
+Primary sources:
+
+- Cursor Hooks reference: <https://cursor.com/docs/hooks>
+- Cursor CLI output/session identity reference:
+  <https://docs.cursor.com/en/cli/reference/output-format>
+- Cursor 1.7 hooks introduction: <https://cursor.com/changelog/1-7>
+- Cursor 2.4 lifecycle-hook expansion:
+  <https://cursor.com/changelog/2-4>
+
 ## Frozen boundaries
 
 - Advisory/best-effort only, preserving the operator's accepted C11/C14 posture.
@@ -82,10 +208,16 @@ smallest native adapter necessary to feed the existing engine.
 - No new lifecycle policy, verdict vocabulary, persistence schema, or second
   registry owner.
 - No transcript globbing or fallback to another session.
-- No assumptions about Cursor, Antigravity, or Kimi hook contracts during the
-  Codex slice.
+- No Cursor chat-database scraping, conversation-directory scanning, synthetic
+  identity, or recency inference.
+- No assumption that IDE, CLI, cloud agents, or project/user hook scopes behave
+  identically.
+- No user-level Cursor activation before reviewed source lands and exact
+  pre-activation bytes are captured.
+- No assumptions about Antigravity or Kimi hook contracts during the Cursor
+  slice.
 - No installer rewrite beyond the smallest idempotent activation path required
-  for Codex.
+  for the current host.
 
 ## Architecture
 
@@ -335,17 +467,144 @@ Landing follows the R1 lifecycle:
 
 `branch -> local validation -> draft PR -> exact-head review -> ready once -> CI -> squash merge -> fast-forward main checkout`.
 
+## Cursor adapter boundary and delivery slices
+
+```text
+Cursor IDE / Cursor Agent CLI
+        |
+        | native sessionStart | sessionEnd | preCompact
+        | explicit conversation_id + workspace_roots + transcript_path?
+        v
+cursor_session_adapter.py
+        |
+        | normalized existing router/lifecycle inputs only
+        v
+session_router.py / session_lifecycle.py / existing reaper
+        |
+        v
+existing session.plan.v1 / session.binding.v1 / verdict state
+```
+
+The adapter owns only Cursor payload validation, event-name normalization,
+nullable transcript handling, and bounded host diagnostics. It does not decide
+intent, verdicts, repository registration, claim truth, or reaper policy.
+Transcript support remains behind the existing projection boundary and is added
+only if a native non-null fixture proves a stable format.
+
+**PONYTAIL: NOT USED — no concrete simplification candidate.** The proposed
+adapter, conditional projection, installer, and live acceptance each own a
+different failure boundary; combining them would mix hot-path dispatch,
+format policy, machine mutation, and operator evidence.
+
+### CU0 — Native contract fixtures and executable probe
+
+- Capture sanitized IDE and CLI payloads for `sessionStart`, `sessionEnd`, and
+  `preCompact`, including null/non-null transcript cases.
+- The probe writes only field names, reason classes, non-secret IDs, paths under
+  its disposable workspace, and timing. It never records prompt or transcript
+  contents.
+- Prove project scope and user scope separately. A scope that does not fire is
+  an explicit unsupported/degraded result.
+- Verify new chat, resume, compaction, normal close, and abrupt termination.
+
+**Gate:** do not write the adapter until at least one local surface provides a
+matching start/end pair with stable identity and workspace root.
+
+### CU1 — Thin Cursor adapter
+
+Proposed production file: `scripts/cursor_session_adapter.py`, with focused
+fixtures and `scripts/tests/test_cursor_session_adapter.py`.
+
+- `sessionStart`: validate stable identity and registered workspace, then
+  delegate to `session_router.handle_event`.
+- `sessionEnd`: delegate only when the exact existing binding is valid.
+- `preCompact`: delegate to the existing checkpoint/start-context recovery seam
+  without changing identity. If no valid binding exists, return the bounded
+  degraded no-op without calling the router, because the router persists a
+  binding before handling `source=compact`.
+- Accept full-state events only when `workspace_roots` resolves to exactly one
+  canonical registered Git root. Never choose among multiple roots or compare
+  `conversation_id` values across IDE and CLI.
+- Emit only `additional_context` when proven and needed; never emit Cursor's
+  `env` field.
+- Null transcript, malformed input, unsupported event, unregistered workspace,
+  transcript-path mismatch, and delegate failure remain bounded fail-open paths.
+
+**Gate:** no new lifecycle policy or persistence schema; Claude and Codex
+regressions remain byte/behavior compatible.
+
+### CU2 — Cursor transcript projection, conditional
+
+This slice exists only if CU0 captures a stable, explicit, readable native
+`transcript_path`. "Stable" means sanitized evidence from at least two new
+conversations plus resume and compaction shows the same path schema, record
+semantics, and append behavior; tool calls and results expose exact native IDs.
+
+- Add sanitized records and structural projection without reading `store.db` by
+  guessed location.
+- Pair tool calls/results only by exact native IDs.
+- Preserve existing byte limits, redaction, repository checks, and incomplete
+  coverage semantics.
+- If Cursor supplies `null`, an opaque database, or an unstable path, defer
+  Curator parity and document lower fidelity. Do not invent a parser.
+- A start-time path may not yet exist, so CU1 can retain only the write-once
+  absolute binding after root validation; CU2 must not parse until the exact
+  bound path exists and is readable. End-time path mismatch, replacement, or
+  unreadability fails closed rather than switching sources.
+
+### CU3 — Idempotent user-level activation and rollback
+
+Proposed files:
+
+- `scripts/install_cursor_session_lifecycle.py`
+- `templates/cursor_hooks.json.template`
+- focused installer tests using a temporary home only
+
+The installer must:
+
+1. preflight installed IDE and CLI versions and reject unsupported schema;
+2. capture exact target bytes, SHA-256, permissions, and absence state;
+3. preserve unknown hook entries and refuse malformed/ambiguous ownership;
+4. render absolute Windows-safe commands to the checked-out merged source;
+5. validate the merged config before atomic replacement;
+6. restore exact bytes on any failure across all owned targets;
+7. make repeated installation a semantic no-op;
+8. print an emergency-off command that removes only owned entries.
+
+Activation remains a post-merge machine-local step. It must not run while an
+unrelated Cursor session could rewrite the same user config.
+
+### CU4 — Exact live acceptance
+
+Run IDE and CLI acceptance separately:
+
+- normal new conversation: one start event, matching conversation/binding ID,
+  exact workspace root, transcript classification, and nonce-proven context;
+- normal close: one end event and one coarse verdict;
+- resume: same identity, no duplicate binding;
+- new chat: new identity;
+- compaction: same identity and one checkpoint path;
+- abrupt CLI termination: no fabricated end; stale state is reaper-owned;
+- null/opaque transcript: bounded no-op or explicitly degraded close;
+- unregistered workspace: minimal advisory behavior only;
+- repeated install: no target-byte or semantic change.
+
+No surface is marked live until evidence is captured from a normal invocation
+without trust/config bypass.
+
 ## Deferred runtime slices
 
-Cursor, Antigravity, and Kimi remain `NOT STARTED`. Each next slice begins with
-native lifecycle-contract discovery and a disposable prototype. A host without
-reliable start/end events will receive an honest lower-fidelity adapter; this
-plan will not claim parity by polling or fabricating session identity.
+Cursor CLI CU1 is implemented but not activated; exact-head review and landing
+remain pending. Cursor IDE remains degraded and excluded.
+Antigravity and Kimi remain `NOT STARTED` and out of scope. Each later slice
+begins with native lifecycle-contract discovery and a disposable prototype. A
+host without reliable start/end events receives an honest lower-fidelity
+adapter; this plan will not claim parity by polling or fabricating identity.
 
-## CEO decisions
+## CEO decisions — Codex slice (historical)
 
-- **Scope mode:** HOLD SCOPE. Cross-runtime parity is the product, but only the
-  Codex slice is authorized now.
+- **Scope mode at the 2026-07-27 review:** HOLD SCOPE. Cross-runtime parity is
+  the product, but only the Codex slice was authorized at that point.
 - **Product consequence:** activating a faulty user-level hook could affect
   every Codex session; the change is reversible through the owned backup and
   is protected by fail-open/no-op behavior.
@@ -548,9 +807,11 @@ the backup remains restorable. Tests use temporary homes/state and no network.
 
 There are zero rows with `Rescued=no`, `Test=no`, and silent user impact.
 
-### NOT in scope
+### NOT in scope — Codex review baseline
 
-- Cursor, Antigravity, and Kimi implementation — sequenced after Codex acceptance.
+- Cursor, Antigravity, and Kimi implementation were outside the reviewed Codex
+  slice. The 2026-07-28 amendment opens only Cursor discovery and its bounded
+  future slice; Antigravity and Kimi remain out of scope.
 - State-directory rename or schema/provider migration — no behavior value here.
 - Central daemon, polling, or synthetic session IDs — would reduce truthfulness.
 - Broker, trading runtime, live deployment, and order-path work — prohibited.
@@ -583,10 +844,88 @@ This plan's diagrams are the only new cross-host diagrams.
   - Surfaced by: global scope, ownership conflict, and rollback review.
   - Files: canonical template, activation script, registry template, tests.
   - Verify: fresh/repeat/conflict/rollback in temp home.
-- [ ] **T5 (P1, human ~1h / Codex ~15m)** — live acceptance — prove a normal new session
+- [x] **T5 (P1, human ~1h / Codex ~15m)** — live acceptance — prove a normal new session
   - Surfaced by: trust cannot be inferred from bypassed smoke.
   - Files: machine-local hook/registry/state evidence only.
   - Verify: start context, exact binding, close verdict, ephemeral no-op.
+- [x] **CU0-D (P1, discovery)** — inspect installed Cursor contracts and run a
+  disposable project-hook probe.
+  - Evidence: IDE `3.13.21`, CLI `2026.07.23-e383d2b`, official hook schema,
+    local chat storage shape, two zero-event CLI project-hook runs.
+  - Verdict: native schema present; project-hook CLI activation and context
+    delivery remain `UNPROVEN`.
+- [x] **CU0-L (P1, live contract capture)** — capture sanitized native IDE and
+  CLI start/end/preCompact payloads without changing shared lifecycle state.
+  - Authorization: requires the literal operator token
+    `GO CURSOR CU0-L LIVE CONTRACT CAPTURE`; this `/fwp` review does not grant it.
+  - Preconditions: all Cursor IDE and Agent CLI processes are closed; the exact
+    user hook target bytes, absence state, permissions, and SHA-256 are captured.
+    The probe enforces this with a process check, aborts when Cursor is running,
+    and re-reads/re-hashes the target immediately before replacement.
+  - Method: install only a probe-owned temporary user-level hook block, validate
+    the merged JSON, run IDE and CLI as separate experiments, and restore the
+    exact pre-probe state after each surface before testing the next.
+  - Evidence boundary: record event name, stable non-secret identity, workspace
+    root, transcript classification, timing, and nonce result only. Never record
+    prompts, transcript contents, `user_email`, credentials, or unrelated hook
+    payload fields.
+  - Context proof: generate a cryptographically random nonce, keep it only in a
+    Temp probe manifest, return it in probe-owned `additional_context`, and
+    exact-match the model response to that manifest. A hook event without the
+    exact returned nonce is event-only evidence and a context-parity failure;
+    no lifecycle schema or state stores the nonce, and the probe emits no `env`.
+  - Differential diagnosis: a zero-event run is recorded against config scope
+    and precedence, trust/allowlist state, host version, invocation mode, and
+    surface. Do not collapse those causes into "hooks unsupported."
+  - Verify: exact matching identity/workspace, transcript classification,
+    context nonce, normal close, resume/new-chat/compact/crash matrix, bounded
+    event counts, single-root and multi-root cases, exact post-restore
+    bytes/absence state, and no probe process left running. Record timing and
+    overlapping-session behavior so CU1 budgets are derived from evidence; do
+    not guess a production timeout from CU0-L alone.
+  - Promotion rule: IDE and CLI pass independently. CU1 may target only a
+    surface with a proven matching start/end pair; the other remains explicitly
+    unsupported/degraded.
+  - Result (2026-07-28): CLI passed two independent matching start/end captures,
+    resume identity continuity, new-chat identity separation, exact Temp-only
+    context nonce delivery, an absolute existing `.jsonl` end transcript, and
+    abrupt-termination behavior without a synthetic end. IDE delivered the
+    exact context nonce and distinct starts but emitted no matching end on New
+    Agent or application close, so it remains degraded. `preCompact` remains
+    unproven on both surfaces. Sanitized evidence:
+    `design/audits/2026-07-28_cursor_cu0l_live_contract_capture/`.
+- [x] **CU1 (P1)** — implement the thin Cursor adapter after CU0-L passes.
+  - Authorization boundary: only the CLI surface is eligible. Implementation
+    requires `GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`; CU0-L authorization
+    does not grant it. IDE remains excluded until a matching start/end pair is
+    proven.
+  - Result (2026-07-28): `scripts/cursor_session_adapter.py` maps only the proven
+    captured Agent CLI version shape into deterministic runtime-namespaced
+    shared session IDs, requires one exact registered root, preserves write-once
+    path equality, emits only `additional_context`, and treats native null-start
+    transcripts as the documented lower-fidelity no-op. Repeated matching starts
+    map to `resume`; mismatches and unbound `preCompact` fail closed without
+    changing shared schemas or policy. CU0-L exposed no second surface marker,
+    so version-shape drift remains observable through
+    `CURSOR_ADAPTER_UNSUPPORTED_SURFACE` rather than being presented as stronger
+    IDE/CLI proof.
+  - Validation: `16 passed, 2 subtests` focused adapter; `109 passed, 9
+    subtests` lifecycle-focused regression; `370 passed, 11 subtests` full
+    `scripts/tests`; Ruff, compileall, and `sync_agent_rules.py --check` passed.
+    No installer, user hook, machine activation, IDE, Antigravity, or Kimi
+    change occurred.
+  - Verify: focused contract tests including preCompact-without-binding,
+    cross-surface ID isolation, root cardinality, write-once path mismatch, no
+    `env`, and full Claude/Codex lifecycle regression.
+- [ ] **CU2 (P2, conditional)** — add transcript projection only for a proven
+  stable native format.
+  - Verify: two-new-chat plus resume/compact append stability, exact-ID pairing,
+    malformed/incomplete behavior, bound-path mismatch, and no database scan.
+- [ ] **CU3 (P1)** — implement and test idempotent user-level install/rollback.
+  - Verify: fresh/repeat/conflict/interruption/rollback against temporary homes.
+- [ ] **CU4 (P1)** — merge first, activate second, then run exact IDE and CLI
+  acceptance.
+  - Verify: all required live flows or explicit per-surface degraded verdicts.
 
 ### Implementation review fixes
 
@@ -839,17 +1178,241 @@ create more merge/review risk than latency benefit.
 - Parallelization: 1 sequential lane.
 - Completeness decisions: 5/5 selected the complete option.
 
+## Cursor amendment review status — 2026-07-28
+
+- Operator authorization covers Cursor discovery and amendment of this existing
+  plan only. It does not authorize adapter implementation or user-level
+  activation.
+- CU0-D is complete. CU0-L is the next gate because project-level CLI hooks did
+  not fire and user-level/IDE behavior remains unproven.
+- The historical Codex review sections remain evidence for that shipped slice.
+  This amendment adds a separate Cursor review result below; it authorizes
+  neither CU1-CU4 implementation nor persistent activation.
+- No Antigravity or Kimi discovery, code, configuration, or activation is
+  authorized by this amendment.
+
+**Current verdict:** DISCOVERY COMPLETE; CURSOR IMPLEMENTATION HOLD AT CU0-L.
+
+## Cursor amendment CEO review — HOLD SCOPE
+
+### Vision, collision, and consequence
+
+The relevant vision is host-independent advisory continuity with one lifecycle
+policy owner. Its Definition of Done is evidence-based parity per native host
+surface, not a shared adapter that merely appears to run. This remains an
+amendment to the existing cross-runtime plan: the shipped Claude lifecycle plan
+stays the engine authority, and the R2 Conductor plan stays outside runtime
+lifecycle dispatch.
+
+The next proposed action is only CU0-L contract capture. If its temporary
+user-level probe is wrong, Cursor could fail to load hooks or an unrelated hook
+could be lost. The action is reversible only if Cursor is stopped first and the
+exact pre-probe bytes or absence state are restored and hash-verified. CU1-CU4,
+Antigravity, and Kimi remain outside this review authorization.
+
+### Premise and alternatives
+
+| Approach | Completeness | Effort | Risk | Verdict |
+|---|---:|---:|---:|---|
+| A. Treat official docs and bundled validators as the contract | 5/10 | S | medium | Reject: cannot prove user-scope loading, context delivery, or end pairing |
+| B. Temporary user-level probe with exact backup/restore, IDE and CLI separated | 10/10 | M | low-medium | Selected: smallest route to physical evidence without shared lifecycle writes |
+| C. Implement CU1 from documentation before live capture | 7/10 | M | high | Reject: turns unproven host behavior into production code |
+
+### Eleven-section review result
+
+| Section | Result |
+|---|---|
+| 1. Architecture | CLEAR after making CU0-L a probe-only predecessor and keeping IDE/CLI promotion independent |
+| 2. Error/rescue | CLEAR after naming malformed config, hook-not-fired, nonce-missed, missing end, crash, restore failure, and leftover-process outcomes |
+| 3. Security | CLEAR after excluding prompt/transcript contents, `user_email`, credentials, and unrelated payload fields from evidence |
+| 4. Data/interaction | CLEAR with explicit null/empty/invalid payload, resume, new-chat, compact, normal close, and abrupt termination branches |
+| 5. Code quality | N/A for CU0-L; no production adapter code is authorized |
+| 6. Tests | CLEAR when each surface produces an exact event/evidence matrix and post-restore proof |
+| 7. Performance | CLEAR; record hook timing, but do not set production budgets from the probe alone |
+| 8. Observability | CLEAR with bounded probe logs, explicit zero-event failure, and physical nonce evidence |
+| 9. Deployment | CLEAR only as a temporary reversible probe; no persistent activation or source deployment |
+| 10. Trajectory | CLEAR; evidence can unlock a thin adapter without freezing a speculative cross-host abstraction |
+| 11. Design/UX | SKIPPED; no UI scope |
+
+CEO decisions are agent-resolved under the R1 `/fwp` contract: HOLD SCOPE,
+select Approach B, preserve CU0-L as the next gate, and do not infer a Cursor
+implementation GO from this review. There are no new TODO proposals and no
+unresolved product decisions.
+
+## Paid Cursor amendment audit synthesis — 2026-07-28
+
+This was a custom paid panel constrained by the operator's explicit
+`NO ANTIGRAVITY/KIMI` boundary. Antigravity was not invoked. Standalone Kimi and
+Perplexity Kimi were omitted rather than substituted. Four OpenRouter paid
+models and the isolated Claude Opus CLI returned reviews. Gemini timed out after
+180 seconds, and Perplexity best/sonar was blocked because `chrome_ppl` was busy.
+The result is therefore a transparent partial panel, not a claim that every
+stock `/fwp` lane passed.
+
+Applied consensus and independently valid findings:
+
+1. **Nonce proof had no executable mechanism.** CU0-L now generates a random
+   nonce into a Temp-only manifest, returns it in probe-owned
+   `additional_context`, exact-matches the response, writes no lifecycle state,
+   and treats a missed nonce as event-only evidence and parity failure.
+2. **Identity and workspace cardinality were ambiguous.** Stability is scoped
+   within one surface/conversation; IDE and CLI IDs are not compared. Only one
+   canonical registered Git root may create full state.
+3. **`preCompact` could accidentally create state.** CU1 must stop before the
+   router when no exact valid binding exists, because the existing router
+   persists the binding before its compact branch.
+4. **Transcript promotion was underspecified.** CU2 now requires two new
+   conversations plus resume/compact stability, readable append semantics, and
+   exact native tool IDs. A changed/unreadable end path cannot replace the
+   write-once start path.
+5. **Probe activation relied too much on operator discipline.** CU0-L now
+   enforces the stopped-process precondition and re-hashes immediately before
+   replacement, records differential zero-event causes, and restores each
+   surface before the next run.
+6. **Cursor hook output was broader than needed.** The probe/adapter may emit
+   only proven `additional_context`; `env` is explicitly forbidden.
+7. **Production timing could be guessed from old Codex numbers.** CU0-L records
+   per-event and overlap timing; CU1 derives its hard budget from Cursor evidence
+   and host limits rather than copying the historical 2 s/3 s values.
+
+Discarded or deferred findings:
+
+- Treating the literal operator GO phrase as a credential requiring ownership,
+  revocation, and security audit logging is a category error.
+- A stale-Claude-state sweep, registry redesign, Codex reaper redesign, and
+  changes to the shipped emergency-off path are outside this Cursor amendment
+  and were not shown to be Cursor blockers.
+- Historical Codex performance targets and superseded load-sensitive test notes
+  do not establish a current Cursor defect. The Cursor slice receives its own
+  regression and measured timing gates before implementation can land.
+- Process pools, async dispatch, and a universal cross-host abstraction are
+  premature before CU0-L supplies the native contract.
+
+**Audit verdict:** CLEAR FOR THE DOCUMENTED CU0-L GATE, PARTIAL PANEL. No
+external P1 remains against the probe-only next step after these amendments.
+The panel does not authorize the live probe or implementation.
+
+## Cursor amendment engineering review
+
+### Existing seams and ownership
+
+The production-shaped design reuses the current policy owner:
+
+- `session_router.handle_event` owns normalized dispatch. Its compact branch
+  reads/checkpoints the existing plan, but binding persistence happens before
+  that branch; therefore the Cursor adapter must reject an unbound
+  `preCompact` before delegation.
+- `session_lifecycle._binding_matches_event` already requires exact
+  repository/worktree/transcript equality. CU1 must preserve that fail-closed
+  contract and must never repair an end mismatch by switching paths.
+- `session_state.write_session_binding` is already write-once and idempotent for
+  identical content. Cursor receives no new identity or persistence schema.
+- `resolve_repository` already performs bounded canonical Git-root resolution.
+  The adapter adds only the host-specific rule that exactly one explicit root is
+  eligible for full state.
+
+No shared engine edit is justified by discovery. The proposed adapter remains a
+host-boundary translator; conditional projection owns format parsing; the
+installer owns machine mutation; acceptance owns physical evidence.
+
+### Branch and failure contract
+
+```text
+native Cursor event
+  |
+  +-- malformed / unsupported / zero-or-many roots --> bounded no-state result
+  |
+  +-- sessionStart
+  |     +-- null transcript ------------------------> explicit lower fidelity
+  |     `-- valid identity + one root + path? ------> write-once delegation
+  |
+  +-- preCompact
+  |     +-- no exact binding -----------------------> no-op; do not call router
+  |     `-- exact binding --------------------------> existing checkpoint seam
+  |
+  `-- sessionEnd
+        +-- identity/root/path mismatch ------------> fail closed; no source swap
+        `-- exact binding --------------------------> existing close evaluator
+```
+
+The adapter returns bounded host diagnostics and never fabricates an end event.
+Crash recovery remains reaper-owned. A missing start, repeated start, late hook,
+nonce miss, malformed payload, multi-root workspace, and overlapping sessions
+all have explicit CU0-L evidence obligations before the corresponding surface
+can be promoted.
+
+### Test and performance gate
+
+CU1 red tests must cover valid start/end, repeat/resume idempotency, new-chat
+identity, `preCompact` with and without a binding, null and not-yet-readable
+paths, end-path mismatch, zero/one/many roots, IDE/CLI namespace isolation,
+unsupported events, delegate failure, no `env`, and bounded diagnostics. CU2
+adds two-conversation schema stability, resume/compact append behavior, exact
+call/result IDs, duplicates, malformed/incomplete records, byte caps, and
+redaction. CU3 uses only temporary homes for fresh/repeat/conflict/concurrent
+rewrite/interruption/rollback tests. CU4 remains separate per surface.
+
+CU0-L records host timing and overlap behavior. CU1 then sets a blocking timeout
+below the measured host limit with explicit headroom and a separately tracked
+non-blocking p95 target. No Cursor budget is copied from Codex. Any timeout,
+unexpected shared-engine edit, Claude/Codex regression, or missing exact-head
+review blocks landing.
+
+### Sequential delivery
+
+| Order | Slice | Entry gate | Exit gate |
+|---|---|---|---|
+| 1 | CU0-L live capture | literal CU0-L GO; Cursor stopped; reversible probe | per-surface contract/evidence and exact restore |
+| 2 | CU1 adapter | at least one proven start/end surface | focused red/green tests plus shared regressions |
+| 3 | CU2 projection, if eligible | stable readable native format | structural/negative projection tests |
+| 4 | CU3 installer | adapter/projection contract frozen | temporary-home rollback matrix |
+| 5 | CU4 acceptance | merged exact head and machine-local activation GO | independent IDE/CLI live verdicts |
+
+Parallel implementation is rejected because each slice consumes the previous
+slice's frozen evidence. This review found seven Cursor contract gaps; all seven
+are folded above. There are zero unresolved engineering decisions and zero
+authorized production edits.
+
+## Cursor CU0-L live contract capture — 2026-07-28
+
+The operator authorized only the reversible live-capture gate with
+`GO CURSOR CU0-L LIVE CONTRACT CAPTURE`. The temporary user hook was restored
+to its exact pre-state after each surface; the target was absent both before and
+after capture, parent ACL matched, and final readback found zero Cursor and
+probe processes.
+
+| Surface | Context delivery | Lifecycle pairing | Transcript/root evidence | Promotion |
+|---|---|---|---|---|
+| Agent CLI `2026.07.23-e383d2b` | exact Temp-only nonce on two new chats and resume | two matching new-chat start/end pairs; resume kept identity without a second start; abrupt stop had no synthetic end | one exact workspace root; start transcript null; end path absolute, existing, `.jsonl` | **PROMOTE TO CU1** |
+| IDE `3.13.21` | exact Temp-only nonce | two distinct starts; no end on New Agent or application close | second start reported one root, but canonical equality/encoding remains unproven; transcript null | **HOLD DEGRADED** |
+
+`preCompact` remains `UNPROVEN_NO_DETERMINISTIC_TRIGGER` for both surfaces.
+The contaminated initial preflight is retained only as non-promotable diagnostic
+evidence. The sanitized aggregate is canonical at
+`design/audits/2026-07-28_cursor_cu0l_live_contract_capture/evidence.json`;
+raw Temp material is intentionally not committed.
+
+CU0-L is complete per surface. It authorizes no production code or persistent
+activation. The next smallest eligible slice is CLI-only and requires
+`GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`.
+
 ## GSTACK REVIEW REPORT
 
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope and strategy | 1 | CLEAR | HOLD SCOPE; Codex parity requires transcript projection and normal trust |
-| Codex Review | `/codex review` | Independent exact-head review | 0 | PENDING | Runs after implementation |
-| Eng Review | `/plan-eng-review` | Architecture and tests | 1 | CLEAR | 7 issues/gates found, all folded; 0 critical gaps |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | N/A | No UI scope |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | N/A | Installer behavior covered by engineering gate |
+| Review | Trigger | Runs | Status | Findings |
+|---|---|---:|---|---|
+| CEO Review | Cursor amendment `/fwp` | 1 | CLEAR | HOLD SCOPE; reversible CU0-L probe is the only credible next step |
+| Paid cross-model audit | custom paid, no Antigravity/Kimi | 5 returned, 2 unavailable | CLEAR/PARTIAL | 7 valid contract gaps folded; unavailable lanes disclosed |
+| Eng Review | Cursor amendment `/plan-eng-review` | 1 | CLEAR | 7 issues folded; sequential CU0-L through CU4 gates pinned |
+| CU0-L live capture | native IDE and CLI | 2 surfaces | CLEAR/PARTIAL | CLI promoted; IDE degraded; `preCompact` unproven |
+| Implementation Review | exact-head diff review | 2+ | CLEAR | Independent reviews found no ship-blocking findings; actionable in-scope items were folded and only the final attested head may land |
+| Design Review | UI/UX | 0 | N/A | No UI scope |
 
-- **CROSS-MODEL:** Eight returned reviews converged on adapter seam, activation atomicity, repeated/degraded events, and registry rollback; two configured lanes failed.
-- **VERDICT:** CEO + ENG CLEAR; paid audit synthesized; ready to implement.
+- **BOUNDARY:** CLI adapter source and tests only; no shared lifecycle schema or
+  policy edit, installer, user hook, persistent activation, IDE, Antigravity,
+  or Kimi action occurred.
+- **NEXT GATE:** complete R1 landing only after the final exact head passes
+  independent review; no new operator token is required.
+- **VERDICT:** CU1 IMPLEMENTATION COMPLETE; LAND ONLY THE INDEPENDENTLY
+  ATTESTED EXACT HEAD; IDE HELD DEGRADED.
 
 NO UNRESOLVED DECISIONS
