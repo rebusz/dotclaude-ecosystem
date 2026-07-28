@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -17,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from session_state import atomic_write_bytes, resolve_repository
+
+_WINDOWS_COMMAND_PREFIX = (
+    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+)
 
 
 @dataclass(frozen=True)
@@ -84,7 +89,19 @@ def _windows_command(*arguments: str | Path) -> str:
     if any(any(character in value for character in "\0\r\n") for value in values):
         raise ValueError("hook command path contains an unsafe PowerShell character")
     quoted = ("'" + value.replace("'", "''") + "'" for value in values)
-    return "& " + " ".join(quoted)
+    script = "& " + " ".join(quoted)
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return _WINDOWS_COMMAND_PREFIX + encoded
+
+
+def _decoded_windows_command(command: str) -> str | None:
+    if not command.startswith(_WINDOWS_COMMAND_PREFIX):
+        return None
+    encoded = command.removeprefix(_WINDOWS_COMMAND_PREFIX)
+    try:
+        return base64.b64decode(encoded, validate=True).decode("utf-16-le")
+    except (UnicodeDecodeError, ValueError):
+        return None
 
 
 def _render_hooks(template: dict[str, Any], command: str) -> dict[str, Any]:
@@ -121,9 +138,13 @@ def _handler_is_owned(
         rf"""(?i)(?:^|[\\/\s"']){re.escape(adapter_filename)}(?:"|'|\s|$)"""
     )
     values = (handler.get("command"), handler.get("commandWindows"))
-    return command in values or any(
-        isinstance(value, str) and adapter_pattern.search(value)
+    inspected_values = [
+        decoded if (decoded := _decoded_windows_command(value)) is not None else value
         for value in values
+        if isinstance(value, str)
+    ]
+    return command in values or any(
+        adapter_pattern.search(value) for value in inspected_values
     )
 
 

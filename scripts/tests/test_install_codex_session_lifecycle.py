@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -16,6 +17,11 @@ _ROOT = _SCRIPTS.parent
 sys.path.insert(0, str(_SCRIPTS))
 
 import install_codex_session_lifecycle as installer  # noqa: E402
+
+
+def _decode_windows_command(command: str) -> str:
+    encoded = command.rsplit(" ", 1)[-1]
+    return base64.b64decode(encoded).decode("utf-16-le")
 
 
 def _git_repo(path: Path) -> None:
@@ -211,8 +217,10 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
             Path("D:/repo's&whoami/scripts/codex_session_adapter.py"),
         )
 
+        prefix = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+        self.assertTrue(command.startswith(prefix))
         self.assertEqual(
-            command,
+            _decode_windows_command(command),
             (
                 "& 'C:\\runtime&tools\\python.exe' "
                 "'D:\\repo''s&whoami\\scripts\\codex_session_adapter.py'"
@@ -225,6 +233,23 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
             "commandWindows": (
                 "& 'C:\\old\\python.exe' "
                 "'C:\\old\\codex_session_adapter.py'"
+            ),
+        }
+
+        self.assertTrue(
+            installer._handler_is_owned(
+                handler,
+                command="different command",
+                adapter_filename="codex_session_adapter.py",
+            )
+        )
+
+    def test_owned_handler_recognizes_encoded_adapter_at_old_location(self):
+        handler = {
+            "type": "command",
+            "commandWindows": installer._windows_command(
+                Path("C:/old/python.exe"),
+                Path("C:/old/codex_session_adapter.py"),
             ),
         }
 
@@ -251,6 +276,31 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
 
         completed = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", command],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "{}")
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows cmd.exe")
+    def test_windows_hook_command_executes_through_cmd(self):
+        command = installer._windows_command(
+            Path(sys.executable),
+            _SCRIPTS / "codex_session_adapter.py",
+        )
+        payload = {
+            "hook_event_name": "SessionStart",
+            "session_id": "cmd-smoke",
+            "transcript_path": None,
+            "cwd": str(_ROOT),
+        }
+
+        completed = subprocess.run(
+            ["cmd.exe", "/D", "/S", "/C", command],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -490,8 +540,9 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
             start = hooks["hooks"]["SessionStart"][0]
             end = hooks["hooks"]["SessionEnd"][0]
             command = start["hooks"][0]["commandWindows"]
-            self.assertIn(str(Path(sys.executable).resolve()), command)
-            self.assertIn(str(adapter_path.resolve()), command)
+            decoded_command = _decode_windows_command(command)
+            self.assertIn(str(Path(sys.executable).resolve()), decoded_command)
+            self.assertIn(str(adapter_path.resolve()), decoded_command)
             self.assertEqual(start["matcher"], "startup|resume|clear|compact")
             self.assertEqual(start["hooks"][0]["timeout"], 2)
             self.assertEqual(end["hooks"][0]["timeout"], 3)
@@ -636,8 +687,17 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
                     for group in hooks[event]
                     for handler in group["hooks"]
                 ]
+                decoded_commands = [
+                    _decode_windows_command(command)
+                    if "-EncodedCommand " in command
+                    else command
+                    for command in commands
+                ]
                 self.assertEqual(
-                    sum("codex_session_adapter.py" in command for command in commands),
+                    sum(
+                        "codex_session_adapter.py" in command
+                        for command in decoded_commands
+                    ),
                     1,
                 )
                 self.assertNotIn(str(Path("C:/old")), "\n".join(commands))
