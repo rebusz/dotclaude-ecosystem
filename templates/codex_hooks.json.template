@@ -1,0 +1,31 @@
+{
+  "description": "Shared advisory session lifecycle for Codex.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{COMMAND}}",
+            "commandWindows": "{{COMMAND}}",
+            "timeout": 2,
+            "statusMessage": "Loading advisory session context"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{COMMAND}}",
+            "commandWindows": "{{COMMAND}}",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "lane": "openrouter_paid",
+    "ok": true,
+    "returncode": 0,
+    "elapsed_s": 103.0,
+    "stdout_tail": "\nAuditing : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md\nOutput   : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\nModels   : 4 (parallel)\n\n  [01] DeepSeek V4 Pro -> starting...\n  [02] Mistral Medium 3.5 -> starting...\n  [03] MiniMax M3 -> starting...\n  [04] ByteDance Seed 1.6 -> starting...\n  [03] MiniMax M3 OK  8,782 tok  31.4s\n  [02] Mistral Medium 3.5 OK  7,796 tok  36.5s\n  [04] ByteDance Seed 1.6 OK  9,499 tok  70.4s\n  [01] DeepSeek V4 Pro OK  9,700 tok  101.0s\n\n-- Audit Summary -------------------------------------------\n  OK   DeepSeek V4 Pro                   9,700 tok  101.0s\n  OK   Mistral Medium 3.5                7,796 tok   36.5s\n  OK   MiniMax M3                        8,782 tok   31.4s\n  OK   ByteDance Seed 1.6                9,499 tok   70.3s\n\n4/4 succeeded\n\nOutput -> D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\n  - 4 audit file(s)\n  - synthesis_prompt.md\n  - _run_meta.json\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "perplexity_cdp",
+    "ok": true,
+    "returncode": 0,
+    "elapsed_s": 223.0,
+    "stdout_tail": "\nAuditing : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md\nOutput   : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\nModels   : 3 (sequential Perplexity CDP)\n\n  [01] Best -> starting...\n  [01] Best OK  72.0s\n  [02] Sonar 2 -> starting...\n  [02] Sonar 2 OK  61.3s\n  [07] Kimi K2.6 -> starting...\n  [07] Kimi K2.6 OK  73.9s\n\n-- Audit Summary -------------------------------------------\n  OK   Best                             web-ui        72.0s\n  OK   Sonar 2                          web-ui        61.2s\n  OK   Kimi K2.6                        web-ui        73.9s\n\n3/3 succeeded\n\nOutput -> D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\n  - 3 audit file(s)\n  - synthesis_prompt.md\n  - _run_meta.json\n\n-- AUDITPX RESULT -----------------------------------------\nPlan       : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md\nOutput     : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\nSynthesis  : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\\synthesis_prompt.md\nMeta       : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\\_run_meta.json\nProbe count: 9\nModels     : 3/3 succeeded, 0 failed\nStatus     : OK\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "gemini_cdp",
+    "ok": false,
+    "returncode": 1,
+    "elapsed_s": 252.0,
+    "stdout_tail": "\n-- AUDITG RESULT ------------------------------------------\nTarget     : D:\\dotclaude\\dotclaude-ecosystem\\design\\plans\\2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md\nOutput     : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\nAudit      : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\\01_gemini_current_ERROR.md\nSynthesis  : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\\synthesis_prompt.md\nMeta       : D:\\dotclaude\\dotclaude-ecosystem\\design\\audits\\2026-07-27_2026-07-27_cross_runtime_session_lifecycle_adapters_r1\\_run_meta.json\nStatus     : FAILED\nReason     : response timeout after 180s\n",
+    "stderr_tail": ""
+  },
+  {
+    "lane": "kimi_cdp",
+    "ok": false,
+    "returncode": 1,
+    "elapsed_s": 1.2,
+    "stdout_tail": "",
+    "stderr_tail": "Traceback (most recent call last):\n  File \"D:\\APPS\\WatchF\\scripts\\auditkimi.py\", line 33, in <module>\n    from watchf.browser.kimi_cdp import (  # noqa: E402\n    ...<4 lines>...\n    )\n  File \"D:\\APPS\\WatchF\\watchf\\browser\\kimi_cdp.py\", line 14, in <module>\n    from config.settings import KIMI_CDP_MODEL_LABEL, KIMI_CDP_THINKING\nImportError: cannot import name 'KIMI_CDP_MODEL_LABEL' from 'config.settings' (D:\\APPS\\WatchF\\config\\settings.py)\n"
+  },
+  {
+    "lane": "claude_cli",
+    "ok": true,
+    "returncode": 0,
+    "elapsed_s": 155.2,
+    "stdout_tail": "",
+    "stderr_tail": ""
+  }
+]

@@ -28,6 +28,7 @@ from session_state import (
     validate_session_id,
 )
 from terminal_evidence import redact_text
+from transcript_projection import pair_tool_evidence, project_record
 
 if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -133,111 +134,26 @@ def _recent_jsonl_lines(path: Path) -> tuple[list[str], bool]:
     return payload.decode("utf-8", errors="replace").splitlines(), truncated
 
 
-def _strings(value: Any) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _strings(item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _strings(item)
-
-
-def _assistant_text(record: dict[str, Any]) -> str:
-    if record.get("type") != "assistant":
-        return ""
-    message = record.get("message")
-    if not isinstance(message, dict):
-        return ""
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, str):
-            parts.append(block)
-        elif isinstance(block, dict) and block.get("type") == "text":
-            text = block.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _structured_tool_result(record: dict[str, Any]) -> tuple[int, str] | None:
-    value = record.get("toolUseResult")
-    if not isinstance(value, dict):
-        value = record.get("tool_use_result")
-    if not isinstance(value, dict):
-        return None
-    exit_code = value.get("exitCode")
-    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
-        exit_code = value.get("exit_code")
-    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
-        return None
-    output = "\n".join(_strings(value))
-    return exit_code, output[:8000]
-
-
-def _tool_use_commands(record: dict[str, Any]) -> dict[str, str]:
-    commands: dict[str, str] = {}
-    message = record.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, list):
-        return commands
-    for block in content:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
-            continue
-        tool_id = block.get("id")
-        tool_input = block.get("input")
-        command = tool_input.get("command") if isinstance(tool_input, dict) else None
-        if isinstance(tool_id, str) and isinstance(command, str):
-            commands[tool_id] = command[:1000]
-    return commands
-
-
-def _tool_result_ids(record: dict[str, Any]) -> list[str]:
-    result: list[str] = []
-    direct = record.get("tool_use_id") or record.get("toolUseId")
-    if isinstance(direct, str):
-        result.append(direct)
-    message = record.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
-                continue
-            tool_id = block.get("tool_use_id") or block.get("toolUseId")
-            if isinstance(tool_id, str):
-                result.append(tool_id)
-    return list(dict.fromkeys(result))
-
-
 def _command_evidence_from_records(
     records: Iterable[dict[str, Any]],
 ) -> tuple[CommandEvidence, ...]:
-    commands_by_id: dict[str, str] = {}
-    result: list[CommandEvidence] = []
-    for record in records:
-        commands_by_id.update(_tool_use_commands(record))
-        structured = _structured_tool_result(record)
-        if structured is None:
-            continue
-        ids = _tool_result_ids(record)
-        matches = [commands_by_id[item] for item in ids if item in commands_by_id]
-        if len(matches) != 1:
-            continue
-        exit_code, output = structured
-        result.append(
-            CommandEvidence(
-                command=matches[0],
-                exit_code=exit_code,
-                output=output,
-            )
+    items = [
+        item
+        for record in records
+        for item in project_record(record)
+    ]
+    return tuple(
+        CommandEvidence(
+            command=evidence.arguments["command"],
+            exit_code=evidence.exit_code,
+            output=evidence.output,
         )
-    return tuple(result)
+        for evidence in pair_tool_evidence(items)
+        if (
+            evidence.tool_name in {"Bash", "shell_command"}
+            and isinstance(evidence.arguments.get("command"), str)
+        )
+    )
 
 
 def build_transcript_window(path: Path) -> TranscriptWindow:
@@ -265,16 +181,16 @@ def build_transcript_window(path: Path) -> TranscriptWindow:
                 timestamp = candidate.strip()
                 observed_tail = timestamp
                 break
-        assistant_text = _assistant_text(raw)
-        if not assistant_text:
-            continue
-        safe_text = _redact_projection_text(assistant_text)
-        rendered = f"[{timestamp or 'timestamp unknown'}] {safe_text}"
-        projections.append((rendered, safe_text))
-        total += len(rendered) + 1
-        while len(projections) > 1 and total > MAX_REDACTED_WINDOW_CHARS:
-            removed, _ = projections.popleft()
-            total -= len(removed) + 1
+        for item in project_record(raw):
+            if item.kind != "assistant_text" or not item.text:
+                continue
+            safe_text = _redact_projection_text(item.text)
+            rendered = f"[{item.timestamp or timestamp or 'timestamp unknown'}] {safe_text}"
+            projections.append((rendered, safe_text))
+            total += len(rendered) + 1
+            while len(projections) > 1 and total > MAX_REDACTED_WINDOW_CHARS:
+                removed, _ = projections.popleft()
+                total -= len(removed) + 1
 
     redacted_window = "\n".join(rendered for rendered, _ in projections)
     if len(redacted_window) > MAX_REDACTED_WINDOW_CHARS:
