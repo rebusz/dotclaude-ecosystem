@@ -81,9 +81,10 @@ def _restore_if_installed(
 
 def _windows_command(*arguments: str | Path) -> str:
     values = tuple(str(argument) for argument in arguments)
-    if any(any(character in value for character in '"\r\n%!') for value in values):
-        raise ValueError("hook command path contains an unsafe cmd.exe character")
-    return " ".join(f'"{value}"' for value in values)
+    if any(any(character in value for character in "\0\r\n") for value in values):
+        raise ValueError("hook command path contains an unsafe PowerShell character")
+    quoted = ("'" + value.replace("'", "''") + "'" for value in values)
+    return "& " + " ".join(quoted)
 
 
 def _render_hooks(template: dict[str, Any], command: str) -> dict[str, Any]:
@@ -117,7 +118,7 @@ def _handler_is_owned(
     if not isinstance(handler, dict):
         return False
     adapter_pattern = re.compile(
-        rf'(?i)(?:^|[\\/\s"]){re.escape(adapter_filename)}(?:"|\s|$)'
+        rf"""(?i)(?:^|[\\/\s"']){re.escape(adapter_filename)}(?:"|'|\s|$)"""
     )
     values = (handler.get("command"), handler.get("commandWindows"))
     return command in values or any(
