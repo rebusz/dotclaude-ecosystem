@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -217,8 +218,9 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
             Path("D:/repo's&whoami/scripts/codex_session_adapter.py"),
         )
 
-        prefix = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
-        self.assertTrue(command.startswith(prefix))
+        launcher, _, _ = command.partition(" -NoLogo ")
+        self.assertTrue(Path(launcher).is_absolute())
+        self.assertTrue(Path(launcher).is_file())
         self.assertEqual(
             _decode_windows_command(command),
             (
@@ -282,6 +284,33 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
             timeout=10,
             check=False,
         )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "{}")
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows cmd.exe")
+    def test_windows_hook_ignores_working_directory_powershell_hijack(self):
+        command = installer._windows_command(
+            Path(sys.executable),
+            _SCRIPTS / "codex_session_adapter.py",
+        )
+        payload = {
+            "hook_event_name": "SessionStart",
+            "session_id": "hijack-smoke",
+            "transcript_path": None,
+            "cwd": str(_ROOT),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy2(sys.executable, Path(tmp) / "powershell.exe")
+            completed = subprocess.run(
+                ["cmd.exe", "/D", "/S", "/C", command],
+                cwd=tmp,
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), "{}")

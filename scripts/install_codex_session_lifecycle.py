@@ -19,8 +19,8 @@ from typing import Any
 
 from session_state import atomic_write_bytes, resolve_repository
 
-_WINDOWS_COMMAND_PREFIX = (
-    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+_WINDOWS_COMMAND_ARGUMENTS = (
+    " -NoLogo -NoProfile -NonInteractive -EncodedCommand "
 )
 
 
@@ -91,13 +91,29 @@ def _windows_command(*arguments: str | Path) -> str:
     quoted = ("'" + value.replace("'", "''") + "'" for value in values)
     script = "& " + " ".join(quoted)
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    return _WINDOWS_COMMAND_PREFIX + encoded
+    system_root = os.environ.get("SystemRoot")
+    if not system_root:
+        raise RuntimeError("SystemRoot is required to resolve Windows PowerShell")
+    powershell = (
+        Path(system_root)
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    ).resolve(strict=True)
+    powershell_text = str(powershell)
+    if any(
+        character.isspace() or character in '&|<>()^"%!'
+        for character in powershell_text
+    ):
+        raise RuntimeError("system PowerShell path is not shell-safe")
+    return powershell_text + _WINDOWS_COMMAND_ARGUMENTS + encoded
 
 
 def _decoded_windows_command(command: str) -> str | None:
-    if not command.startswith(_WINDOWS_COMMAND_PREFIX):
+    _, marker, encoded = command.partition(_WINDOWS_COMMAND_ARGUMENTS)
+    if not marker or not encoded:
         return None
-    encoded = command.removeprefix(_WINDOWS_COMMAND_PREFIX)
     try:
         return base64.b64decode(encoded, validate=True).decode("utf-16-le")
     except (UnicodeDecodeError, ValueError):
