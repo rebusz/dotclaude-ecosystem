@@ -321,12 +321,26 @@ def projection_complete(record: dict[str, Any]) -> bool:
             return True
         if not isinstance(raw_output, list):
             return False
-        return all(
-            isinstance(block, dict)
-            and block.get("type") in {"input_text", "output_text"}
-            and isinstance(block.get("text"), str)
-            for block in raw_output
-        )
+        for block in raw_output:
+            if not isinstance(block, dict):
+                return False
+            block_type = block.get("type")
+            if block_type in {"input_text", "output_text"}:
+                if not isinstance(block.get("text"), str):
+                    return False
+                continue
+            if block_type == "input_image":
+                image_url = block.get("image_url")
+                detail = block.get("detail")
+                if (
+                    not isinstance(image_url, str)
+                    or not image_url
+                    or (detail is not None and not isinstance(detail, str))
+                ):
+                    return False
+                continue
+            return False
+        return True
     if isinstance(payload_type, str) and payload_type.startswith("custom_tool_"):
         return False
     if payload_type == "message" and payload.get("role") == "assistant":

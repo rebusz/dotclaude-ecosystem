@@ -229,6 +229,26 @@ class TestTranscriptProjection(unittest.TestCase):
         self.assertTrue(projection.projection_complete(legacy))
         self.assertTrue(projection.projection_complete(current))
 
+    def test_codex_custom_tool_image_output_is_complete_without_projection(self):
+        record = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-image-1",
+                "output": [
+                    {"type": "input_text", "text": "Script completed\n"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,redacted",
+                        "detail": "original",
+                    },
+                ],
+            },
+        }
+
+        self.assertTrue(projection.projection_complete(record))
+        self.assertEqual(projection.project_record(record), ())
+
     def test_malformed_codex_custom_tool_output_is_incomplete(self):
         malformed = {
             "type": "response_item",
