@@ -1,0 +1,100 @@
+{
+  "schema": "cursor.cu0l.live-contract-evidence.v1",
+  "date": "2026-07-28",
+  "authorization": "GO CURSOR CU0-L LIVE CONTRACT CAPTURE",
+  "risk": "R1",
+  "versions": {
+    "ide": "3.13.21",
+    "cli": "2026.07.23-e383d2b"
+  },
+  "probe": {
+    "sha256": "51FF95ACC662542A861107137A093DA30E341F36482E77FB5908093F79E9F769",
+    "raw_payload_persisted": false,
+    "prompt_or_transcript_content_persisted": false,
+    "user_email_value_persisted": false,
+    "env_emitted": false
+  },
+  "pre_state": {
+    "target": "C:/Users/dszub/.cursor/hooks.json",
+    "state": "absent"
+  },
+  "contaminated_preflight": {
+    "promotable": false,
+    "reason": "two unrelated Cursor Agent print tasks started after the clean preflight",
+    "captured_invocations": 2,
+    "payload_state": "invalid_json",
+    "restored_before_retry": true
+  },
+  "cli": {
+    "hook_config_sha256": "19E4BA275ECBE0A47AECE15D7A0B6FBB0CCF8A1938E31D4FCA6F1DB1619F10A7",
+    "controlled_events": 6,
+    "conversations": 3,
+    "new_chat_1": {
+      "events": ["sessionStart", "sessionEnd"],
+      "same_identity": true,
+      "workspace_root_count": 1,
+      "workspace_exact_match": true,
+      "start_transcript": "null",
+      "end_transcript": "absolute_existing_jsonl",
+      "nonce_exact_match": true
+    },
+    "resume": {
+      "same_identity": true,
+      "new_session_start": false,
+      "events": ["sessionEnd"],
+      "end_transcript": "absolute_existing_jsonl",
+      "nonce_exact_match": true
+    },
+    "new_chat_2": {
+      "different_identity": true,
+      "events": ["sessionStart", "sessionEnd"],
+      "workspace_exact_match": true,
+      "start_transcript": "null",
+      "end_transcript": "absolute_existing_jsonl",
+      "nonce_exact_match": true
+    },
+    "abrupt_termination": {
+      "events": ["sessionStart"],
+      "synthetic_session_end": false,
+      "remaining_probe_processes": 0
+    },
+    "pre_compact": "UNPROVEN_NO_DETERMINISTIC_TRIGGER",
+    "promotion": "ELIGIBLE_FOR_CU1_CLI_ONLY"
+  },
+  "ide": {
+    "hook_config_sha256": "467B03C1917FE7AB43D797857F9FE155C9F2F3E5DDDFDBE046F629C6A6320A76",
+    "controlled_events": 2,
+    "conversations": 2,
+    "application_start": {
+      "events": ["sessionStart"],
+      "workspace_root_count": 0,
+      "transcript": "null"
+    },
+    "new_agent": {
+      "events": ["sessionStart"],
+      "different_identity": true,
+      "workspace_root_count": 1,
+      "workspace_exact_match": false,
+      "workspace_encoding_or_normalization": "UNPROVEN",
+      "transcript": "null",
+      "nonce_exact_match": true
+    },
+    "new_agent_closed_previous_session": false,
+    "application_close_emitted_session_end": false,
+    "pre_compact": "UNPROVEN_NO_DETERMINISTIC_TRIGGER",
+    "promotion": "DEGRADED_NO_START_END_PAIR"
+  },
+  "post_state": {
+    "target": "C:/Users/dszub/.cursor/hooks.json",
+    "state": "absent",
+    "parent_acl_exact_match": true,
+    "cursor_processes": 0,
+    "probe_processes": 0
+  },
+  "verdict": {
+    "cu0_l": "COMPLETE_PER_SURFACE",
+    "cli": "PROMOTE_TO_CU1",
+    "ide": "HOLD_DEGRADED",
+    "implementation_authorized": false
+  }
+}

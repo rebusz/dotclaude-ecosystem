@@ -2,9 +2,9 @@
 title: Cross-Runtime Session Lifecycle Adapters - Codex Shipped, Cursor Discovery
 date: 2026-07-27
 status: active
-status_detail: cursor-discovery-complete-cu0-l-review
+status_detail: cursor-cu0-l-complete-cli-promoted-ide-degraded
 risk: R1
-phase: discovery
+phase: implementation-ready
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, hooks, session-lifecycle, cursor, codex]
 related:
@@ -16,7 +16,7 @@ related:
 # Cross-Runtime Session Lifecycle Adapters — Codex Shipped, Cursor Discovery
 
 **Date:** 2026-07-27; amended 2026-07-28
-**Status:** ACTIVE — Codex shipped and live; Cursor discovery complete, implementation not started
+**Status:** ACTIVE — Codex shipped and live; Cursor CU0-L complete, CLI implementation ready, IDE degraded
 **Risk:** R1 (advisory local tooling; no broker, order-path, or live-state writes)
 **Workflow:** `/fwp`
 **Owner:** `dotclaude-ecosystem`
@@ -853,7 +853,7 @@ This plan's diagrams are the only new cross-host diagrams.
     local chat storage shape, two zero-event CLI project-hook runs.
   - Verdict: native schema present; project-hook CLI activation and context
     delivery remain `UNPROVEN`.
-- [ ] **CU0-L (P1, live contract capture)** — capture sanitized native IDE and
+- [x] **CU0-L (P1, live contract capture)** — capture sanitized native IDE and
   CLI start/end/preCompact payloads without changing shared lifecycle state.
   - Authorization: requires the literal operator token
     `GO CURSOR CU0-L LIVE CONTRACT CAPTURE`; this `/fwp` review does not grant it.
@@ -885,7 +885,19 @@ This plan's diagrams are the only new cross-host diagrams.
   - Promotion rule: IDE and CLI pass independently. CU1 may target only a
     surface with a proven matching start/end pair; the other remains explicitly
     unsupported/degraded.
+  - Result (2026-07-28): CLI passed two independent matching start/end captures,
+    resume identity continuity, new-chat identity separation, exact Temp-only
+    context nonce delivery, an absolute existing `.jsonl` end transcript, and
+    abrupt-termination behavior without a synthetic end. IDE delivered the
+    exact context nonce and distinct starts but emitted no matching end on New
+    Agent or application close, so it remains degraded. `preCompact` remains
+    unproven on both surfaces. Sanitized evidence:
+    `design/audits/2026-07-28_cursor_cu0l_live_contract_capture/`.
 - [ ] **CU1 (P1)** — implement the thin Cursor adapter after CU0-L passes.
+  - Authorization boundary: only the CLI surface is eligible. Implementation
+    requires `GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`; CU0-L authorization
+    does not grant it. IDE remains excluded until a matching start/end pair is
+    proven.
   - Verify: focused contract tests including preCompact-without-binding,
     cross-surface ID isolation, root cardinality, write-once path mismatch, no
     `env`, and full Claude/Codex lifecycle regression.
@@ -1345,6 +1357,29 @@ slice's frozen evidence. This review found seven Cursor contract gaps; all seven
 are folded above. There are zero unresolved engineering decisions and zero
 authorized production edits.
 
+## Cursor CU0-L live contract capture — 2026-07-28
+
+The operator authorized only the reversible live-capture gate with
+`GO CURSOR CU0-L LIVE CONTRACT CAPTURE`. The temporary user hook was restored
+to its exact pre-state after each surface; the target was absent both before and
+after capture, parent ACL matched, and final readback found zero Cursor and
+probe processes.
+
+| Surface | Context delivery | Lifecycle pairing | Transcript/root evidence | Promotion |
+|---|---|---|---|---|
+| Agent CLI `2026.07.23-e383d2b` | exact Temp-only nonce on two new chats and resume | two matching new-chat start/end pairs; resume kept identity without a second start; abrupt stop had no synthetic end | one exact workspace root; start transcript null; end path absolute, existing, `.jsonl` | **PROMOTE TO CU1** |
+| IDE `3.13.21` | exact Temp-only nonce | two distinct starts; no end on New Agent or application close | second start reported one root, but canonical equality/encoding remains unproven; transcript null | **HOLD DEGRADED** |
+
+`preCompact` remains `UNPROVEN_NO_DETERMINISTIC_TRIGGER` for both surfaces.
+The contaminated initial preflight is retained only as non-promotable diagnostic
+evidence. The sanitized aggregate is canonical at
+`design/audits/2026-07-28_cursor_cu0l_live_contract_capture/evidence.json`;
+raw Temp material is intentionally not committed.
+
+CU0-L is complete per surface. It authorizes no production code or persistent
+activation. The next smallest eligible slice is CLI-only and requires
+`GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Runs | Status | Findings |
@@ -1352,12 +1387,13 @@ authorized production edits.
 | CEO Review | Cursor amendment `/fwp` | 1 | CLEAR | HOLD SCOPE; reversible CU0-L probe is the only credible next step |
 | Paid cross-model audit | custom paid, no Antigravity/Kimi | 5 returned, 2 unavailable | CLEAR/PARTIAL | 7 valid contract gaps folded; unavailable lanes disclosed |
 | Eng Review | Cursor amendment `/plan-eng-review` | 1 | CLEAR | 7 issues folded; sequential CU0-L through CU4 gates pinned |
+| CU0-L live capture | native IDE and CLI | 2 surfaces | CLEAR/PARTIAL | CLI promoted; IDE degraded; `preCompact` unproven |
 | Implementation Review | exact-head diff review | 0 | N/A | No implementation is authorized or present |
 | Design Review | UI/UX | 0 | N/A | No UI scope |
 
-- **BOUNDARY:** review-only; no user hook, lifecycle state, adapter, activation,
-  Antigravity, or Kimi action occurred.
-- **NEXT GATE:** `GO CURSOR CU0-L LIVE CONTRACT CAPTURE`.
-- **VERDICT:** CURSOR PLAN REVIEW CLEAR; LIVE CAPTURE NOT YET AUTHORIZED.
+- **BOUNDARY:** live capture only; temporary user hook removed; no lifecycle
+  state, adapter, persistent activation, Antigravity, or Kimi action occurred.
+- **NEXT GATE:** `GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`.
+- **VERDICT:** CU0-L COMPLETE; CLI READY FOR CU1; IDE HELD DEGRADED.
 
 NO UNRESOLVED DECISIONS
