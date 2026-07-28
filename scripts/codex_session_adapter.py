@@ -16,6 +16,32 @@ from session_state import (
     validate_session_id,
 )
 
+_CODEX_UNIVERSAL_OUTPUT_TYPES = {
+    "continue": bool,
+    "stopReason": str,
+    "suppressOutput": bool,
+    "systemMessage": str,
+}
+
+
+def _codex_session_start_output(shared_output: object) -> dict[str, Any]:
+    if not isinstance(shared_output, dict):
+        return {}
+    output = {
+        key: shared_output[key]
+        for key, expected_type in _CODEX_UNIVERSAL_OUTPUT_TYPES.items()
+        if isinstance(shared_output.get(key), expected_type)
+    }
+    shared_specific = shared_output.get("hookSpecificOutput")
+    if not isinstance(shared_specific, dict):
+        return output
+    specific: dict[str, Any] = {"hookEventName": "SessionStart"}
+    additional_context = shared_specific.get("additionalContext")
+    if isinstance(additional_context, str):
+        specific["additionalContext"] = additional_context
+    output["hookSpecificOutput"] = specific
+    return output
+
 
 def handle_event(
     event: dict[str, Any],
@@ -29,10 +55,12 @@ def handle_event(
         if event.get("hook_event_name") == "SessionStart":
             if not event.get("transcript_path"):
                 return {}
-            return session_router.handle_event(
-                event,
-                registry_path=registry_path,
-                state_dir=state_dir,
+            return _codex_session_start_output(
+                session_router.handle_event(
+                    event,
+                    registry_path=registry_path,
+                    state_dir=state_dir,
+                )
             )
         if event.get("hook_event_name") == "SessionEnd":
             delegated_event = event

@@ -78,17 +78,26 @@ class TestCodexSessionAdapter(unittest.TestCase):
             source="startup",
         )
         expected = {
+            "suppressOutput": True,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": "registered context",
             }
+        }
+        shared_output = {
+            **expected,
+            "hookSpecificOutput": {
+                **expected["hookSpecificOutput"],
+                "sessionTitle": "shared Claude-only title",
+            },
+            "sharedOnlyField": "must not reach Codex",
         }
         registry_path = Path("D:/tmp/registry.json")
         state_dir = Path("D:/tmp/state")
         with mock.patch.object(
             adapter.session_router,
             "handle_event",
-            return_value=expected,
+            return_value=shared_output,
         ) as start:
             output = adapter.handle_event(
                 event,
