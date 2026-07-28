@@ -2,9 +2,9 @@
 title: Cross-Runtime Session Lifecycle Adapters - Codex Shipped, Cursor Discovery
 date: 2026-07-27
 status: active
-status_detail: cursor-cu0-l-complete-cli-promoted-ide-degraded
+status_detail: cursor-cu1-cli-implemented-local-validation-pass-review-pending
 risk: R1
-phase: implementation-ready
+phase: implementation-review
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, hooks, session-lifecycle, cursor, codex]
 related:
@@ -16,7 +16,7 @@ related:
 # Cross-Runtime Session Lifecycle Adapters — Codex Shipped, Cursor Discovery
 
 **Date:** 2026-07-27; amended 2026-07-28
-**Status:** ACTIVE — Codex shipped and live; Cursor CU0-L complete, CLI implementation ready, IDE degraded
+**Status:** ACTIVE — Codex shipped and live; Cursor CLI CU1 implemented and locally validated, exact-head review pending; IDE degraded
 **Risk:** R1 (advisory local tooling; no broker, order-path, or live-state writes)
 **Workflow:** `/fwp`
 **Owner:** `dotclaude-ecosystem`
@@ -594,7 +594,8 @@ without trust/config bypass.
 
 ## Deferred runtime slices
 
-Cursor implementation remains `NOT STARTED`; its discovery is complete.
+Cursor CLI CU1 is implemented but not activated; exact-head review and landing
+remain pending. Cursor IDE remains degraded and excluded.
 Antigravity and Kimi remain `NOT STARTED` and out of scope. Each later slice
 begins with native lifecycle-contract discovery and a disposable prototype. A
 host without reliable start/end events receives an honest lower-fidelity
@@ -893,11 +894,23 @@ This plan's diagrams are the only new cross-host diagrams.
     Agent or application close, so it remains degraded. `preCompact` remains
     unproven on both surfaces. Sanitized evidence:
     `design/audits/2026-07-28_cursor_cu0l_live_contract_capture/`.
-- [ ] **CU1 (P1)** — implement the thin Cursor adapter after CU0-L passes.
+- [x] **CU1 (P1)** — implement the thin Cursor adapter after CU0-L passes.
   - Authorization boundary: only the CLI surface is eligible. Implementation
     requires `GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`; CU0-L authorization
     does not grant it. IDE remains excluded until a matching start/end pair is
     proven.
+  - Result (2026-07-28): `scripts/cursor_session_adapter.py` maps only the proven
+    Agent CLI surface into deterministic runtime-namespaced shared session IDs,
+    requires one exact registered root, preserves write-once path equality,
+    emits only `additional_context`, and treats native null-start transcripts as
+    the documented lower-fidelity no-op. Repeated matching starts map to
+    `resume`; mismatches and unbound `preCompact` fail closed without changing
+    shared schemas or policy.
+  - Validation: `12 passed, 2 subtests` focused adapter; `105 passed, 9
+    subtests` lifecycle-focused regression; `366 passed, 11 subtests` full
+    `scripts/tests`; Ruff, compileall, and `sync_agent_rules.py --check` passed.
+    No installer, user hook, machine activation, IDE, Antigravity, or Kimi
+    change occurred.
   - Verify: focused contract tests including preCompact-without-binding,
     cross-surface ID isolation, root cardinality, write-once path mismatch, no
     `env`, and full Claude/Codex lifecycle regression.
@@ -1388,12 +1401,15 @@ activation. The next smallest eligible slice is CLI-only and requires
 | Paid cross-model audit | custom paid, no Antigravity/Kimi | 5 returned, 2 unavailable | CLEAR/PARTIAL | 7 valid contract gaps folded; unavailable lanes disclosed |
 | Eng Review | Cursor amendment `/plan-eng-review` | 1 | CLEAR | 7 issues folded; sequential CU0-L through CU4 gates pinned |
 | CU0-L live capture | native IDE and CLI | 2 surfaces | CLEAR/PARTIAL | CLI promoted; IDE degraded; `preCompact` unproven |
-| Implementation Review | exact-head diff review | 0 | N/A | No implementation is authorized or present |
+| Implementation Review | exact-head diff review | 0 | PENDING | CU1 local validation passed; commit and exact-head review still required |
 | Design Review | UI/UX | 0 | N/A | No UI scope |
 
-- **BOUNDARY:** live capture only; temporary user hook removed; no lifecycle
-  state, adapter, persistent activation, Antigravity, or Kimi action occurred.
-- **NEXT GATE:** `GO CURSOR CU1 CLI ADAPTER IMPLEMENTATION`.
-- **VERDICT:** CU0-L COMPLETE; CLI READY FOR CU1; IDE HELD DEGRADED.
+- **BOUNDARY:** CLI adapter source and tests only; no shared lifecycle schema or
+  policy edit, installer, user hook, persistent activation, IDE, Antigravity,
+  or Kimi action occurred.
+- **NEXT GATE:** exact-head implementation review and R1 landing; no new
+  operator token is required.
+- **VERDICT:** CU1 IMPLEMENTED AND LOCALLY VALIDATED; EXACT-HEAD REVIEW PENDING;
+  IDE HELD DEGRADED.
 
 NO UNRESOLVED DECISIONS
