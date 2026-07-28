@@ -141,6 +141,44 @@ def looks_r3(subjects: list[str]) -> bool:
     return any("r3" in s.lower() for s in subjects)
 
 
+DESIGN_PATHS = ("design/plans/", "design/audits/", "design/visions/", "design/mockups/")
+
+
+def orphan_design_docs(repo: str, base: str) -> list[dict]:
+    """Design docs that exist on some branch and on NO other ref, including base.
+
+    The blind spot this closes: the design-doc auto-backup hook commits plans to
+    whatever session branch is checked out. If that session ends without a PR,
+    the plan lives on exactly one unmerged branch — which the reaper deliberately
+    protects and therefore never mentions, so the doc is invisible until someone
+    goes looking. A plan is the one artifact whose loss is not recoverable from
+    the code, so it gets its own alarm rather than a silent keep.
+
+    Only unmerged local branches are scanned; a merged branch by definition has
+    its files on base already.
+    """
+    base_files = {
+        ln for ln in git_out(repo, ["ls-tree", "-r", "--name-only", base]).splitlines()
+        if ln.startswith(DESIGN_PATHS)
+    }
+    # file -> branches carrying it
+    carriers: dict[str, list[str]] = {}
+    for line in git_out(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]).splitlines():
+        b = line.strip()
+        if not b or b == base.replace("origin/", "") or is_ancestor(repo, b, base):
+            continue
+        # Only files this branch ADDS relative to base — cheap, and the ones at risk.
+        added = git_out(repo, ["diff", "--name-only", "--diff-filter=A", f"{base}...{b}"]).splitlines()
+        for f in (x.strip() for x in added if x.strip()):
+            if f.startswith(DESIGN_PATHS) and f not in base_files:
+                carriers.setdefault(f, []).append(b)
+
+    return [
+        {"file": f, "branches": bs, "single_ref": len(bs) == 1}
+        for f, bs in sorted(carriers.items())
+    ]
+
+
 @dataclass
 class Report:
     base: str = ""
@@ -153,6 +191,7 @@ class Report:
     keep_worktrees: list[dict] = field(default_factory=list)
     deploy_overlay: list[str] = field(default_factory=list)     # files safe to overlay base->primary
     deploy_conflicts: list[dict] = field(default_factory=list)  # base-ahead files the primary also changed
+    orphan_docs: list[dict] = field(default_factory=list)       # design docs living on unmerged branches only
     totals: dict = field(default_factory=dict)
 
 
@@ -290,8 +329,24 @@ def analyze(repo: str, base: str, protect: Optional[set[str]] = None) -> Report:
         if is_ancestor(repo, b, base):
             r.reap_branches.append(b)
 
+    # ── Design docs stranded on a single unmerged branch ────────────────────
+    r.orphan_docs = orphan_design_docs(repo, base)
+    stranded = [d for d in r.orphan_docs if d["single_ref"]]
+    if stranded:
+        by_branch: dict[str, int] = {}
+        for d in stranded:
+            by_branch[d["branches"][0]] = by_branch.get(d["branches"][0], 0) + 1
+        detail = "; ".join(f"{b} ({n})" for b, n in sorted(by_branch.items(), key=lambda x: -x[1])[:4])
+        r.alarms.append(
+            f"ORPHAN DESIGN DOCS: {len(stranded)} file(s) exist on exactly one unmerged "
+            f"branch and nowhere else (not on {base}) — {detail}. Land or archive them; "
+            f"the reaper protects these branches, so they will never surface on their own."
+        )
+
     r.totals = {
         "worktrees_total": len(wts),
+        "orphan_docs": len(r.orphan_docs),
+        "orphan_docs_single_ref": len(stranded),
         "local_branches": len(git_out(repo, ["for-each-ref", "--format=x", "refs/heads"]).splitlines()),
         "reap_branches": len(r.reap_branches),
         "reap_worktrees": len(r.reap_worktrees),
@@ -344,6 +399,20 @@ def print_report(r: Report, apply: bool) -> None:
     for w in r.keep_worktrees:
         print(f"  - {w['path']}  [{w['branch'] or 'detached@' + w['head']}]  :: {', '.join(w['reasons'])}")
     print()
+
+    stranded = [d for d in r.orphan_docs if d["single_ref"]]
+    if stranded:
+        print(f"ORPHAN design docs (exist on ONE unmerged branch, not on base) — {len(stranded)}:")
+        by_branch: dict[str, list[str]] = {}
+        for d in stranded:
+            by_branch.setdefault(d["branches"][0], []).append(d["file"])
+        for b, files in sorted(by_branch.items(), key=lambda x: -len(x[1])):
+            print(f"  - {b}  ({len(files)} file(s))")
+            for f in files[:5]:
+                print(f"      {f}")
+            if len(files) > 5:
+                print(f"      ... and {len(files) - 5} more")
+        print()
 
     if r.deploy_overlay or r.deploy_conflicts:
         print(f"DEPLOY to live checkout (base->primary, WIP-preserving) - "

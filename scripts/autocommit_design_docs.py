@@ -15,6 +15,9 @@ from pathlib import Path
 
 DESIGN_PATHS = ("design/plans/", "design/audits/", "design/visions/", "design/mockups/")
 
+# Branches we must never rewrite history on, even by amend.
+PROTECTED_BRANCHES = {"main", "master", "develop"}
+
 
 def _normalize(p: str) -> str:
     return p.replace("\\", "/")
@@ -28,6 +31,49 @@ def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
     )
+
+
+def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
+    """True when HEAD is this hook's own backup commit for this same file.
+
+    Collapsing consecutive backups keeps a session's plan history at ONE commit
+    instead of one-per-keystroke. Guards, all of which must hold:
+      * we are on a real branch, and it is not a protected/shared one;
+      * HEAD's subject is exactly the backup subject for this same file;
+      * HEAD touched exactly this one file (nothing else gets swallowed);
+      * HEAD is not already reachable from a remote base ref (never rewrite
+        something that has been merged or that another ref builds on).
+    """
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=git_root).stdout.strip()
+    if not branch or branch == "HEAD" or branch in PROTECTED_BRANCHES:
+        return False
+
+    head_subject = _git(["log", "-1", "--format=%s"], cwd=git_root).stdout.strip()
+    if head_subject != commit_msg_subject:
+        return False
+
+    touched = _git(
+        ["show", "--pretty=format:", "--name-only", "HEAD"], cwd=git_root
+    ).stdout.split()
+    if touched != [rel_path.replace("\\", "/")]:
+        return False
+
+    for base in ("origin/main", "origin/master"):
+        if _git(["rev-parse", "--verify", "--quiet", base], cwd=git_root).returncode != 0:
+            continue
+        if _git(["merge-base", "--is-ancestor", "HEAD", base], cwd=git_root).returncode == 0:
+            return False  # already on base — amending would rewrite shared history
+
+    return True
+
+
+def _push(git_root: str, amended: bool) -> None:
+    """Best-effort push. An amend rewrites the tip, so the branch-local force
+    (lease-guarded) is the only way to keep the remote backup in sync."""
+    res = _git(["push", "origin", "HEAD"], cwd=git_root)
+    if res.returncode == 0 or not amended:
+        return
+    _git(["push", "--force-with-lease", "origin", "HEAD"], cwd=git_root)
 
 
 def main() -> None:
@@ -78,14 +124,21 @@ def main() -> None:
         return  # nothing new to commit
 
     fname = abs_path.name
-    commit_msg = f"docs: auto-backup {fname}\n\nAuto-committed by PostToolUse hook (Write/Edit guard).\nFile: {rel_path}"
-    _git(["commit", "-m", commit_msg], cwd=git_root)
+    subject = f"docs: auto-backup {fname}"
+    commit_msg = f"{subject}\n\nAuto-committed by PostToolUse hook (Write/Edit guard).\nFile: {rel_path}"
 
-    # Push — best-effort, no-op if no remote or no tracking branch
-    _git(["push", "origin", "HEAD"], cwd=git_root)
+    # Collapse consecutive backups of the same file into a single commit instead
+    # of one per edit — a long planning session used to leave 15+ identical
+    # commits on the branch, which is noise the operator later has to untangle.
+    amended = _can_amend(git_root, rel_path, subject)
+    args = ["commit", "-m", commit_msg] + (["--amend"] if amended else [])
+    _git(args, cwd=git_root)
+
+    _push(git_root, amended)
 
     # Print to stderr so Claude Code shows it as a system note
-    print(f"[autocommit] {fname} → git commit + push ({git_root})", file=sys.stderr)
+    verb = "amend + push" if amended else "commit + push"
+    print(f"[autocommit] {fname} → git {verb} ({git_root})", file=sys.stderr)
 
 
 if __name__ == "__main__":
