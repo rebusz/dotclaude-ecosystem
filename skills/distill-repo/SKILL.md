@@ -18,9 +18,13 @@ operational knowledge, not a new authority layer.
   `<!-- BEGIN distill-repo skills -->` and
   `<!-- END distill-repo skills -->`.
 - Never write product code, runtime config, broker API code, order path code,
-  credentials, local env files, generated logs, or unrelated docs.
-- LLM agents never touch broker API or order path. Skills may describe this
-  boundary, but must not weaken it.
+  credentials, local env files, generated logs, or unrelated docs. This is a
+  scope limit on THIS skill (it authors skills, not product code) — not a claim
+  that agents may never edit execution code; see
+  `agent-rules/refs/paper-live-parity.md`.
+- Distilled skills must describe the real-money/Combine TRIGGER gate and
+  paper/live parity accurately, and must not reintroduce a blanket
+  "agents never touch the order path" prohibition.
 - Memory and claude-mem are pointers, not truth. Verify memory-sourced claims
   against code, tests, CI, design docs, readbacks, or git before treating them
   as facts.

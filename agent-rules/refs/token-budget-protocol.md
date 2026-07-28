@@ -8,6 +8,6 @@ Pointer target from `agent-rules/core.md` → `## Context And Token Hygiene` →
 - Fail closed on summaries: noisy command summaries must preserve nonzero exit codes, timeouts, skipped critical tests, stderr error groups, first failing assertion or node, and the raw artifact path. Say "passed" only when exit code is zero and the expected target actually ran.
 - Budget external surfaces: use browser, connector, graph refresh, or broad MCP calls only when they answer a specific question unavailable from local truth.
 - Do not prune connectors, skills, MCP servers, or account-level surfaces without audit evidence and explicit GO; record owner, affected projects, rollback path, and whether the action is manual/account-level.
-- Token-budget rules are subordinate to risk classes, repo boundaries, live-money boundaries, and the rule that LLM agents never touch broker API or order path.
+- Token-budget rules are subordinate to risk classes, repo boundaries, the real-money/Combine trigger gate, and paper/live parity (`agent-rules/refs/paper-live-parity.md`). Never skip reading the live path to save tokens — an untested live path is the expensive failure, not the extra read.
 - Scope handoff tokens: any next GO token must include scope, risk class, no-go boundaries, and a requirement to refresh repo truth before execution.
 - Use compact handoffs when pausing or compacting: include repo/cwd, branch/HEAD, dirty-tree boundary, files changed, validation, blockers, exact next command or GO token, and explicit no-go boundaries.
