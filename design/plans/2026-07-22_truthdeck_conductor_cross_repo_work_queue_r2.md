@@ -537,8 +537,13 @@ Each invocation creates a new immutable snapshot. Conductor stores only its refe
 and digest. A changed HEAD, plan scope digest, authorization requirement, PR head,
 review head, CI head, or runtime identity invalidates the corresponding checkpoint.
 
-TruthDeck R1 receives no queue database or daemon responsibility. In the MVP,
-Conductor renders its own queue status and includes snapshot links. A later
+TruthDeck R1 receives no queue database or daemon responsibility. Conductor consumes
+lifecycle evidence checkpoints via a read-only seam with the shipped session lifecycle
+engine (`session_lifecycle.py` and `cross_runtime_session_lifecycle_adapters_r1.md`),
+reading `session_state.py` and `truthctl` snapshots without writing `session_registry.json`
+or owning session lifecycle state.
+
+In the MVP, Conductor renders its own queue status and includes snapshot links. A later
 code-owned TruthDeck collector may observe an exported `conductor.status.v1` artifact,
 but only with explicit schema compatibility tests; no dynamic plugin is introduced.
 
@@ -559,16 +564,16 @@ Every adapter must:
 - implement idempotent resume where the host supports it;
 - refuse cancellation if it cannot prove the target identity.
 
-### Evidence at plan creation
+### Evidence at plan creation & delta discovery
 
 | Host | Current local evidence | Initial plan status |
 |---|---|---|
-| Claude | `claude.exe` present; non-interactive `-p`; JSON/stream output; session ID/resume; bounded allowed/disallowed tools | candidate for autonomous adapter |
-| Codex | native app tools expose list/create/read/send/wait/handoff/archive and cron/heartbeat automation; direct Windows app executable invocation returned access denied | cooperative/native-task adapter; standalone dispatch HOLD until a stable callable seam is proven |
-| Kimi | `kimi.exe` present; non-interactive prompt; stream JSON; session resume; ACP stdio and local server surfaces | candidate for autonomous adapter |
-| Cursor | desktop CLI present and can install MCP; no `cursor-agent` executable; CLI shows navigation/editor operations, not non-interactive agent execution | MCP/skill cooperative client; autonomous dispatch HOLD |
-| Gemini | config home present; no `gemini` executable found | MCP/skill contract only; autonomous dispatch HOLD |
-| Antigravity | local config home present; no `antigravity` executable and expected shared MCP path was not present | discovery required; autonomous dispatch HOLD |
+| Claude | `claude.exe` present; non-interactive `-p`; JSON/stream output; session ID/resume; bounded allowed/disallowed tools | Candidate for autonomous adapter (PROVEN) |
+| Codex | Native app tools expose list/create/read/send/wait/handoff/archive; lifecycle adapter shipped in PRs #55–#57 | Cooperative/native-task adapter PROVEN; Standalone dispatch HOLD until stable API proven |
+| Kimi | `kimi.exe` present; non-interactive prompt; stream JSON; session resume; ACP stdio and local server surfaces | Candidate for autonomous adapter |
+| Cursor | Installed Cursor IDE 3.13.21 & Cursor Agent CLI 2026.07.23-e383d2b; CLI session lifecycle adapter landed (PR #58); no non-interactive execution API | Lifecycle adapter PROVEN; Cooperative client PROVEN; Autonomous dispatch HOLD / UNSUPPORTED |
+| Gemini | Config home present; no standalone `gemini` executable found | MCP/skill contract only; Autonomous dispatch HOLD |
+| Antigravity | Antigravity IDE 1.107.0 installed at `C:\Users\dszub\AppData\Local\Programs\Antigravity IDE\bin\antigravity-ide.cmd`; CLI launcher provides `antigravity-ide chat [options] [prompt]`; user-level `mcp_config.json` present | Cooperative MCP/skill client PROVEN; Native session lifecycle hooks and headless non-interactive autonomous dispatch UNSUPPORTED (HOLD) |
 
 This matrix is a starting observation, not permanent product capability. Each adapter
 must pass its own installed-version smoke before promotion.
@@ -803,9 +808,10 @@ dirty operator checkout tests prove zero mutation.
 - `scripts/conductor_workflow.py`
 - corresponding focused tests.
 
-Invoke installed TruthDeck with explicit scope, validate snapshot path/digest/schema,
-invalidate stale checkpoints, and map Work Items to the existing `/fwf` or `/fwp`
-entry contract without duplicating workflow stages.
+Invoke installed TruthDeck with explicit scope, consume shipped `session_state.py` and
+`truthctl` snapshots via a read-only seam without duplicating session lifecycle logic,
+validate snapshot path/digest/schema, invalidate stale checkpoints, and map Work Items
+to the existing `/fwf` or `/fwp` entry contract without duplicating workflow stages.
 
 **Gate:** stale/mismatched evidence and missing R2 authorization cannot reach dispatch.
 
@@ -960,6 +966,7 @@ completes without duplicate dispatch or repository mutation outside its worktree
 
 ```powershell
 python -m pytest -q scripts/tests/test_conductor_*.py
+python -m pytest -q scripts/tests/
 python -m ruff check scripts/conductor*.py scripts/tests/test_conductor_*.py
 python scripts/conductorctl.py doctor --json
 python scripts/conductorctl.py status --json
@@ -968,7 +975,7 @@ python scripts/conductorctl.py export --output "$env:TEMP/conductor-export.jsonl
 git diff --check
 ```
 
-Full existing `scripts/tests` runs before PR-ready. A test is reported passed only
+Full existing `scripts/tests` suite (370+ tests, 11 subtests) runs before PR-ready. A test is reported passed only
 when exit code is zero and the expected targets actually ran.
 
 ## Performance and limits
