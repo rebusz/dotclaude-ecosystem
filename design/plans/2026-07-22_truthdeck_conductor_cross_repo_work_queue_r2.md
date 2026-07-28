@@ -573,7 +573,8 @@ Every adapter must:
 | Kimi | `kimi.exe` present; non-interactive prompt; stream JSON; session resume; ACP stdio and local server surfaces | Candidate for autonomous adapter |
 | Cursor | Installed Cursor IDE 3.13.21 & Cursor Agent CLI 2026.07.23-e383d2b; CLI session lifecycle adapter landed (PR #58); no non-interactive execution API | Lifecycle adapter PROVEN; Cooperative client PROVEN; Autonomous dispatch HOLD / UNSUPPORTED |
 | Gemini | Config home present; no standalone `gemini` executable found | MCP/skill contract only; Autonomous dispatch HOLD |
-| Antigravity | Antigravity IDE 1.107.0 installed at `C:\Users\dszub\AppData\Local\Programs\Antigravity IDE\bin\antigravity-ide.cmd`; CLI launcher provides `antigravity-ide chat [options] [prompt]`; user-level `mcp_config.json` present | Cooperative MCP/skill client PROVEN; Native session lifecycle hooks and headless non-interactive autonomous dispatch UNSUPPORTED (HOLD) |
+| Antigravity IDE | Antigravity IDE 1.107.0 installed at `C:\Users\dszub\AppData\Local\Programs\Antigravity IDE\bin\antigravity-ide.cmd`; CLI launcher provides `antigravity-ide chat [options] [prompt]`; user-level `mcp_config.json` present | Cooperative-only PROVEN (`cooperative-only`); Native session hooks and headless non-interactive autonomous dispatch UNSUPPORTED / HOLD (`HOLD_NO_PROVEN_SESSION_EVENT_CONTRACT`) |
+| agy CLI | Standalone `agy` CLI binary is not installed on this machine | Status: `HOLD_NOT_INSTALLED` |
 
 This matrix is a starting observation, not permanent product capability. Each adapter
 must pass its own installed-version smoke before promotion.
@@ -975,7 +976,7 @@ python scripts/conductorctl.py export --output "$env:TEMP/conductor-export.jsonl
 git diff --check
 ```
 
-Full existing `scripts/tests` suite (370+ tests, 11 subtests) runs before PR-ready. A test is reported passed only
+Full existing `scripts/tests` suite runs before PR-ready. A test is reported passed only
 when exit code is zero and the expected targets actually ran.
 
 ## Performance and limits
@@ -1069,6 +1070,208 @@ Destructive cleanup requires a separate explicit operator action.
 7. **Host drift:** host CLIs and app task APIs may change independently. Capabilities
    need versioned doctor evidence and fail-closed promotion.
 
+## CEO review decisions (fwf Stage 1, 2026-07-23, agent-resolved R2)
+
+**Mode: HOLD SCOPE.** The plan is deliberately bounded infrastructure; the complexity
+smell (many new modules) is answered by the alternatives analysis below, not by
+expansion. Reviewer: Claude (Fable), agent-resolved per the R2 `/fwf` contract.
+
+### Premise verdict
+
+Real problem, not proxy. Evidence from operator history: duplicate-work incident
+(WatchF/TSU custody F1 duplicated as TSU PR #230, backed out), phantom-deletion
+incident (#465) from manual multi-actor reconciliation, a 30-worktree pile requiring
+manual triage (2026-07-03), and — live during this very review — Codex exhausting its
+token quota for 5 days, stranding its in-flight lanes with no common recovery state.
+Doing nothing keeps paying that tax. Conductor is the most direct path that does not
+create a second workflow authority.
+
+### Alternatives considered (0C-bis)
+
+- **A - as planned (selected):** port-free `conductord` single writer + atomic inbox
+  + SQLite WAL + adapters. Ideal-architecture path; only variant that gives live lease
+  TTL/heartbeat processing without depending on the next CLI call happening.
+- **B - daemonless tick:** no coordinator; every `conductorctl` call writes SQLite
+  directly under `BEGIN IMMEDIATE`, a scheduled `tick` command processes expiries.
+  Genuinely simpler (SQLite WAL serializes concurrent writers itself; the single-writer
+  constraint is a design choice for deterministic event order, not a SQLite necessity).
+  Rejected: lease expiry and recovery would only be observed on the next invocation,
+  which is exactly the dead-agent window Conductor exists to close. Decision: keep A,
+  and require the S4 gate to include a liveness test proving lease expiry is processed
+  with zero client activity (see D1).
+- **C - GitHub Issues/Projects as queue:** rejected — cloud dependency, no lease/
+  heartbeat semantics, no local-first guarantee, and trading-adjacent repos must not
+  depend on an external control plane.
+
+### Binding decisions
+
+- **D1 (S4 gate addition):** add a liveness acceptance test — with no client
+  invocations, an expired lease transitions to `RECOVERY_REQUIRED` within one TTL
+  window. This is the concrete payoff justifying the daemon over alternative B.
+- **D2 (dependency check, resolved):** `2026-07-21_global_fwf_fwp_contract_reset.md`
+  is confirmed landed on `main`; four of five open `codex/*` branches are
+  patch-equivalent to main (reap candidates for hygiene), one (`ci-model-b0`) has one
+  unlanded commit out of Conductor scope. S3 binds to the landed contract version.
+- **D3 (name-collision hardening):** risk #1 is confirmed by live evidence: the gstack
+  skill family already detects `CONDUCTOR_WORKSPACE_PATH`/`CONDUCTOR_PORT` env vars and
+  a `CONDUCTOR_SESSION` mode for an unrelated third-party host. Conductor MUST NOT
+  read or set any `CONDUCTOR_*` environment variable; use `TDCONDUCTOR_*` prefixes and
+  keep product wording `TruthDeck Conductor`.
+- **D4 (truthctl exit-code contract):** the checkpoint runner must distinguish
+  "snapshot valid, gates not all green" (observed live: exit 12 with complete JSON)
+  from "collector failed". Exit 12 with parseable snapshot is a VALID checkpoint whose
+  gate states are consumed; only malformed/missing output is a checkpoint failure.
+  Add both cases to S3 tests.
+- **D5 (storage exhaustion):** disk-full/quota failure while writing
+  `~/.conductor` (db, WAL checkpoint, inbox, receipts) is a distinct failure mode from
+  corruption; it must fail closed to a visible degraded/QUARANTINED state without
+  losing the event ledger. Add to S1 tests.
+- **D6 (provider-quota reason code):** "host quota/token budget exhausted" (the
+  currently-live Codex condition) becomes a named reason code driving the host-level
+  hold, distinct from adapter-missing and adapter-error.
+
+### Expansion opportunities (recorded, NOT in scope - operator may cherry-pick at GO)
+
+1. `/whatnext` steering-brief integration: render `conductorctl status` next to the
+   coverage map (R1, small, after S4).
+2. Windows toast on `BLOCKED`/`RECOVERY_REQUIRED` via the existing notification path
+   (R1, small, after S4).
+3. TruthDeck read-only collector for `conductor.status.v1` (already deferred by the
+   plan itself; keep deferred).
+4. Verified-handoff auto-admission rule (plan already defers; keep deferred - highest
+   prompt-injection surface).
+
+## Matrix review record (fwf Stage 2, free basket, 2026-07-23, judge: Claude)
+
+**Panel honesty:** 12 lanes launched; **2 substantive returns** (Nemotron 3 Super
+120B, Poolside Laguna M.1), 2 degenerate (too-short), **8 failed**: all four CDP
+frontier lanes (Gemini timeout incl. one retry, ChatGPT `input_selector_not_found`,
+Perplexity `connect_over_cdp` timeout incl. one retry, Kimi no-listener), and four
+OpenRouter free lanes (3x HTTP 404 roster rot, 1x 429). The frontier cross-check
+that normally prevents self-grading was therefore **absent**. Confidence:
+**LOW-MEDIUM** — consensus is real but shallow. Run:
+`~/.claude/fusion_runs/2026-07-23_081437_title-truthdeck-conductor-cross-repo-age`.
+The CDP fleet degradation is flagged as a separate WatchF triage task, out of this
+plan's scope.
+
+**Consensus (both lanes + judge):** plan is implementation-ready for the R2 gate;
+CEO decisions D1-D6 close the real gaps and must be carried verbatim; authority
+split (Conductor = queue state only) holds; **no boundary violations found** (no
+broker/order reach, no CDP lifecycle, no third workflow).
+
+**Applied amendments (judged valid, in scope):**
+
+- **M1 (from panel, folded into S0/S4):** the operator-authorization
+  interactive-provenance check becomes an explicit tested contract, not prose:
+  S0 freezes the rule (authorize accepted only from an interactive console;
+  rejected when supplied via argv, redirected stdin, environment variables, inbox
+  envelopes, or an agent assignment) and S4 carries a test row for each rejected
+  channel plus the accepted interactive path.
+- **M2 (from panel, folded into S1/S2 gates):** the performance budgets in
+  "Performance and limits" are validated by fixture benchmarks at the S1 and S2
+  gates (raw JSON evidence published), not asserted.
+
+**Judge blind-spot addition (carried to eng review):** MCP `conductor_claim` is
+agent-reachable; claim-spam from a misbehaving MCP client must be bounded by the
+existing rate/concurrency limits — add an explicit abuse-test row (repeated claim
+attempts from one host identity open a visible host-level hold, never a retry
+storm).
+
+**Discarded:** degenerate bare-"GO" outputs (Cohere North Mini, Nemotron Nano)
+carry no evidentiary weight and were not counted as approvals.
+
+## Engineering review (fwf Stage 3, 2026-07-23, agent-resolved R2)
+
+Reviewer: Claude (Fable). Scope was settled in Stage 1 (HOLD SCOPE) and is not
+re-litigated. Sections: architecture, quality, tests, performance. Confidence
+scores per finding; findings are folded directly into the slices below.
+
+### Architecture
+
+- **E1 [P2, confidence 8/10] Installer reuse.** S6's `conductor_install.py` must
+  reuse the shipped TruthDeck installer pattern from `scripts/truthdeck_install.py`
+  (ownership hashes, drift detection, backup-before-overwrite, `status` JSON,
+  foreign-file refusal) — verified working live today (`drift=[]`, `state:
+  installed`). This also answers runtime-environment ownership: Conductor's CLI/MCP
+  pin the same interpreter/venv mechanism `truthctl` uses. Do not invent a second
+  installer idiom in the same repo (DRY at the infrastructure level).
+- **No further architecture findings.** Layering, leader-lock identity
+  (PID + process start time), inbox atomicity, and the CDP/workflow boundaries were
+  already pressure-tested by Stage 1 (alternatives A/B/C) and Stage 2; the failure-
+  mode table covers every integration point with a visible state and no silent path.
+
+### Code quality
+
+No findings beyond what Stage 1 bound: the reason-code registry and all entity
+schemas are single-sourced in `conductor_model.py` (S0/S1) and consumed by CLI,
+MCP, and status alike; `TDCONDUCTOR_*` env prefix per D3.
+
+### Tests (additions folded into the test plan)
+
+The existing matrix is close to complete. Added rows:
+
+- **T-live (S4, from D1):** with zero client invocations, an expired lease reaches
+  `RECOVERY_REQUIRED` within one TTL window.
+- **T-auth (S4, from M1):** authorization accepted only interactively; one test row
+  per rejected channel (argv, redirected stdin, env var, inbox envelope, agent
+  assignment) plus the accepted interactive path.
+- **T-claimspam (S4, judge blind spot):** repeated `conductor_claim` attempts from
+  one MCP host identity trip the bounded-failure host-level hold — visible hold,
+  no retry storm, other hosts unaffected.
+- **T-clock (S1):** system wall-clock moved backwards between events — ledger order
+  is unaffected (event IDs monotonic), lease TTL/heartbeat use monotonic durations,
+  and no state transition regresses.
+- **T-upginstall (S6):** installer upgrade attempted while the coordinator is
+  running — refused or safely serialized; never leaves a half-upgraded install.
+- **T-disk (S1, from D5):** simulated disk-full/quota on db/WAL/inbox/receipt
+  writes fails closed to visible degraded/`QUARANTINED` without event-ledger loss.
+
+### Performance
+
+Budgets stand as written; per M2 they are validated by fixture benchmarks with
+published raw JSON at the S1 (store) and S2 (scheduler) gates, and revised only
+with measured justification. No further findings.
+
+### Worktree parallelization
+
+| Lane | Slices | Notes |
+|---|---|---|
+| A (sequential spine) | S0 → S1 → S2 → S3 → S4 | shared `scripts/conductor_*` core, hard dependency chain |
+| B (post-S4, parallel) | S5 adapters | depends on S4 CLI/coordinator surface |
+| C (post-S4, parallel) | S6 installer/skill/docs | depends on S4 artifacts only |
+| join | S7 | after B and C |
+
+Lanes B and C may run in parallel worktrees after S4; flag: both touch
+`scripts/`, so keep file sets disjoint (`conductor_adapter_*` vs
+`conductor_install.py`/`skills/`).
+
+### Failure modes
+
+Zero critical gaps: every failure row in the plan's table has a visible state,
+required evidence, and (with the T-rows above) a test. No silent path found.
+
+### Outside voice
+
+Owned by the `/fwf` workflow itself: Stage 2 matrix was the cross-model pass
+(degraded panel, recorded honestly above). Codex CLI is quota-exhausted at review
+time; no duplicate subagent pass was run — the workflow's own Stage 2 record is
+the outside voice of record. gstack review-log/dashboard plumbing skipped
+(cross-project slug attribution would be wrong from this session's cwd).
+
+## Current-head delta review (fwf Stage 4, 2026-07-28, exact head: 0805465)
+
+Reviewer: Antigravity Host / Claude Pair.
+Reconciliation of Stages 1–3 review record with current HEAD (`0805465`):
+
+1. **Binding Decisions D1–D6:** Preserved unchanged. D1–D6 remain valid and active.
+2. **Host Capability Classification Corrections:**
+   - **Antigravity IDE:** Classified strictly as `cooperative-only` (cooperative MCP/skill client `PROVEN`; native session event contract & headless non-interactive autonomous dispatch UNSUPPORTED / HOLD).
+   - **`agy` CLI:** Classified as `HOLD_NOT_INSTALLED` (standalone `agy` CLI binary is not present on this machine; status is `HOLD_NOT_INSTALLED`, not a global host unsupported statement).
+   - **Antigravity Lifecycle Adapter:** Classified as `HOLD_NO_PROVEN_SESSION_EVENT_CONTRACT` (no native `hooks.json` event contract proven for Antigravity runtime).
+   - **Cursor Host Adapter:** CLI session lifecycle adapter landed in PR #58 (`PROVEN` for session start/end event logging), but non-interactive autonomous dispatch remains `HOLD / UNSUPPORTED`.
+3. **Session Lifecycle Engine Seam:** Conductor S3 reads `session_state.py` and `truthctl` snapshots via a read-only seam with the shipped session lifecycle engine (`session_lifecycle.py` and `cross_runtime_session_lifecycle_adapters_r1.md`), without writing `session_registry.json` or owning session state.
+4. **Historical Test References:** Removed historical test count assertions from the plan doc; validation mandates executing the complete live `scripts/tests` suite.
+
 ## Approval gate
 
 This document authorizes planning only.
@@ -1083,3 +1286,25 @@ After the R2 CEO -> matrix -> engineering plan review incorporates all valid fin
 the workflow must stop at the standing implementation gate:
 
 `>> APPROVAL NEEDED - reply GO to proceed`
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/fwf` Stage 1 | Scope & strategy | 1 | CLEAR | mode HOLD SCOPE; 6 binding decisions (D1-D6); 4 expansions deferred |
+| Matrix Review | `/fwf` Stage 2 (`fuse.py --mode free`) | Multi-model 2nd opinion | 1 | CLEAR (degraded panel) | 2/12 substantive lanes; M1-M2 applied; confidence LOW-MEDIUM |
+| Eng Review | `/fwf` Stage 3 | Architecture & tests (required) | 1 | CLEAR | 1 issue (E1 installer reuse, folded); 6 test rows added; 0 critical gaps |
+| Current-Head Review | `/fwf` Stage 4 | Reconcile delta vs HEAD 0805465 | 1 | CLEAR | Antigravity IDE `cooperative-only`; `agy` `HOLD_NOT_INSTALLED`; lifecycle `HOLD_NO_PROVEN_SESSION_EVENT_CONTRACT`; read-only lifecycle seam bound |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | no UI scope (CLI/MCP MVP) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not requested |
+
+**CROSS-MODEL:** matrix consensus (Nemotron 3 Super, Laguna M.1) endorsed the
+architecture and D1-D6 with no boundary violations; frontier CDP lanes failed
+(fleet degradation, separately triaged) so cross-model coverage is thinner than
+the free-basket norm — recorded, not hidden.
+
+**VERDICT:** CEO + MATRIX + ENG + CURRENT-HEAD CLEARED — plan is review-complete for the R2
+standing implementation gate. Implementation requires one explicit operator GO
+(`>> APPROVAL NEEDED` above); no reviewer output constitutes that GO.
+
+NO UNRESOLVED DECISIONS
