@@ -2,9 +2,9 @@
 title: Cross-Runtime Session Lifecycle Adapters - Codex Shipped, Cursor Discovery
 date: 2026-07-27
 status: active
-status_detail: cursor-cu1-cli-implemented-local-validation-pass-review-pending
+status_detail: cursor-cu1-cli-complete-landing-gated-by-exact-head
 risk: R1
-phase: implementation-review
+phase: landing
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, hooks, session-lifecycle, cursor, codex]
 related:
@@ -16,7 +16,7 @@ related:
 # Cross-Runtime Session Lifecycle Adapters — Codex Shipped, Cursor Discovery
 
 **Date:** 2026-07-27; amended 2026-07-28
-**Status:** ACTIVE — Codex shipped and live; Cursor CLI CU1 implemented and locally validated, exact-head review pending; IDE degraded
+**Status:** ACTIVE — Codex shipped and live; Cursor CLI CU1 implementation complete, landing gated by exact-head review; IDE degraded
 **Risk:** R1 (advisory local tooling; no broker, order-path, or live-state writes)
 **Workflow:** `/fwp`
 **Owner:** `dotclaude-ecosystem`
@@ -900,14 +900,17 @@ This plan's diagrams are the only new cross-host diagrams.
     does not grant it. IDE remains excluded until a matching start/end pair is
     proven.
   - Result (2026-07-28): `scripts/cursor_session_adapter.py` maps only the proven
-    Agent CLI surface into deterministic runtime-namespaced shared session IDs,
-    requires one exact registered root, preserves write-once path equality,
-    emits only `additional_context`, and treats native null-start transcripts as
-    the documented lower-fidelity no-op. Repeated matching starts map to
-    `resume`; mismatches and unbound `preCompact` fail closed without changing
-    shared schemas or policy.
-  - Validation: `12 passed, 2 subtests` focused adapter; `105 passed, 9
-    subtests` lifecycle-focused regression; `366 passed, 11 subtests` full
+    captured Agent CLI version shape into deterministic runtime-namespaced
+    shared session IDs, requires one exact registered root, preserves write-once
+    path equality, emits only `additional_context`, and treats native null-start
+    transcripts as the documented lower-fidelity no-op. Repeated matching starts
+    map to `resume`; mismatches and unbound `preCompact` fail closed without
+    changing shared schemas or policy. CU0-L exposed no second surface marker,
+    so version-shape drift remains observable through
+    `CURSOR_ADAPTER_UNSUPPORTED_SURFACE` rather than being presented as stronger
+    IDE/CLI proof.
+  - Validation: `16 passed, 2 subtests` focused adapter; `109 passed, 9
+    subtests` lifecycle-focused regression; `370 passed, 11 subtests` full
     `scripts/tests`; Ruff, compileall, and `sync_agent_rules.py --check` passed.
     No installer, user hook, machine activation, IDE, Antigravity, or Kimi
     change occurred.
@@ -1401,15 +1404,15 @@ activation. The next smallest eligible slice is CLI-only and requires
 | Paid cross-model audit | custom paid, no Antigravity/Kimi | 5 returned, 2 unavailable | CLEAR/PARTIAL | 7 valid contract gaps folded; unavailable lanes disclosed |
 | Eng Review | Cursor amendment `/plan-eng-review` | 1 | CLEAR | 7 issues folded; sequential CU0-L through CU4 gates pinned |
 | CU0-L live capture | native IDE and CLI | 2 surfaces | CLEAR/PARTIAL | CLI promoted; IDE degraded; `preCompact` unproven |
-| Implementation Review | exact-head diff review | 1 | CLEAR/FIXING | `b4ad2cc`: no ship-blocking findings; three in-scope FIX-LATER items folded before final-head review |
+| Implementation Review | exact-head diff review | 2+ | CLEAR | Independent reviews found no ship-blocking findings; actionable in-scope items were folded and only the final attested head may land |
 | Design Review | UI/UX | 0 | N/A | No UI scope |
 
 - **BOUNDARY:** CLI adapter source and tests only; no shared lifecycle schema or
   policy edit, installer, user hook, persistent activation, IDE, Antigravity,
   or Kimi action occurred.
-- **NEXT GATE:** complete R1 landing only after the corrected exact head passes
+- **NEXT GATE:** complete R1 landing only after the final exact head passes
   independent review; no new operator token is required.
-- **VERDICT:** CU1 IMPLEMENTED AND LOCALLY VALIDATED; LANDING REQUIRES A
-  CORRECTED-HEAD REVIEW PASS; IDE HELD DEGRADED.
+- **VERDICT:** CU1 IMPLEMENTATION COMPLETE; LAND ONLY THE INDEPENDENTLY
+  ATTESTED EXACT HEAD; IDE HELD DEGRADED.
 
 NO UNRESOLVED DECISIONS

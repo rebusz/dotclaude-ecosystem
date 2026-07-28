@@ -95,7 +95,6 @@ def _normalized_start(
         "cwd": str(registration.worktree_root.resolve(strict=False)),
         "hook_event_name": "SessionStart",
         "source": source,
-        "model": event.get("model"),
     }
 
 
@@ -134,15 +133,15 @@ def handle_event(
     try:
         if not isinstance(event, dict):
             raise TypeError("Cursor event must be an object")
+        event_name = event.get("hook_event_name")
+        if event_name not in {"sessionStart", "sessionEnd", "preCompact"}:
+            return {}
         if not _CURSOR_CLI_VERSION_RE.fullmatch(str(event.get("cursor_version") or "")):
             append_hook_error(
                 "CURSOR_ADAPTER_UNSUPPORTED_SURFACE",
                 "noop",
                 state_dir=state_dir,
             )
-            return {}
-        event_name = event.get("hook_event_name")
-        if event_name not in {"sessionStart", "sessionEnd", "preCompact"}:
             return {}
         session_id = _cursor_session_id(event.get("conversation_id"))
         registration = _registered_workspace(
@@ -252,7 +251,7 @@ def main() -> int:
         raw = sys.stdin.read()
         parsed = json.loads(raw) if raw.strip() else {}
         event = parsed if isinstance(parsed, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         event = {}
     output = handle_event(event)
     if output:

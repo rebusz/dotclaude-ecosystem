@@ -75,6 +75,24 @@ class TestCursorSessionAdapter(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), '{"additional_context":"context"}\n')
         handle.assert_called_once_with(json.loads(payload))
 
+    def test_main_treats_stdin_decode_failure_as_clean_noop(self):
+        stdin = mock.Mock()
+        stdin.read.side_effect = UnicodeDecodeError(
+            "utf-8",
+            b"\xff",
+            0,
+            1,
+            "invalid start byte",
+        )
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(adapter, "handle_event", return_value={}) as handle,
+        ):
+            exit_code = adapter.main()
+
+        self.assertEqual(exit_code, 0)
+        handle.assert_called_once_with({})
+
     def test_valid_cli_start_delegates_normalized_event_and_emits_context_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -365,6 +383,74 @@ class TestCursorSessionAdapter(unittest.TestCase):
                 )
                 router.assert_not_called()
             self.assertFalse((state_dir / "hook_errors.log").exists())
+
+    def test_non_lifecycle_event_is_silent_before_surface_version_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            state_dir = root / "state"
+            event = _event(
+                "beforeShellExecution",
+                root=root,
+                transcript_path=None,
+            )
+            event["cursor_version"] = "3.13.25"
+
+            self.assertEqual(adapter.handle_event(event, state_dir=state_dir), {})
+            self.assertFalse((state_dir / "hook_errors.log").exists())
+
+    def test_registered_subdirectory_is_not_accepted_as_exact_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            child = root / "nested"
+            child.mkdir()
+            event = _event(
+                "sessionStart",
+                root=child,
+                transcript_path=str(root / "chat.jsonl"),
+            )
+            with (
+                mock.patch.object(
+                    adapter,
+                    "resolve_repository",
+                    return_value=_registration(root),
+                ),
+                mock.patch.object(
+                    adapter.session_router,
+                    "handle_event",
+                ) as router,
+            ):
+                output = adapter.handle_event(event, state_dir=root / "state")
+
+            self.assertEqual(output, {})
+            router.assert_not_called()
+
+    def test_relative_transcript_is_bounded_invalid_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            state_dir = root / "state"
+            event = _event(
+                "sessionStart",
+                root=root,
+                transcript_path="../private-transcript.jsonl",
+            )
+            with (
+                mock.patch.object(
+                    adapter,
+                    "resolve_repository",
+                    return_value=_registration(root),
+                ),
+                mock.patch.object(
+                    adapter.session_router,
+                    "handle_event",
+                ) as router,
+            ):
+                output = adapter.handle_event(event, state_dir=state_dir)
+
+            self.assertEqual(output, {})
+            router.assert_not_called()
+            error = (state_dir / "hook_errors.log").read_text(encoding="utf-8")
+            self.assertIn("CURSOR_ADAPTER_INVALID_INPUT ValueError", error)
+            self.assertNotIn("private-transcript", error)
 
     def test_end_path_mismatch_fails_closed_without_source_swap(self):
         with tempfile.TemporaryDirectory() as tmp:
