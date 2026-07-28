@@ -259,6 +259,8 @@ class RepoRuleSet:
 
 REPO_RULESETS: tuple[RepoRuleSet, ...] = (
     RepoRuleSet("tsignal-5.0", TSIGNAL_REPO, Path("repos/tsignal-5.0")),
+    RepoRuleSet("tsu", Path("D:/APPS/TSU"), Path("repos/tsu")),
+    RepoRuleSet("watchf", Path("D:/APPS/WatchF"), Path("repos/watchf")),
     RepoRuleSet("tsignallab", Path("D:/APPS/TsignalLAB")),
     RepoRuleSet("h10-flow", Path("D:/APPS/H10 Flow")),
     RepoRuleSet("hue-flow", Path("D:/APPS/Hue Flow")),
@@ -274,6 +276,8 @@ REPO_RULESETS: tuple[RepoRuleSet, ...] = (
 )
 
 TIER1_REPO_SLUGS = {
+    "tsu",
+    "watchf",
     "tsignallab",
     "h10-flow",
     "hue-flow",
