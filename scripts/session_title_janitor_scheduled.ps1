@@ -8,8 +8,9 @@
 # this task polls and stamps dates whenever CCD is NOT running; the next launch
 # then reads already-conforming titles.
 #
-# Registered as Windows task `ClaudeSessionTitleJanitor`. Canonical copy lives in
-# dotclaude-ecosystem/scripts/.
+# Registered as Windows task `ClaudeSessionTitleJanitor` through the companion
+# WScript launcher so the polling run never creates a visible console window.
+# Canonical copies live in dotclaude-ecosystem/scripts/.
 
 $ErrorActionPreference = 'Stop'
 
