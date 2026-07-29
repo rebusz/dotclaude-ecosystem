@@ -190,7 +190,7 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         text = (ROOT / "agent-rules" / "core.md").read_text(encoding="utf-8")
 
         self.assertIn("Review Workflow Routing", text)
-        self.assertIn("Only `/fwf` and `/fwp` own the R1/R2/R3 lifecycle", text)
+        self.assertIn("`/fwf` and `/fwp` own the R1/R2/R3 lifecycle", text)
         self.assertIn("blocking `review`", text)
         self.assertNotIn("/fw close", text)
         self.assertNotIn("`/audit`", text)

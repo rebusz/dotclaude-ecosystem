@@ -6,12 +6,18 @@ All environment variables use TDCONDUCTOR_* to avoid collision with 3rd-party ho
 
 from __future__ import annotations
 
+import pathlib
+import sys
 import uuid
 from typing import Any, Dict
 
-from scripts.conductor_commands import ConductorCommandProcessor
-from scripts.conductor_model import CommandEnvelope
-from scripts.conductor_store import ConductorStore
+_repo_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
+from scripts.conductor_model import CommandEnvelope  # noqa: E402
+from scripts.conductor_store import ConductorStore  # noqa: E402
 
 
 def handle_mcp_tool_call(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

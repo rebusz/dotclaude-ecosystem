@@ -8,11 +8,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pathlib
+import sys
+import time
 import uuid
 
-from scripts.conductor_commands import ConductorCommandProcessor
-from scripts.conductor_model import CommandEnvelope
-from scripts.conductor_store import ConductorStore
+_repo_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
+from scripts.conductor_model import CommandEnvelope  # noqa: E402
+from scripts.conductor_store import ConductorStore  # noqa: E402
 
 
 def main() -> None:
@@ -112,7 +120,24 @@ def main() -> None:
         print(json.dumps(receipt.to_dict(), indent=2))
 
     elif args.command == "authorize":
-        channel = "interactive_console" if args.interactive else "argv"
+        if args.interactive:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                print("Error: --interactive authorization requires an attached interactive console TTY", file=sys.stderr)
+                sys.exit(1)
+
+            session_token = f"tok_{uuid.uuid4().hex}"
+            token_path = store.locks_dir / "interactive_session.token"
+            token_data = {
+                "token": session_token,
+                "created_at_timestamp": time.time(),
+                "pid": os.getpid(),
+            }
+            token_path.write_text(json.dumps(token_data), encoding="utf-8")
+            channel = "interactive_console"
+        else:
+            session_token = None
+            channel = "argv"
+
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="authorize",
@@ -120,11 +145,12 @@ def main() -> None:
                 "work_item_id": args.work_item_id,
                 "interactive_provenance_proven": args.interactive,
                 "channel": channel,
+                "session_token": session_token,
                 "operator_identity": "operator_cli",
             },
             idempotency_key=f"idemp_auth_{uuid.uuid4().hex[:8]}",
         )
-        receipt = processor.process_envelope(envelope)
+        receipt = processor.process_envelope(envelope, envelope_source="direct")
         print(json.dumps(receipt.to_dict(), indent=2))
 
     elif args.command == "reconcile":

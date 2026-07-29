@@ -23,14 +23,25 @@ def test_host_registry_doctor():
 def test_installer_lifecycle(tmp_path: pathlib.Path):
     inst_root = tmp_path / ".conductor_test_install"
 
-    # Install
+    # 1. Read-only check_status on non-existent directory must NOT create directory or DB
+    non_existent = tmp_path / ".conductor_non_existent"
+    st_none = check_status(root_dir=non_existent)
+    assert st_none["status"] == "NOT_INSTALLED"
+    assert not non_existent.exists()
+
+    # 2. Install
     res_inst = install(root_dir=inst_root)
     assert res_inst["status"] == "INSTALLED"
+    bin_dir = pathlib.Path(res_inst["bin_dir"])
+    assert bin_dir.exists()
+    assert (bin_dir / "conductorctl.cmd").exists()
+    assert (bin_dir / "conductorctl").exists()
 
-    # Check
+    # 3. Check installed status
     res_check = check_status(root_dir=inst_root)
     assert res_check["status"] == "INSTALLED"
+    assert res_check["db_exists"] is True
 
-    # Uninstall
+    # 4. Uninstall
     res_uninst = uninstall(root_dir=inst_root)
     assert res_uninst["status"] == "UNINSTALLED"

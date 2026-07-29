@@ -6,8 +6,10 @@ Enforces authorization provenance boundaries and fail-closed security invariants
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import json
+import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from scripts.conductor_model import (
@@ -31,8 +33,8 @@ class ConductorCommandProcessor:
     def __init__(self, store: ConductorStore):
         self.store = store
 
-    def process_envelope(self, envelope: CommandEnvelope) -> Receipt:
-        """Process a command envelope with idempotency protection."""
+    def process_envelope(self, envelope: CommandEnvelope, envelope_source: str = "direct") -> Receipt:
+        """Process a command envelope with idempotency protection and source provenance verification."""
         existing_receipt = self.store.get_receipt(envelope.idempotency_key)
         if existing_receipt:
             return existing_receipt
@@ -51,7 +53,10 @@ class ConductorCommandProcessor:
                 self.store.save_receipt(receipt)
                 return receipt
 
-            result = handler(envelope.payload)
+            if envelope.command_type == "authorize":
+                result = self._handle_authorize(envelope.payload, envelope_source=envelope_source)
+            else:
+                result = handler(envelope.payload)
             receipt = Receipt(
                 receipt_id=f"rcp_{uuid.uuid4().hex[:12]}",
                 command_id=envelope.command_id,
@@ -110,16 +115,40 @@ class ConductorCommandProcessor:
 
         return {"work_item_id": store_item.work_item_id, "status": "QUEUED", "state": WorkItemState.QUEUED.value}
 
-    def _handle_authorize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Process operator authorization record with strict provenance checks."""
+    def _handle_authorize(self, payload: Dict[str, Any], envelope_source: str = "direct") -> Dict[str, Any]:
+        """Process operator authorization record with strict provenance and session token verification."""
         work_item_id = payload["work_item_id"]
         interactive_proven = payload.get("interactive_provenance_proven", False)
         channel = payload.get("channel", "")
+        session_token = payload.get("session_token")
 
-        # Strict provenance boundary check (D1 / M1):
-        # Must fail closed if authorization comes via non-interactive channels
-        if not interactive_proven or channel in {"argv", "redirected_stdin", "env_var", "inbox_envelope", "agent_assignment"}:
+        # 1. Asynchronous inbox envelopes CANNOT grant operator GO authorization
+        if envelope_source == "inbox_file" or channel in {"inbox_envelope", "agent_assignment", "env_var"}:
+            raise ValueError(f"Authorization refused: asynchronous inbox envelope or channel '{channel}' cannot grant operator GO")
+
+        # 2. Must claim interactive provenance
+        if not interactive_proven or channel != "interactive_console":
             raise ValueError(f"Authorization refused: non-interactive channel '{channel}' cannot grant operator GO")
+
+        # 3. Must verify single-use interactive session token from store locks
+        token_path = self.store.locks_dir / "interactive_session.token"
+        if not token_path.exists():
+            raise ValueError("Authorization refused: missing interactive session token lock file")
+
+        try:
+            token_data = json.loads(token_path.read_text(encoding="utf-8"))
+            token_path.unlink(missing_ok=True)  # Single-use consumption
+        except Exception:
+            token_path.unlink(missing_ok=True)
+            raise ValueError("Authorization refused: corrupt or unreadable interactive session token lock file")
+
+        if not session_token or token_data.get("token") != session_token:
+            raise ValueError("Authorization refused: invalid or mismatched interactive session token")
+
+        # Check token expiration (max 30s TTL)
+        token_time = token_data.get("created_at_timestamp", 0)
+        if time.time() - token_time > 30.0:
+            raise ValueError("Authorization refused: expired interactive session token")
 
         item = self.store.get_work_item(work_item_id)
         if not item:

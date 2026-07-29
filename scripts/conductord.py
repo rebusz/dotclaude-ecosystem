@@ -9,12 +9,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import pathlib
 import sys
 import time
 
-from scripts.conductor_commands import ConductorCommandProcessor
-from scripts.conductor_model import CommandEnvelope
-from scripts.conductor_store import ConductorStore
+_repo_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
+from scripts.conductor_model import CommandEnvelope  # noqa: E402
+from scripts.conductor_store import ConductorStore  # noqa: E402
 
 
 def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool = False) -> None:
@@ -54,7 +59,7 @@ def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool =
                     issued_at_utc=envelope_dict.get("issued_at_utc", ""),
                 )
 
-                receipt = processor.process_envelope(envelope)
+                receipt = processor.process_envelope(envelope, envelope_source="inbox_file")
                 logging.info(f"Processed envelope {envelope.command_id} ({envelope.command_type}) -> {receipt.status}")
 
                 # Remove inbox file after processing
