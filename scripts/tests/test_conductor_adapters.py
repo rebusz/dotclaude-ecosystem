@@ -46,8 +46,20 @@ def test_installer_lifecycle_isolated_runtime_and_surgical_uninstall(tmp_path: p
 
     clean_env = os.environ.copy()
     clean_env.pop("PYTHONPATH", None)
+    if os.name == "nt":
+        help_command = ["cmd.exe", "/d", "/c", str(inst_root / "bin" / "conductorctl.cmd"), "--help"]
+        status_command = [
+            "cmd.exe",
+            "/d",
+            "/c",
+            str(inst_root / "bin" / "conductor_install.cmd"),
+        ]
+    else:
+        help_command = [str(inst_root / "bin" / "conductorctl"), "--help"]
+        status_command = [str(inst_root / "bin" / "conductor_install")]
+
     help_result = subprocess.run(
-        ["cmd.exe", "/d", "/c", str(inst_root / "bin" / "conductorctl.cmd"), "--help"],
+        help_command,
         cwd=tmp_path,
         env=clean_env,
         capture_output=True,
@@ -57,15 +69,7 @@ def test_installer_lifecycle_isolated_runtime_and_surgical_uninstall(tmp_path: p
     assert help_result.returncode == 0, help_result.stderr
     assert "TruthDeck Conductor CTL" in help_result.stdout
     installed_status = subprocess.run(
-        [
-            "cmd.exe",
-            "/d",
-            "/c",
-            str(inst_root / "bin" / "conductor_install.cmd"),
-            "status",
-            "--home",
-            str(home),
-        ],
+        [*status_command, "status", "--home", str(home)],
         cwd=tmp_path,
         env=clean_env,
         capture_output=True,

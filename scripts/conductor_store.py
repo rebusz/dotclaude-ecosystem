@@ -158,7 +158,7 @@ def read_work_item_snapshot(
     work_item_id: str,
     root_dir: Optional[Union[str, pathlib.Path]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Read one work item through a SQLite read-only URI."""
+    """Read one work item from a stable temporary DB+WAL snapshot."""
     root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
     db_path = root / "conductor.db"
     if not db_path.is_file():
