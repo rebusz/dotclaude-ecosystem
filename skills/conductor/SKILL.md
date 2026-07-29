@@ -12,7 +12,10 @@ TruthDeck Conductor is a port-free, single-writer local work queue coordinator f
 - `python scripts/conductorctl.py status`: View current queue status and active leader PID.
 - `python scripts/conductorctl.py doctor`: Run system diagnostics and host doctor probe.
 - `python scripts/conductorctl.py enqueue --title "Task" --repo-id repo --repo-path /path --plan-path plan.md`: Enqueue a WorkItem.
-- `python scripts/conductorctl.py authorize --work-item-id wi_123 --interactive`: Grant interactive operator authorization for R2/R3 tasks.
+- `python scripts/conductorctl.py authorize --work-item-id wi_123`: From an attached
+  interactive console, type the exact prompted `GO wi_123` phrase to grant R2/R3
+  operator authorization. Redirected stdin, argv flags, inbox envelopes, MCP,
+  environment variables, and Host Adapter assignments cannot grant authorization.
 - `python scripts/conductorctl.py reconcile`: Reconcile expired leases and dead process claims.
 - `python scripts/conductorctl.py export --output export.jsonl`: Export durable event ledger.
 

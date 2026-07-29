@@ -6,8 +6,6 @@ Enforces authorization provenance boundaries and fail-closed security invariants
 
 from __future__ import annotations
 
-import json
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
@@ -40,6 +38,12 @@ class ConductorCommandProcessor:
             return existing_receipt
 
         try:
+            if envelope.command_type == "authorize":
+                raise ValueError(
+                    "Authorization refused: command envelopes cannot grant operator GO; "
+                    "use the attached-TTY conductorctl authorize ceremony"
+                )
+
             handler_name = f"_handle_{envelope.command_type}"
             handler = getattr(self, handler_name, None)
             if not handler:
@@ -53,10 +57,7 @@ class ConductorCommandProcessor:
                 self.store.save_receipt(receipt)
                 return receipt
 
-            if envelope.command_type == "authorize":
-                result = self._handle_authorize(envelope.payload, envelope_source=envelope_source)
-            else:
-                result = handler(envelope.payload)
+            result = handler(envelope.payload)
             receipt = Receipt(
                 receipt_id=f"rcp_{uuid.uuid4().hex[:12]}",
                 command_id=envelope.command_id,
@@ -115,41 +116,17 @@ class ConductorCommandProcessor:
 
         return {"work_item_id": store_item.work_item_id, "status": "QUEUED", "state": WorkItemState.QUEUED.value}
 
-    def _handle_authorize(self, payload: Dict[str, Any], envelope_source: str = "direct") -> Dict[str, Any]:
-        """Process operator authorization record with strict provenance and session token verification."""
-        work_item_id = payload["work_item_id"]
-        interactive_proven = payload.get("interactive_provenance_proven", False)
-        channel = payload.get("channel", "")
-        session_token = payload.get("session_token")
+    def grant_interactive_operator_authorization(
+        self,
+        work_item_id: str,
+        *,
+        operator_identity: str,
+    ) -> Dict[str, Any]:
+        """Grant GO after the dedicated CLI has completed its attached-TTY ceremony.
 
-        # 1. Asynchronous inbox envelopes CANNOT grant operator GO authorization
-        if envelope_source == "inbox_file" or channel in {"inbox_envelope", "agent_assignment", "env_var"}:
-            raise ValueError(f"Authorization refused: asynchronous inbox envelope or channel '{channel}' cannot grant operator GO")
-
-        # 2. Must claim interactive provenance
-        if not interactive_proven or channel != "interactive_console":
-            raise ValueError(f"Authorization refused: non-interactive channel '{channel}' cannot grant operator GO")
-
-        # 3. Must verify single-use interactive session token from store locks
-        token_path = self.store.locks_dir / "interactive_session.token"
-        if not token_path.exists():
-            raise ValueError("Authorization refused: missing interactive session token lock file")
-
-        try:
-            token_data = json.loads(token_path.read_text(encoding="utf-8"))
-            token_path.unlink(missing_ok=True)  # Single-use consumption
-        except Exception:
-            token_path.unlink(missing_ok=True)
-            raise ValueError("Authorization refused: corrupt or unreadable interactive session token lock file")
-
-        if not session_token or token_data.get("token") != session_token:
-            raise ValueError("Authorization refused: invalid or mismatched interactive session token")
-
-        # Check token expiration (max 30s TTL)
-        token_time = token_data.get("created_at_timestamp", 0)
-        if time.time() - token_time > 30.0:
-            raise ValueError("Authorization refused: expired interactive session token")
-
+        This seam is intentionally not reachable from command envelopes, MCP tools,
+        inbox files, environment variables, or Host Adapter assignments.
+        """
         item = self.store.get_work_item(work_item_id)
         if not item:
             raise ValueError(f"WorkItem {work_item_id} not found")
@@ -157,11 +134,11 @@ class ConductorCommandProcessor:
         auth_record = AuthorizationRecord(
             authorization_id=f"auth_{uuid.uuid4().hex[:12]}",
             work_item_id=work_item_id,
-            scope_digest_sha256=payload.get("scope_digest_sha256", item.scope_digest_sha256),
+            scope_digest_sha256=item.scope_digest_sha256,
             risk_class=item.risk_class,
             authorized_workflow=item.workflow,
             permitted_terminal_stage=item.requested_terminal_stage,
-            operator_identity=payload.get("operator_identity", "operator"),
+            operator_identity=operator_identity,
             interactive_provenance_proven=True,
         )
 
