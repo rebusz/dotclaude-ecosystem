@@ -1,7 +1,9 @@
 """Unit tests for ConductorCommandProcessor."""
 
 from datetime import datetime, timedelta, timezone
+import json
 import pathlib
+import time
 import pytest
 
 from scripts.conductor_commands import ConductorCommandProcessor
@@ -39,22 +41,42 @@ def test_enqueue_and_authorize_interactive_provenance(processor: ConductorComman
     assert rcp_enq.status == "SUCCESS"
     work_item_id = rcp_enq.result["work_item_id"]
 
-    # Try non-interactive channel authorization (Must be rejected per M1)
-    auth_bad_cmd = CommandEnvelope(
-        command_id="cmd_auth_bad",
+    # 1. Inbox envelope forgery attempt (Must be rejected)
+    auth_inbox_cmd = CommandEnvelope(
+        command_id="cmd_auth_inbox",
         command_type="authorize",
         payload={
             "work_item_id": work_item_id,
-            "interactive_provenance_proven": False,
-            "channel": "env_var",
+            "interactive_provenance_proven": True,
+            "channel": "interactive_console",
         },
-        idempotency_key="idemp_auth_bad",
+        idempotency_key="idemp_auth_inbox",
     )
-    rcp_bad = processor.process_envelope(auth_bad_cmd)
-    assert rcp_bad.status == "ERROR"
-    assert "refused" in rcp_bad.error_message.lower()
+    rcp_inbox = processor.process_envelope(auth_inbox_cmd, envelope_source="inbox_file")
+    assert rcp_inbox.status == "ERROR"
+    assert "refused" in rcp_inbox.error_message.lower()
 
-    # Valid interactive authorization
+    # 2. Direct call without session token lock (Must be rejected)
+    auth_no_token = CommandEnvelope(
+        command_id="cmd_auth_no_tok",
+        command_type="authorize",
+        payload={
+            "work_item_id": work_item_id,
+            "interactive_provenance_proven": True,
+            "channel": "interactive_console",
+            "session_token": "fake_token",
+        },
+        idempotency_key="idemp_auth_no_tok",
+    )
+    rcp_no_tok = processor.process_envelope(auth_no_token, envelope_source="direct")
+    assert rcp_no_tok.status == "ERROR"
+    assert "refused" in rcp_no_tok.error_message.lower()
+
+    # 3. Direct call with valid single-use session token
+    session_token = "tok_valid_123"
+    token_path = processor.store.locks_dir / "interactive_session.token"
+    token_path.write_text(json.dumps({"token": session_token, "created_at_timestamp": time.time()}), encoding="utf-8")
+
     auth_good_cmd = CommandEnvelope(
         command_id="cmd_auth_good",
         command_type="authorize",
@@ -62,13 +84,17 @@ def test_enqueue_and_authorize_interactive_provenance(processor: ConductorComman
             "work_item_id": work_item_id,
             "interactive_provenance_proven": True,
             "channel": "interactive_console",
+            "session_token": session_token,
             "operator_identity": "operator",
         },
         idempotency_key="idemp_auth_good",
     )
-    rcp_good = processor.process_envelope(auth_good_cmd)
+    rcp_good = processor.process_envelope(auth_good_cmd, envelope_source="direct")
     assert rcp_good.status == "SUCCESS"
     assert rcp_good.result["status"] == "AUTHORIZED"
+
+    # Token file must be consumed (deleted) after single use
+    assert not token_path.exists()
 
     item = processor.store.get_work_item(work_item_id)
     assert item.state == WorkItemState.READY

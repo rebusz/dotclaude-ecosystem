@@ -11,11 +11,16 @@ import hashlib
 import json
 import pathlib
 import shutil
+import sys
 import time
 from typing import Any, Dict, Optional
 
-from scripts.conductor_model import current_utc_iso
-from scripts.conductor_store import ConductorStore, get_default_conductor_dir
+_repo_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from scripts.conductor_model import current_utc_iso  # noqa: E402
+from scripts.conductor_store import ConductorStore, get_default_conductor_dir  # noqa: E402
 
 
 def compute_file_hash(filepath: pathlib.Path) -> str:
@@ -30,33 +35,42 @@ def compute_file_hash(filepath: pathlib.Path) -> str:
 def install(root_dir: Optional[pathlib.Path] = None) -> Dict[str, Any]:
     store = ConductorStore(root_dir=root_dir)
     status_file = store.root_dir / "status.json"
+    bin_dir = store.root_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    python_exe = sys.executable
+
+    for tool_name, script_name in [
+        ("conductorctl", "conductorctl.py"),
+        ("conductord", "conductord.py"),
+        ("conductor_mcp", "conductor_mcp.py"),
+        ("conductor_install", "conductor_install.py"),
+    ]:
+        script_path = (repo_root / "scripts" / script_name).resolve()
+
+        # Windows CMD shim
+        cmd_shim = bin_dir / f"{tool_name}.cmd"
+        cmd_shim.write_text(f'@echo off\n"{python_exe}" "{script_path}" %*\n', encoding="utf-8")
+
+        # Shell shim
+        sh_shim = bin_dir / tool_name
+        sh_shim.write_text(f'#!/bin/sh\nexec "{python_exe}" "{script_path}" "$@"\n', encoding="utf-8")
+        try:
+            sh_shim.chmod(0o755)
+        except Exception:
+            pass
 
     file_hashes = {}
-    repo_root = pathlib.Path(__file__).parent.parent
-    for script_name in [
-        "conductor_model.py",
-        "conductor_store.py",
-        "conductor_commands.py",
-        "conductor_discovery.py",
-        "conductor_scheduler.py",
-        "conductor_repo.py",
-        "conductor_truthdeck.py",
-        "conductor_workflow.py",
-        "conductorctl.py",
-        "conductord.py",
-        "conductor_mcp.py",
-        "conductor_adapters.py",
-        "conductor_install.py",
-    ]:
-        p = repo_root / "scripts" / script_name
-        if p.exists():
-            file_hashes[script_name] = compute_file_hash(p)
+    for script_file in (repo_root / "scripts").glob("*.py"):
+        file_hashes[script_file.name] = compute_file_hash(script_file)
 
     status_data = {
         "status": "INSTALLED",
         "version": "1.0.0",
         "installed_at_utc": current_utc_iso(),
         "root_dir": str(store.root_dir),
+        "bin_dir": str(bin_dir),
         "db_path": str(store.db_path),
         "file_hashes": file_hashes,
     }
@@ -68,14 +82,19 @@ def install(root_dir: Optional[pathlib.Path] = None) -> Dict[str, Any]:
 
 
 def check_status(root_dir: Optional[pathlib.Path] = None) -> Dict[str, Any]:
-    store = ConductorStore(root_dir=root_dir)
-    status_file = store.root_dir / "status.json"
+    target_dir = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    status_file = target_dir / "status.json"
 
     if not status_file.exists():
-        return {"status": "NOT_INSTALLED", "root_dir": str(store.root_dir)}
+        return {"status": "NOT_INSTALLED", "root_dir": str(target_dir), "db_exists": (target_dir / "conductor.db").exists()}
 
-    with open(status_file, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(status_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data["db_exists"] = (target_dir / "conductor.db").exists()
+            return data
+    except Exception:
+        return {"status": "CORRUPT", "root_dir": str(target_dir)}
 
 
 def uninstall(root_dir: Optional[pathlib.Path] = None) -> Dict[str, Any]:
