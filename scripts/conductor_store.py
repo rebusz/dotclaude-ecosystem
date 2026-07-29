@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 import uuid
 
 from scripts.conductor_model import (
@@ -41,6 +41,50 @@ def get_default_conductor_dir() -> pathlib.Path:
     return (pathlib.Path.home() / ".conductor").resolve()
 
 
+def _file_signature(path: pathlib.Path) -> tuple[bool, int, int]:
+    """Return a cheap stability signature without creating the path."""
+    try:
+        stat = path.stat()
+        return True, stat.st_size, stat.st_mtime_ns
+    except FileNotFoundError:
+        return False, 0, 0
+
+
+@contextmanager
+def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Connection]:
+    """Open a consistent temp copy so SQLite never writes WAL/SHM beside the live DB."""
+    source_paths = (db_path, db_path.with_name(f"{db_path.name}-wal"))
+    with tempfile.TemporaryDirectory(prefix="conductor-read-snapshot-") as temp_dir:
+        snapshot_db = pathlib.Path(temp_dir) / db_path.name
+        for attempt in range(3):
+            before = tuple(_file_signature(path) for path in source_paths)
+            try:
+                shutil.copy2(db_path, snapshot_db)
+                source_wal = source_paths[1]
+                snapshot_wal = snapshot_db.with_name(f"{snapshot_db.name}-wal")
+                if source_wal.is_file():
+                    shutil.copy2(source_wal, snapshot_wal)
+                else:
+                    snapshot_wal.unlink(missing_ok=True)
+            except OSError:
+                if attempt == 2:
+                    raise
+                continue
+            after = tuple(_file_signature(path) for path in source_paths)
+            if before == after:
+                break
+        else:
+            raise sqlite3.OperationalError("store changed during read-only snapshot")
+
+        conn = sqlite3.connect(str(snapshot_db), timeout=1.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            yield conn
+        finally:
+            conn.close()
+
+
 def read_store_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
     """Read queue status without creating directories, a database, locks, or receipts."""
     root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
@@ -59,10 +103,7 @@ def read_store_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Di
         return result
 
     try:
-        uri = f"{db_path.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only=ON")
+        with _read_only_snapshot_connection(db_path) as conn:
             state_rows = conn.execute(
                 "SELECT state, COUNT(*) AS count FROM work_items GROUP BY state ORDER BY state"
             ).fetchall()
@@ -123,10 +164,7 @@ def read_work_item_snapshot(
     if not db_path.is_file():
         return None
     try:
-        uri = f"{db_path.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only=ON")
+        with _read_only_snapshot_connection(db_path) as conn:
             row = conn.execute(
                 "SELECT * FROM work_items WHERE work_item_id = ?",
                 (work_item_id,),

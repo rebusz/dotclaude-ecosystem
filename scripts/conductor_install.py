@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import tempfile
@@ -108,7 +109,10 @@ def install(
                 backup_payloads[backup] = target.read_bytes()
 
     all_targets = set(payloads) | set(stale_targets) | set(backup_payloads) | {manifest_path}
-    before = {target: target.read_bytes() if target.exists() else None for target in all_targets}
+    before = {
+        target: (target.read_bytes(), stat.S_IMODE(target.stat().st_mode)) if target.exists() else None
+        for target in all_targets
+    }
     try:
         for backup, payload in backup_payloads.items():
             _write_atomic(backup, payload)
@@ -359,12 +363,14 @@ def _write_atomic(path: pathlib.Path, payload: bytes) -> None:
         pathlib.Path(name).unlink(missing_ok=True)
 
 
-def _rollback(before: Dict[pathlib.Path, bytes | None]) -> None:
-    for path, payload in reversed(tuple(before.items())):
-        if payload is None:
+def _rollback(before: Dict[pathlib.Path, tuple[bytes, int] | None]) -> None:
+    for path, snapshot in reversed(tuple(before.items())):
+        if snapshot is None:
             path.unlink(missing_ok=True)
         else:
+            payload, mode = snapshot
             _write_atomic(path, payload)
+            path.chmod(mode)
 
 
 def _remove_empty_owned_directories(root: pathlib.Path, ownership_home: pathlib.Path) -> None:

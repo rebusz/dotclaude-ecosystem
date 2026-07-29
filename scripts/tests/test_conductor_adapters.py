@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 
@@ -163,6 +164,11 @@ def test_installer_rollback_restores_previous_clean_install(
         for path in home.rglob("*")
         if path.is_file()
     }
+    before_modes = {
+        path.relative_to(home): stat.S_IMODE(path.stat().st_mode)
+        for path in home.rglob("*")
+        if path.is_file()
+    }
 
     import scripts.conductor_install as installer
 
@@ -184,7 +190,13 @@ def test_installer_rollback_restores_previous_clean_install(
         for path in home.rglob("*")
         if path.is_file()
     }
+    after_modes = {
+        path.relative_to(home): stat.S_IMODE(path.stat().st_mode)
+        for path in home.rglob("*")
+        if path.is_file()
+    }
     assert after == before
+    assert after_modes == before_modes
     assert manifest_path.is_file()
 
 

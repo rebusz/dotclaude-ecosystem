@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import pathlib
@@ -16,9 +17,21 @@ from scripts import conductorctl
 from scripts.conductor_mcp import handle_mcp_tool_call
 from scripts.conductor_model import CommandEnvelope, WorkItemState
 from scripts.conductor_commands import ConductorCommandProcessor
-from scripts.conductor_store import ConductorStore
+from scripts.conductor_store import ConductorStore, read_store_status
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _tree_snapshot(root: pathlib.Path) -> dict[str, tuple[int, int, str]]:
+    return {
+        str(path.relative_to(root)): (
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
 
 
 class _TTY(io.StringIO):
@@ -85,10 +98,8 @@ def test_status_and_doctor_do_not_write_existing_store(tmp_path: pathlib.Path):
     conductor_home = tmp_path / "existing"
     store = ConductorStore(root_dir=conductor_home)
     assert store.acquire_leader_lock()
-    before_mtime = store.db_path.stat().st_mtime_ns
-    before_receipts = tuple(sorted(store.receipts_dir.iterdir()))
-    with sqlite3.connect(store.db_path) as conn:
-        before_leaders = conn.execute("SELECT * FROM leader_locks").fetchall()
+    before_status = read_store_status(conductor_home)
+    before_tree = _tree_snapshot(conductor_home)
     env = os.environ.copy()
     env["TDCONDUCTOR_DIR"] = str(conductor_home)
 
@@ -103,11 +114,34 @@ def test_status_and_doctor_do_not_write_existing_store(tmp_path: pathlib.Path):
         )
         assert completed.returncode == 0, completed.stderr
 
-    with sqlite3.connect(store.db_path) as conn:
-        after_leaders = conn.execute("SELECT * FROM leader_locks").fetchall()
-    assert store.db_path.stat().st_mtime_ns == before_mtime
-    assert tuple(sorted(store.receipts_dir.iterdir())) == before_receipts
-    assert after_leaders == before_leaders
+    after_status = read_store_status(conductor_home)
+    assert _tree_snapshot(conductor_home) == before_tree
+    assert after_status == before_status
+
+
+def test_read_only_status_sees_uncheckpointed_wal_without_touching_source(tmp_path: pathlib.Path):
+    conductor_home = tmp_path / "wal-live"
+    conductor_home.mkdir()
+    db_path = conductor_home / "conductor.db"
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE work_items (state TEXT NOT NULL)")
+        writer.execute(
+            "CREATE TABLE leader_locks (lock_name TEXT PRIMARY KEY, leader_id TEXT, pid INTEGER, process_start_time REAL)"
+        )
+        writer.execute("INSERT INTO work_items (state) VALUES ('QUEUED')")
+        writer.commit()
+        before_tree = _tree_snapshot(conductor_home)
+
+        status = read_store_status(conductor_home)
+
+        assert status["store_state"] == "AVAILABLE"
+        assert status["total_work_items"] == 1
+        assert status["state_summary"] == {"QUEUED": 1}
+        assert _tree_snapshot(conductor_home) == before_tree
+    finally:
+        writer.close()
 
 
 def test_redirected_authorization_fails_before_store_creation(tmp_path: pathlib.Path):
