@@ -41,6 +41,106 @@ def get_default_conductor_dir() -> pathlib.Path:
     return (pathlib.Path.home() / ".conductor").resolve()
 
 
+def read_store_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
+    """Read queue status without creating directories, a database, locks, or receipts."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    result: Dict[str, Any] = {
+        "store_state": "ABSENT",
+        "leader_id": None,
+        "leader_pid": None,
+        "leader_process_start_time": None,
+        "leader_active": False,
+        "db_path": str(db_path),
+        "total_work_items": 0,
+        "state_summary": {},
+    }
+    if not db_path.is_file():
+        return result
+
+    try:
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            state_rows = conn.execute(
+                "SELECT state, COUNT(*) AS count FROM work_items GROUP BY state ORDER BY state"
+            ).fetchall()
+            leader_row = conn.execute(
+                "SELECT leader_id, pid, process_start_time FROM leader_locks WHERE lock_name = ?",
+                ("primary_coordinator",),
+            ).fetchone()
+        leader_active = False
+        if leader_row:
+            try:
+                process = psutil.Process(int(leader_row["pid"]))
+                leader_active = process.is_running() and abs(
+                    process.create_time() - float(leader_row["process_start_time"])
+                ) < 1.0
+            except (psutil.Error, OSError, TypeError, ValueError):
+                leader_active = False
+        result.update(
+            {
+                "store_state": "AVAILABLE",
+                "leader_id": leader_row["leader_id"] if leader_row else None,
+                "leader_pid": int(leader_row["pid"]) if leader_row else None,
+                "leader_process_start_time": float(leader_row["process_start_time"]) if leader_row else None,
+                "leader_active": leader_active,
+                "total_work_items": sum(int(row["count"]) for row in state_rows),
+                "state_summary": {str(row["state"]): int(row["count"]) for row in state_rows},
+            }
+        )
+    except (OSError, sqlite3.Error) as exc:
+        result.update({"store_state": "CORRUPT_OR_UNREADABLE", "error": str(exc)[:500]})
+    return result
+
+
+def read_store_diagnostics(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
+    """Inspect the installation surface without acquiring or renewing the leader lock."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    result = read_store_status(root)
+    result.update(
+        {
+            "root_dir": str(root),
+            "root_exists": root.is_dir(),
+            "db_exists": (root / "conductor.db").is_file(),
+            "inbox_exists": (root / "inbox").is_dir(),
+            "receipts_exists": (root / "receipts").is_dir(),
+            "locks_exists": (root / "locks").is_dir(),
+            "leader_lock_present": result.get("leader_id") is not None,
+        }
+    )
+    return result
+
+
+def read_work_item_snapshot(
+    work_item_id: str,
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Read one work item through a SQLite read-only URI."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        return None
+    try:
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            row = conn.execute(
+                "SELECT * FROM work_items WHERE work_item_id = ?",
+                (work_item_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        raw = dict(row)
+        raw["dependency_ids"] = json.loads(raw.pop("dependency_ids_json"))
+        raw["execution_budget"] = json.loads(raw.pop("execution_budget_json"))
+        return WorkItem.from_dict(raw).to_dict()
+    except (OSError, sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
 

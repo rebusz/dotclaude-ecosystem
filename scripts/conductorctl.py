@@ -7,11 +7,10 @@ All environment variables use TDCONDUCTOR_* to avoid collision with 3rd-party ho
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
-import os
 import pathlib
 import sys
-import time
 import uuid
 
 _repo_root = pathlib.Path(__file__).resolve().parent.parent
@@ -20,10 +19,14 @@ if str(_repo_root) not in sys.path:
 
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
-from scripts.conductor_store import ConductorStore  # noqa: E402
+from scripts.conductor_store import (  # noqa: E402
+    ConductorStore,
+    read_store_diagnostics,
+    read_store_status,
+)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TruthDeck Conductor CTL")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -48,7 +51,6 @@ def main() -> None:
     # authorize
     p_auth = subparsers.add_parser("authorize", help="Authorize R2/R3 WorkItem")
     p_auth.add_argument("--work-item-id", required=True)
-    p_auth.add_argument("--interactive", action="store_true", help="Mark interactive operator provenance")
 
     # reconcile
     p_rec = subparsers.add_parser("reconcile", help="Reconcile expired leases and dead processes")
@@ -58,46 +60,53 @@ def main() -> None:
     p_exp = subparsers.add_parser("export", help="Export JSONL event ledger")
     p_exp.add_argument("--output", required=True)
 
-    args = parser.parse_args()
-
-    store = ConductorStore()
-    processor = ConductorCommandProcessor(store=store)
+    args = parser.parse_args(argv)
 
     if args.command == "status":
-        envelope = CommandEnvelope(
-            command_id=f"cmd_{uuid.uuid4().hex[:12]}",
-            command_type="status",
-            payload={},
-            idempotency_key=f"idemp_status_{uuid.uuid4().hex[:8]}",
-        )
-        receipt = processor.process_envelope(envelope)
+        result = read_store_status()
         if args.json:
-            print(json.dumps(receipt.result, indent=2))
+            print(json.dumps(result, indent=2))
         else:
             print("TruthDeck Conductor Status:")
-            print(f"  Leader ID: {receipt.result.get('leader_id')}")
-            print(f"  DB Path: {receipt.result.get('db_path')}")
-            print(f"  Total Work Items: {receipt.result.get('total_work_items')}")
-            print(f"  Summary: {json.dumps(receipt.result.get('state_summary'))}")
+            print(f"  Store State: {result.get('store_state')}")
+            print(f"  Leader ID: {result.get('leader_id')}")
+            print(f"  DB Path: {result.get('db_path')}")
+            print(f"  Total Work Items: {result.get('total_work_items')}")
+            print(f"  Summary: {json.dumps(result.get('state_summary'))}")
+        return 0
 
     elif args.command == "doctor":
-        is_leader = store.acquire_leader_lock("primary_coordinator")
-        info = {
-            "root_dir": str(store.root_dir),
-            "db_path": str(store.db_path),
-            "db_exists": store.db_path.exists(),
-            "inbox_exists": store.inbox_dir.exists(),
-            "receipts_exists": store.receipts_dir.exists(),
-            "is_leader": is_leader,
-        }
+        info = read_store_diagnostics()
         if args.json:
             print(json.dumps(info, indent=2))
         else:
             print("Conductor Doctor Diagnostics:")
             for k, v in info.items():
                 print(f"  {k}: {v}")
+        return 0
 
-    elif args.command == "enqueue":
+    elif args.command == "authorize":
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print("Error: authorization requires an attached interactive console TTY", file=sys.stderr)
+            return 1
+        expected = f"GO {args.work_item_id}"
+        confirmation = input(f"Type {expected} to authorize this exact WorkItem: ")
+        if not hmac.compare_digest(confirmation.strip(), expected):
+            print("Error: exact interactive GO confirmation was not entered", file=sys.stderr)
+            return 1
+        store = ConductorStore()
+        processor = ConductorCommandProcessor(store=store)
+        result = processor.grant_interactive_operator_authorization(
+            args.work_item_id,
+            operator_identity="operator_cli",
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+
+    store = ConductorStore()
+    processor = ConductorCommandProcessor(store=store)
+
+    if args.command == "enqueue":
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="enqueue",
@@ -119,40 +128,6 @@ def main() -> None:
         receipt = processor.process_envelope(envelope)
         print(json.dumps(receipt.to_dict(), indent=2))
 
-    elif args.command == "authorize":
-        if args.interactive:
-            if not (sys.stdin.isatty() and sys.stdout.isatty()):
-                print("Error: --interactive authorization requires an attached interactive console TTY", file=sys.stderr)
-                sys.exit(1)
-
-            session_token = f"tok_{uuid.uuid4().hex}"
-            token_path = store.locks_dir / "interactive_session.token"
-            token_data = {
-                "token": session_token,
-                "created_at_timestamp": time.time(),
-                "pid": os.getpid(),
-            }
-            token_path.write_text(json.dumps(token_data), encoding="utf-8")
-            channel = "interactive_console"
-        else:
-            session_token = None
-            channel = "argv"
-
-        envelope = CommandEnvelope(
-            command_id=f"cmd_{uuid.uuid4().hex[:12]}",
-            command_type="authorize",
-            payload={
-                "work_item_id": args.work_item_id,
-                "interactive_provenance_proven": args.interactive,
-                "channel": channel,
-                "session_token": session_token,
-                "operator_identity": "operator_cli",
-            },
-            idempotency_key=f"idemp_auth_{uuid.uuid4().hex[:8]}",
-        )
-        receipt = processor.process_envelope(envelope, envelope_source="direct")
-        print(json.dumps(receipt.to_dict(), indent=2))
-
     elif args.command == "reconcile":
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
@@ -166,7 +141,8 @@ def main() -> None:
     elif args.command == "export":
         out_path = store.export_jsonl(args.output)
         print(f"Exported event ledger to {out_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

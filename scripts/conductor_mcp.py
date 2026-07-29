@@ -17,30 +17,35 @@ if str(_repo_root) not in sys.path:
 
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
-from scripts.conductor_store import ConductorStore  # noqa: E402
+from scripts.conductor_store import (  # noqa: E402
+    ConductorStore,
+    read_store_status,
+    read_work_item_snapshot,
+)
 
 
 def handle_mcp_tool_call(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool call against ConductorStore."""
-    store = ConductorStore()
-    processor = ConductorCommandProcessor(store=store)
-
     if tool_name == "conductor_status":
-        envelope = CommandEnvelope(
-            command_id=f"mcp_stat_{uuid.uuid4().hex[:8]}",
-            command_type="status",
-            payload={},
-            idempotency_key=f"mcp_stat_idemp_{uuid.uuid4().hex[:8]}",
-        )
-        receipt = processor.process_envelope(envelope)
-        return receipt.result
+        return read_store_status()
 
     elif tool_name == "conductor_get_work_item":
         work_item_id = arguments["work_item_id"]
-        item = store.get_work_item(work_item_id)
-        return item.to_dict() if item else {"error": f"WorkItem {work_item_id} not found"}
+        item = read_work_item_snapshot(work_item_id)
+        return item if item else {"error": f"WorkItem {work_item_id} not found"}
 
-    elif tool_name == "conductor_claim":
+    if tool_name not in {
+        "conductor_claim",
+        "conductor_heartbeat",
+        "conductor_checkpoint",
+        "conductor_report",
+    }:
+        return {"error": f"Unknown MCP tool: {tool_name}"}
+
+    store = ConductorStore()
+    processor = ConductorCommandProcessor(store=store)
+
+    if tool_name == "conductor_claim":
         envelope = CommandEnvelope(
             command_id=f"mcp_claim_{uuid.uuid4().hex[:8]}",
             command_type="claim",
@@ -79,9 +84,6 @@ def handle_mcp_tool_call(tool_name: str, arguments: Dict[str, Any]) -> Dict[str,
         )
         receipt = processor.process_envelope(envelope)
         return receipt.to_dict()
-
-    else:
-        return {"error": f"Unknown MCP tool: {tool_name}"}
 
 
 if __name__ == "__main__":
