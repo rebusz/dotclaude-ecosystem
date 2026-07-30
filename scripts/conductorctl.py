@@ -9,10 +9,8 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
-import os
 import pathlib
 import sys
-import time
 import uuid
 
 _repo_root = pathlib.Path(__file__).resolve().parent.parent
@@ -85,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     # authorize
     p_auth = subparsers.add_parser("authorize", help="Authorize R2/R3 WorkItem")
     p_auth.add_argument("--work-item-id", required=True)
-    p_auth.add_argument("--interactive", action="store_true", help="Mark interactive operator provenance")
+    p_auth.add_argument("--context-digest-sha256", default="", help="Optional digest of the bound CONTEXT.md packet")
 
     # reconcile
     p_rec = subparsers.add_parser("reconcile", help="Reconcile expired leases and dead processes")
@@ -123,6 +121,25 @@ def main(argv: list[str] | None = None) -> int:
             for k, v in info.items():
                 print(f"  {k}: {v}")
         return 0 if truthctl["ok"] else 1
+
+    if args.command == "authorize":
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print("Error: authorization requires an attached interactive console TTY", file=sys.stderr)
+            return 1
+        expected = f"GO {args.work_item_id}"
+        confirmation = input(f"Type {expected} to authorize this exact WorkItem: ")
+        if not hmac.compare_digest(confirmation.strip(), expected):
+            print("Error: exact interactive GO confirmation was not entered", file=sys.stderr)
+            return 1
+        store = ConductorStore()
+        processor = ConductorCommandProcessor(store=store)
+        result = processor.grant_interactive_operator_authorization(
+            args.work_item_id,
+            operator_identity="operator_cli",
+            context_digest_sha256=args.context_digest_sha256 or None,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
 
     store = ConductorStore()
     processor = ConductorCommandProcessor(store=store)
@@ -207,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(receipt.to_dict(), indent=2))
         return 0
 
-    elif args.command == "enqueue":
+    if args.command == "enqueue":
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="enqueue",
@@ -230,54 +247,6 @@ def main(argv: list[str] | None = None) -> int:
         receipt = processor.process_envelope(envelope)
         print(json.dumps(receipt.to_dict(), indent=2))
 
-    elif args.command == "authorize":
-        if args.interactive:
-            if not (sys.stdin.isatty() and sys.stdout.isatty()):
-                print("Error: --interactive authorization requires an attached interactive console TTY", file=sys.stderr)
-                return 1
-
-            expected = f"GO {args.work_item_id}"
-            confirmation = input(f"Type {expected} to authorize this exact WorkItem: ")
-            if not hmac.compare_digest(confirmation.strip(), expected):
-                print("Error: exact interactive GO confirmation was not entered", file=sys.stderr)
-                return 1
-
-            session_token = f"tok_{uuid.uuid4().hex}"
-            token_path = store.locks_dir / "interactive_session.token"
-            token_data = {
-                "token": session_token,
-                "created_at_timestamp": time.time(),
-                "pid": os.getpid(),
-            }
-            token_path.write_text(json.dumps(token_data), encoding="utf-8")
-            channel = "interactive_console"
-            coordinator_handshake = {
-                "channel": channel,
-                "tty_verified": True,
-                "session_pid": os.getpid(),
-            }
-        else:
-            session_token = None
-            channel = "argv"
-            coordinator_handshake = None
-
-        envelope = CommandEnvelope(
-            command_id=f"cmd_{uuid.uuid4().hex[:12]}",
-            command_type="authorize",
-            payload={
-                "work_item_id": args.work_item_id,
-                "interactive_provenance_proven": args.interactive,
-                "channel": channel,
-                "session_token": session_token,
-                "coordinator_handshake": coordinator_handshake,
-                "operator_identity": "operator_cli",
-            },
-            idempotency_key=f"idemp_auth_{uuid.uuid4().hex[:8]}",
-        )
-        receipt = processor.process_envelope(envelope, envelope_source="direct")
-        print(json.dumps(receipt.to_dict(), indent=2))
-        return 0
-
     elif args.command == "reconcile":
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
@@ -293,7 +262,6 @@ def main(argv: list[str] | None = None) -> int:
         out_path = store.export_jsonl(args.output)
         print(f"Exported event ledger to {out_path}")
         return 0
-
     return 0
 
 

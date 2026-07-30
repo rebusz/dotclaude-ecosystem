@@ -15,7 +15,10 @@ TruthDeck Conductor is a port-free, single-writer local work queue coordinator f
 - `python scripts/conductorctl.py resource-request --purpose pytest_full --attempt-id <id> --agent-instance <id>`: Request the capacity-one heavy lease.
 - `python scripts/conductorctl.py pytest --repo <repo> --python <python> --attempt-id <id> --agent-instance <id> -- <pytest args>`: Run only the bounded `<python> -m pytest` adapter (`--heavy` promotes a focused invocation).
 - `python scripts/conductorctl.py enqueue --title "Task" --repo-id repo --repo-path /path --plan-path plan.md`: Enqueue a WorkItem.
-- `python scripts/conductorctl.py authorize --work-item-id wi_123 --interactive`: From an attached console, type the exact prompted `GO wi_123` phrase to grant R2/R3 authorization.
+- `python scripts/conductorctl.py authorize --work-item-id wi_123`: From an attached
+  interactive console, type the exact prompted `GO wi_123` phrase to grant R2/R3
+  operator authorization. Redirected stdin, argv flags, inbox envelopes, MCP,
+  environment variables, and Host Adapter assignments cannot grant authorization.
 - `python scripts/conductorctl.py reconcile`: Reconcile expired leases and dead process claims.
 - `python scripts/conductorctl.py export --output export.jsonl`: Export durable event ledger.
 
