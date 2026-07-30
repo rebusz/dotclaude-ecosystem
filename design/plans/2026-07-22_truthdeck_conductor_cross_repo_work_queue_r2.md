@@ -1792,19 +1792,20 @@ the freeze. The sequential spine now contains:
   report-only storage ceilings (artifacts 1 GiB, receipts 256 MiB, inbox
   64 MiB), CONTEXT digest binding, and canonical/generated rule adoption.
 
-Focused evidence on the implementation head: `test_conductor_*.py` **37
+Focused evidence on the implementation head: `test_conductor_*.py` **51
 passed**, including 50 concurrent admission attempts (1 ACTIVE/49 QUEUED),
 real subprocess pass/fail/timeout, focused/heavy classification, scheduler
 resource conflict, environment allowlisting, priority persistence, v2
 migration replay, H2 handshake refusal, read-only status seams, duplicate
-idempotency, inherited-child parent-process identity, and H6 quota readback.
+idempotency, inherited-child parent-process identity, H6 quota readback, and
+the post-#63 command-envelope GO refusal.
 `compileall`,
 Ruff, `git diff --check`, and the managed rule sync check are green. The
 exact-head R2 review remains open; no PR is ready or merged.
 
 The gated full `scripts/tests` run completed on 2026-07-30 after installing the
 declared optional `requirements-truthdeck-mcp.txt` dependency (`mcp 1.29.0`):
-**407 passed, 11 subtests passed in 31.33 s**. The first attempt was preserved
+**421 passed, 11 subtests passed in 33.86 s**. The first attempt was preserved
 as a collection blocker (`ModuleNotFoundError: mcp`); it was not counted as a
 pass. No broker, runtime, account, order, arming, or WatchF state was touched.
 
@@ -2023,8 +2024,9 @@ matrix only after `HOLD_HOST_PRESSURE` clears.
 
 ## GSTACK REVIEW REPORT
 
-Review date: 2026-07-30. Exact reviewed head:
-`310fa934f9b4c38278eaa607a0aea9f2063c4a38`.
+Review date: 2026-07-30. Exact reviewed implementation head:
+`a1d5fd5b8397f538d4bd99d5d5fcb4ed09786147` (merged with `origin/main`
+`b531374b2a617e5c3f1830ae3396cc6891f912fb`).
 
 Scope Check: **CLEAN**
 
@@ -2041,13 +2043,14 @@ Evidence:
 
 - host preflight remained green; matrix verdict is
   `MATRIX_CLEAR_CONDITIONAL_D13` with degraded LOW-MEDIUM lane confidence;
-- focused Conductor tests: **37 passed**;
-- full `scripts/tests`: **407 passed, 11 subtests passed in 31.33 s**;
+- focused Conductor tests: **51 passed**;
+- full `scripts/tests`: **421 passed, 11 subtests passed in 33.86 s**;
 - `compileall`, Ruff, `git diff --check`, and managed-rule sync check passed;
 - graph-assisted exact-head impact pass completed; no affected runtime or
   broker surface was found;
-- `gstack-review-read`: `NO_REVIEWS` before this review; no Greptile review was
-  available because no PR exists yet.
+- superseded review entries were recorded for the pre-#63 heads; the current
+  exact-head pass was rerun after conflict resolution; no Greptile review was
+  available.
 
 Critical pass: **CLEAN** — no SQL/data-safety, race/concurrency,
 trust-boundary, shell-injection, enum-completeness, async/sync, field-name,
@@ -2057,9 +2060,8 @@ TTY handshake, and fail-closed recovery paths were checked against the diff
 and tests. Design review was not applicable to this non-UI slice.
 
 Review outcome: **CLEAN**, 0 unresolved findings, quality score **8.8/10**.
-The branch is committed and ready for the draft-PR landing gate; no PR is
-ready or merged yet.
+PR #64 is ready for review with merge state `CLEAN`; no merge has occurred.
 
-Current gate: **HRL-5 EXACT-HEAD REVIEW CLEAN; DRAFT PR PENDING.**
+Current gate: **HRL-5 EXACT-HEAD REVIEW CLEAN; PR #64 MERGE PENDING.**
 
 NO UNRESOLVED DECISIONS
