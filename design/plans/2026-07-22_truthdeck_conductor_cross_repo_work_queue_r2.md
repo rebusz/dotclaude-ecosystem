@@ -2060,8 +2060,10 @@ TTY handshake, and fail-closed recovery paths were checked against the diff
 and tests. Design review was not applicable to this non-UI slice.
 
 Review outcome: **CLEAN**, 0 unresolved findings, quality score **8.8/10**.
-PR #64 is ready for review with merge state `CLEAN`; no merge has occurred.
+PR #64 was squash-merged; GitHub merge commit is
+`a8044ba1c28743a5dce6d45373eef2aaea50dcb3`, and the operator checkout is
+fast-forwarded to that exact `main` head.
 
-Current gate: **HRL-5 EXACT-HEAD REVIEW CLEAN; PR #64 MERGE PENDING.**
+Current gate: **HRL-5 COMPLETE; PR #64 MERGED; OPERATOR CHECKOUT SYNCED.**
 
 NO UNRESOLVED DECISIONS
