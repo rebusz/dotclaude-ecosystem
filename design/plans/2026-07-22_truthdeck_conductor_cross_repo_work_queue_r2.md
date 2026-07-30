@@ -1,12 +1,12 @@
 ---
 title: TruthDeck Conductor - Cross-Repo Agent Work Queue
 date: 2026-07-22
-status: draft
-status_detail: architecture-written-awaiting-fwf-review-and-r2-go
+status: in-progress
+status_detail: core-shipped-pr61-containment-shipped-pr62-host-resource-lease-r2-approved-awaiting-delta-review
 risk: R2
-phase: plan
+phase: implementation
 repos: [dotclaude-ecosystem]
-tags: [agent-tooling, orchestration, queue, persistence, truthdeck, multi-host]
+tags: [agent-tooling, orchestration, queue, persistence, truthdeck, multi-host, host-resource, pytest]
 related:
   - design/plans/2026-06-27_global_agent_workflow_os.md
   - design/plans/2026-07-21_global_fwf_fwp_contract_reset.md
@@ -36,8 +36,12 @@ lifecycle. Repositories remain the source of truth for plans and code.
 
 **Plan-writing authorization:** granted by the operator on 2026-07-22.
 
-**Implementation authorization:** not implied. Run this R2 plan through `/fwf` or
-`/fwp`, then obtain one standing implementation `GO`.
+**Original implementation authorization:** satisfied. Core implementation shipped
+through PR #61 and containment fixes shipped through PR #62.
+
+**Host Resource Lease amendment authorization:** the operator granted standing
+`GO CONDUCTOR HOST RESOURCE LEASE R2` on 2026-07-28. The amendment appended to
+this plan must still pass the routed R2 delta review before code changes.
 
 ## Consequence, downside, reversibility
 
@@ -1272,29 +1276,14 @@ Reconciliation of Stages 1–3 review record with current HEAD (`0805465`):
 3. **Session Lifecycle Engine Seam:** Conductor S3 reads `session_state.py` and `truthctl` snapshots via a read-only seam with the shipped session lifecycle engine (`session_lifecycle.py` and `cross_runtime_session_lifecycle_adapters_r1.md`), without writing `session_registry.json` or owning session state.
 4. **Historical Test References:** Removed historical test count assertions from the plan doc; validation mandates executing the complete live `scripts/tests` suite.
 
-## Approval gate
+## Historical core approval record
 
-This document authorizes planning only.
+The original-core approval gate and review report are superseded by the HRL-R2
+amendment below. They remain represented by the preceding Stage 1-4 evidence;
+the terminal HRL-R2 review report is appended at the end of this plan.
 
-Next workflow:
-
-```text
-/fwf D:/dotclaude/dotclaude-ecosystem/design/plans/2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md
-```
-
-After the R2 CEO -> matrix -> engineering plan review incorporates all valid findings,
-the workflow must stop at the standing implementation gate:
-
-`>> APPROVAL NEEDED - reply GO to proceed`
-
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/fwf` Stage 1 | Scope & strategy | 1 | CLEAR | mode HOLD SCOPE; 6 binding decisions (D1-D6); 4 expansions deferred |
-| Matrix Review | `/fwf` Stage 2 (`fuse.py --mode free`) | Multi-model 2nd opinion | 1 | CLEAR (degraded panel) | 2/12 substantive lanes; M1-M2 applied; confidence LOW-MEDIUM |
-| Eng Review | `/fwf` Stage 3 | Architecture & tests (required) | 1 | CLEAR | 1 issue (E1 installer reuse, folded); 6 test rows added; 0 critical gaps |
-| Current-Head Review | `/fwf` Stage 4 | Reconcile delta vs HEAD 0805465 | 1 | CLEAR | Antigravity IDE `cooperative-only`; `agy` `HOLD_NOT_INSTALLED`; lifecycle `HOLD_NO_PROVEN_SESSION_EVENT_CONTRACT`; read-only lifecycle seam bound |
+Original-core Stage 1-4 evidence was CLEAR and is retained in the preceding
+sections; it is not the active HRL-R2 review gate.
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | no UI scope (CLI/MCP MVP) |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not requested |
 
@@ -1306,5 +1295,771 @@ the free-basket norm — recorded, not hidden.
 **VERDICT:** CEO + MATRIX + ENG + CURRENT-HEAD CLEARED — plan is review-complete for the R2
 standing implementation gate. Implementation requires one explicit operator GO
 (`>> APPROVAL NEEDED` above); no reviewer output constitutes that GO.
+
+Original-core report superseded; see the terminal HRL-R2 report at the end.
+
+## 2026-07-28 Amendment HRL-R2 - Host Resource Admission
+
+### Amendment decision and implementation truth
+
+This section amends the authoritative Conductor plan. It does not create a
+second queue plan and does not reopen already reviewed work.
+
+| Layer | Exact evidence | Status |
+|---|---|---|
+| Core implementation | PR #61; reviewed head `2ffcb8d6d6e922680b89b28d27381b37ed235832`; merge `38a58a331ce11f3fe12e70e34eaab236d5a76087` | SHIPPED |
+| Containment fixes | PR #62; `NO FINDINGS`; reviewed head `0ffd735eea1a6d570901e03725405ebd98cf4171`; merge `7ea759c366d486fd589ea2345ec9c215c43c3e4c` | SHIPPED |
+| Containment validation | PR #62 evidence: 389/389 tests and 11 subtests passed, Ruff clean, `git diff --check` clean | EXACT-HEAD REVIEWED |
+| Local checkout | `main == origin/main == 7ea759c366d486fd589ea2345ec9c215c43c3e4c`, clean | VERIFIED |
+| Host-resource admission | operator token `GO CONDUCTOR HOST RESOURCE LEASE R2` | APPROVED FOR DELTA REVIEW AND IMPLEMENTATION |
+
+The test count above is PR #62 evidence. It was not rerun while writing this
+amendment because another full Tsignal pytest was active and the host was
+already CPU-saturated. Avoiding another concurrent full suite is part of this
+amendment's acceptance discipline.
+
+### Phase 0 - restatement and collision verdict
+
+#### Goal
+
+Prevent independent Codex, Claude, Kimi, Cursor, and Antigravity sessions from
+starting overlapping host-heavy work. The first consumers are:
+
+1. full or otherwise heavy pytest runs;
+2. Playwright/browser test runs classified as heavy;
+3. bounded CDP provider jobs submitted through the separate CDP Fleet Manager.
+
+The machine-wide invariant is:
+
+> At most one active `host:heavy` lease exists at a time.
+
+#### Why
+
+On 2026-07-28 the host reached 99-100% CPU with processor queue length up to
+139 while independent cleanup, pytest, Chrome, Thorium, and Tsignal work
+overlapped. Live readback also showed Chrome above 20 GB private memory and
+Thorium approaching 7 GB. No single active pytest explained the entire incident,
+but uncoordinated heavy jobs were a confirmed amplifier on an eight-logical-
+processor host.
+
+#### Collision verdict
+
+The plan-context loader still cannot catalog `D:/dotclaude`. A bounded fallback
+checked this plan, repo status, recent history, `IDEA_BOX.md`, and plan/vision
+indexes. No competing host-resource plan or idea-box owner exists.
+
+**Verdict: AMEND EXISTING PLAN.** Conductor already owns durable application
+work admission, deterministic ordering, leases, heartbeat, and recovery.
+Creating another pytest/CDP scheduler would duplicate those authorities.
+
+#### Preserved boundaries
+
+- Conductor owns host-resource admission and durable evidence.
+- CDP Fleet Manager continues to own browser job queues, physical role/profile
+  identity, browser health, and per-role leases.
+- The pytest adapter may launch only a Python interpreter with `-m pytest`; it
+  is not a generic shell runner.
+- A resource lease never authorizes a Work Item, changes its risk class, grants
+  operator GO, or proves completion.
+- No broker, order path, Tsignal runtime, Chrome lifecycle, or arbitrary process
+  termination enters scope.
+- No active job is preempted. Queue pressure delays later work.
+
+>> PHASE 0 COMPLETE
+
+### Confirmed implementation gap at `7ea759c`
+
+The shipped core provides WorkItem `Claim` and `Lease` entities, but no
+host-resource requirement or resource lease. `ConductorScheduler` currently
+checks dependencies, R2/R3 authorization, priority, risk, and age only.
+`ConductorStore` has no resource pool/request/lease tables, and
+`conductorctl.py` exposes no resource admission or pytest gate.
+
+This is narrower than the original scheduler contract, which already states:
+
+- hard dependencies and resource conflicts precede priority;
+- host/global concurrency limits are backend-owned with live readback;
+- concurrency limits prevent runaway dispatch.
+
+HRL-R2 implements those existing promises for one deliberately small resource
+class instead of inventing a second scheduling system.
+
+### Architecture
+
+#### Deep module and seam
+
+Add a Host Resource Admission module behind one interface:
+
+```text
+request(resource_key, owner, purpose, idempotency_key) -> queued|active
+heartbeat(lease_id, sequence) -> renewed|rejected
+release(lease_id, outcome) -> released|already_terminal
+reconcile(now, process_readback) -> recovered|recovery_required
+status(resource_key?) -> read-only snapshot
+```
+
+Callers and tests cross this same seam. SQLite transactions, deterministic
+queue selection, PID/start-time checks, heartbeat TTL, redaction, and retry
+rules stay inside the implementation.
+
+#### Durable entities
+
+`HostResourceRequest`:
+
+- `request_id`, `idempotency_key`;
+- `resource_key` (`host:heavy` in this slice);
+- `purpose` (`pytest_full`, `pytest_heavy`, `playwright`, `cdp_provider`);
+- `repo_id` and canonical repo path digest;
+- `owner_host`, `owner_instance`;
+- priority and creation sequence;
+- state: `QUEUED`, `ACTIVE`, `RELEASED`, `CANCELLED`,
+  `RECOVERY_REQUIRED`, or `QUARANTINED`;
+- sanitized display label and command SHA-256, never raw environment,
+  credentials, or full command text.
+
+`HostResourceLease`:
+
+- `resource_lease_id`, `request_id`, `resource_key`;
+- units (fixed to 1 in HRL-R2);
+- owner PID and process-start identity when available;
+- monotonic heartbeat sequence;
+- acquired, last-heartbeat, and expiry timestamps;
+- terminal outcome and reason code.
+
+`HostResourcePool`:
+
+- key `host:heavy`;
+- capacity fixed to 1 for the first shipped slice;
+- enabled by default;
+- current active units and queued count in readback.
+
+Capacity is not environment-configurable in HRL-R2. A silent environment
+override would recreate per-session drift. Changing capacity is a later,
+operator-owned persistent setting backed by measured host evidence.
+
+#### Admission transaction
+
+Resource acquisition uses one SQLite `BEGIN IMMEDIATE` transaction:
+
+1. reject duplicate/conflicting idempotency keys;
+2. append the request;
+3. count valid active leases for the pool;
+4. if capacity is available, activate the oldest eligible request using
+   priority, creation order, and stable request ID;
+5. otherwise leave it `QUEUED` with reason `HOST_RESOURCE_BUSY`;
+6. append an immutable event before committing.
+
+No client-side check-then-claim path is permitted.
+
+#### Queue flow
+
+```mermaid
+flowchart LR
+    A["Agent or workflow classifies work"] --> B["Conductor resource request"]
+    B --> C{"host:heavy available?"}
+    C -- "No" --> D["Durable QUEUED state"]
+    D --> C
+    C -- "Yes" --> E["ACTIVE resource lease"]
+    E --> F{"Consumer"}
+    F --> G["Bounded pytest adapter"]
+    F --> H["CDP Fleet Manager adapter"]
+    G --> I["Heartbeat and release"]
+    H --> I
+    I --> J["Promote next queued request"]
+```
+
+### Pytest adapter contract
+
+Provide a bounded local command:
+
+```text
+conductorctl pytest --repo <canonical-path> --python <interpreter> -- <pytest-args>
+```
+
+It may execute only:
+
+```text
+<validated-python> -m pytest <pytest-args>
+```
+
+The adapter:
+
+1. classifies the invocation before creating a subprocess;
+2. obtains `host:heavy` when classification is heavy;
+3. starts pytest only after lease activation;
+4. records child PID/process-start identity;
+5. heartbeats while the child runs;
+6. streams stdout/stderr without rewriting pytest's exit code;
+7. releases in `finally` with success, failure, timeout, or launch-error
+   evidence.
+
+It cannot accept shell syntax, chained commands, arbitrary executables, or
+environment secrets. `shell=True` is prohibited.
+
+#### Classification
+
+| Invocation | Classification | Lease |
+|---|---|---|
+| no explicit test target | `pytest_full` | required |
+| repo test directory or multiple test files | `pytest_full` | required |
+| xdist/parallel workers, integration marker, stress/benchmark marker | `pytest_heavy` | required |
+| one explicit test file or node, no parallel/integration/stress marker | `pytest_focused` | not required; classification still logged |
+| ambiguous/unparseable target | `pytest_heavy_unknown` | required, fail closed |
+
+Callers may promote focused work to heavy. They may not downgrade a derived
+heavy classification.
+
+### CDP consumer contract
+
+HRL-R2 does not modify WatchF or the Fleet Manager. It freezes the adapter
+contract the CDP owner must consume:
+
+1. before a physical provider job begins, request `host:heavy` with purpose
+   `cdp_provider`;
+2. retain the existing Fleet Manager queue and per-role lease;
+3. do not claim the physical CDP role until the host lease is active;
+4. heartbeat both leases independently;
+5. release the host lease after the provider artifact reaches a terminal state;
+6. report `HOST_RESOURCE_BUSY` distinctly from browser-down/auth/selector
+   failures.
+
+One lease does not imply the other. Conductor never starts, stops, repairs, or
+selects Chrome.
+
+### Cross-runtime adoption
+
+The canonical generated agent rules must require:
+
+- all full/heavy pytest invocations to use the bounded Conductor pytest adapter;
+- focused pytest to use the adapter as well when practical so classification is
+  visible;
+- no agent to bypass a busy queue by changing `--basetemp`, interpreter, repo,
+  or working directory;
+- `/fwf`, `/fwp`, audit, and CDP integrations to use their declared adapters,
+  not direct physical profile ownership;
+- fail closed when Conductor is unavailable for heavy work.
+
+Canonical source is changed once, then generated targets are updated through
+`sync_agent_rules.py --write`. Generated managed blocks are never hand-edited.
+Deployment must refuse dirty/conflicting target files and report each skipped
+target.
+
+### Failure and recovery contract
+
+| Failure | Required behavior |
+|---|---|
+| Conductor unavailable | heavy job does not start; `RESOURCE_COORDINATOR_UNAVAILABLE` |
+| queue wait timeout | request remains or is cancelled per explicit caller choice; pytest does not start |
+| wrapper dies before child launch | lease expires and reconciles after proven process death |
+| wrapper dies while child may run | `RECOVERY_REQUIRED`; pool remains blocked until process-tree readback proves safe |
+| pytest exits nonzero | exact exit code returned; lease released with `FAILED` outcome |
+| heartbeat replay/out of order | reject without extending TTL |
+| duplicate request | return original request/lease state; never launch twice |
+| database restart | queued order and active/recovery state survive round-trip |
+| capacity invariant violation | quarantine affected pool; no further admission |
+| CDP adapter unavailable | pytest admission remains functional; CDP request reports adapter hold |
+
+### Exact implementation surface
+
+Core:
+
+- `scripts/conductor_model.py` - resource entities, states, schemas, reasons;
+- `scripts/conductor_store.py` - additive migration and atomic admission;
+- `scripts/conductor_scheduler.py` - deterministic resource promotion;
+- `scripts/conductor_commands.py` - request/heartbeat/release/reconcile/status;
+- `scripts/conductor_resources.py` - deep module and bounded pytest process
+  lifecycle;
+- `scripts/conductorctl.py` - resource readback and pytest interface.
+
+Tests:
+
+- `scripts/tests/test_conductor_resources.py` - persistence, races, recovery,
+  classification, process lifecycle;
+- `scripts/tests/test_conductor_cli.py` - CLI exit/output compatibility and
+  read-only status.
+
+Adoption/docs:
+
+- `skills/conductor/SKILL.md`;
+- canonical `agent-rules/core.md`;
+- generated managed targets produced only by `scripts/sync_agent_rules.py`.
+
+Plan:
+
+- this file only.
+
+No `conductor_mcp.py`, Host Adapter autonomous-dispatch capability, WatchF
+source, application repo, or broker/runtime file is in the initial diff.
+
+The implementation exceeds eight physical files because the persistent core,
+bounded adapter, tests, and cross-runtime policy are independently necessary.
+The external interface stays small; distribution is not omitted to create an
+artificially small diff.
+
+### Implementation slices
+
+| Slice | Scope | Gate |
+|---|---|---|
+| HRL-0 | amend this plan; refresh CEO/matrix/engineering delta review | no code before review clears |
+| HRL-1 | model, additive SQLite migration, atomic capacity-one admission | concurrent transaction and restart tests |
+| HRL-2 | resource command handlers, scheduler promotion, status/reconcile | deterministic queue and fail-closed recovery tests |
+| HRL-3 | bounded pytest adapter and CLI | real subprocess success/failure/timeout tests; no shell execution |
+| HRL-4 | canonical agent rule and Conductor skill adoption | sync check; dirty-target refusal; no unmanaged-block edits |
+| HRL-5 | focused tests, one gated full suite, exact-head R2 review, landing | draft PR, one ready/CI transition, reviewed exact head |
+
+HRL-1 through HRL-4 are one sequential spine because they share schema,
+interface, and generated policy. Do not parallel-edit them.
+
+### Validation matrix
+
+#### Domain and persistence
+
+- additive migration from the PR #62 database opens without data loss;
+- write -> coordinator restart -> read preserves queue order and lease state;
+- unknown future schema/version fails closed;
+- export includes resource requests/leases without raw command/environment data.
+
+#### Atomicity and scheduling
+
+- 50 concurrent requests against capacity 1 yield exactly one active lease;
+- active units never exceed capacity under retries and coordinator restart;
+- duplicate idempotency keys return one durable request;
+- priority plus stable aging/order is deterministic;
+- one active CDP-shaped request blocks a pytest-shaped request and vice versa;
+- focused pytest classification does not consume the heavy slot.
+
+#### Process and recovery
+
+- real short pytest child passes and returns exit 0;
+- real failing pytest child returns its original nonzero exit;
+- wrapper termination before/after child launch follows the failure table;
+- stale PID with reused numeric identity does not release a lease;
+- heartbeat replay cannot keep a dead owner alive;
+- no subprocess path uses `shell=True`.
+
+#### Compatibility
+
+- all existing `test_conductor_*.py` pass;
+- one full live `scripts/tests` suite runs through the new gate only after the
+  host preflight is green;
+- Ruff and `git diff --check` pass;
+- `conductorctl status` and installer status remain read-only;
+- original WorkItem Claim/Lease behavior and authorization containment tests
+  remain green.
+
+#### Host preflight for heavy validation
+
+Do not start matrix/CDP review or the full suite while another heavy job is
+active. Before HRL-0 matrix review and HRL-5 full validation, require a
+60-second readback with:
+
+- no active pytest/Playwright/full audit process;
+- CPU below 70%;
+- processor queue below 8;
+- no current TCP exhaustion event or socket storm;
+- the system-pressure monitor recording successfully.
+
+If preflight fails, record `HOLD_HOST_PRESSURE`; do not bypass the gate.
+
+Preflight evidence on 2026-07-28:
+
+- the already-running Tsignal PR #760 full non-integration suite was allowed to
+  finish without interference: `15531 passed, 2 skipped, 54 deselected,
+  2 xpassed` in 942.26 seconds;
+- no second pytest or audit was started by this lane;
+- the first post-test window fell from 91.7% to 65.6% CPU but did not sustain
+  the threshold;
+- an independent `System.Diagnostics.PerformanceCounter` window then measured
+  `75.93, 71.95, 66.01, 55.91, 80.03, 99.94` percent CPU and ended with
+  processor queue 127;
+- the standing monitor independently observed queue peaks of 181 and the
+  unmanaged Kimi `rg` incident described below;
+- therefore the current gate remains `HOLD_HOST_PRESSURE`; Stage 2 matrix and
+  all new heavy validation are intentionally not running.
+
+Preflight evidence on 2026-07-29 after WPR attribution:
+
+- a 60-sample, one-second counter window ran from
+  `2026-07-29T12:30:55.2385635-06:00` through
+  `2026-07-29T12:32:01.6569863-06:00` (`66.418 s` wall time including
+  sampling overhead);
+- all 60/60 CPU samples failed the strict `<70%` gate: average `99.99%`,
+  median `100%`, maximum `100%`;
+- all 60/60 processor-queue samples failed the strict `<8` gate: average
+  `96.6`, maximum `186`;
+- no `pytest`, `auditf.py`, or `fuse.py` process was present at entry or exit;
+  continuous absence was not claimed because the CPU and queue gates had
+  already failed decisively;
+- TCP totals stayed between 833 and 899 during monitor samples and were 891 at
+  exit, below the monitor's 2,000-detail threshold; no socket storm was
+  observed;
+- bounded monitor PID `13360` produced eight samples from `12:30:25` through
+  `12:31:47` but did not cover the final 14 s of the counter window, so monitor
+  coverage independently failed the gate;
+- monitor samples were `99.97-100%` CPU with queue up to 165; DPC stayed at or
+  below `1.59%` and interrupt time at or below `2.68%`;
+- runtime readback showed a new Tsignal headless launcher/child pair
+  `33276/57932` (child created `12:10:05`) and hot Thorium renderer PID
+  `49216`; this lane did not restart or mutate either runtime;
+- raw counter CSV SHA-256:
+  `6FEB887826D61DED8B7139A9A979DCE0BD6681A32D995FA865FD73A95024693B`;
+- machine-readable verdict SHA-256:
+  `86A5D00334390AC23ADBF9DB98160878514308B77E9B160BC996CE494919D136`.
+
+Verdict: **`HOLD_HOST_PRESSURE`**. The matrix, full tests, and CDP fan-out did
+not start.
+
+Preflight evidence on 2026-07-30 after operator-authorized host cleanup:
+
+- Spotify was closed; the WatchF CDP fleet supervisor was stopped so that
+  intentionally closed profiles would not respawn;
+- Chrome profiles TV/9225, SOCIAL/9227, and GPT/9233 were closed; the
+  matrix-relevant TE/9222, Gemini/9223, PPL/9224, and KIMI/9228 profiles were
+  preserved;
+- no Tsignal headless or TWS process was present, and this lane made no broker,
+  account, order, arming, or runtime-state mutation;
+- the final preflight ran for 74.092 seconds with 60 samples: CPU averaged
+  13.98%, median 10%, maximum 64%, with 0 samples at or above 70%;
+- processor queue averaged 0.08, maximum 2, with 0 samples at or above 8;
+- the refined process readback proved continuous absence of real pytest,
+  `auditf.py`, `fuse.py`, and Playwright test workloads across all 60 samples;
+- the bounded system-pressure monitor recorded 24 samples from
+  `2026-07-30T15:45:27.2983983-06:00` through
+  `2026-07-30T15:47:25.1628579-06:00`, fully covering the preflight window;
+  it reported no sample errors, CPU maximum 64.07%, queue maximum 4, DPC
+  maximum 0.67%, and interrupt maximum 1.27%;
+- TCP totals remained 178-224 during the monitor and were 177 at exit, below
+  the detail threshold of 2000; no socket storm was detected;
+- result artifact:
+  `D:\APPS\Tsignal 5.0\scratch\system-pressure-monitor\hrl-r2-preflight-20260730-run5\hrl-r2-preflight-result.json`,
+  SHA-256
+  `008085626E3350A2B31901BA5FEDF0C3D638098830B106B4A3978FBEE13D0D5E`;
+- raw preflight CSV SHA-256:
+  `473C6368C946B208752F99743A65DA69EE45932F7E46C0FA079A5301C21319A4`;
+- system-pressure CSV SHA-256:
+  `1B3865E04575936C786ED6CB8EF97F6D88DE5853B3D56DCB9FED323E07CC570A`;
+- system-pressure metadata SHA-256:
+  `2799A77A51E64175A5768E636049277358CB13D6302DE5D57FD42B8DF7AC0430`.
+
+Verdict: **`PASS_HOST_PREFLIGHT`**. `HOLD_HOST_PRESSURE` is cleared for the
+next bounded HRL-R2 matrix run. The matrix itself has not started.
+
+Stage 2 matrix evidence on 2026-07-30:
+
+- exact command: `fuse.py --mode free --synthesizer gpt` against this plan;
+- run directory:
+  `C:\Users\dszub\.claude\fusion_runs\2026-07-30_155856_title-truthdeck-conductor-cross-repo-age`;
+- 10/12 lanes returned; four were correctly marked `DEGN`, and two were real
+  failures: Kimi CLI `WinError 206` (path too long) and Nemotron Nano VL
+  upstream idle timeout;
+- Gemini, Perplexity roster, Nemotron Super, Ling, Gemma, and Cohere returned
+  substantive artifacts; the panel is recorded honestly as degraded with
+  **LOW-MEDIUM** confidence;
+- the generated L3 synthesis finds no boundary violation and clears the R2
+  delta condition **only after D13 is folded into HRL-0 before HRL-1 code**;
+- D13 is the sole ship-blocking finding: without attempt-scoped re-entrant
+  lease inheritance, HRL-3/HRL-5 real pytest children deadlock behind their
+  ancestor's capacity-one lease;
+- valid non-blocking findings H2-H9 are recorded above as HRL-0 freeze and
+  acceptance requirements; truncation-based and degenerate lane claims are
+  discarded;
+- `_run_meta.json` SHA-256:
+  `CDBDD6033D23F69BA953BE273380B5D9C462F562D74442F6A1BAB0ACF75B894F`;
+- `synthesis_prompt.md` SHA-256:
+  `185A4C485AE5A116DEF41061EE54467DA9796DDFC0AFC93AEF41B1F1079305CF`;
+- `_matrix/L3_synthesis.md` SHA-256:
+  `D64C0193719478B5B61E2FBF949C62D092A6A161D9D99AC504EF0B789C1F32BF`.
+
+Verdict: **`MATRIX_CLEAR_CONDITIONAL_D13`**. D13/H2-H9 are now reflected in
+the schema, acceptance rows, generated policy, and status gate.
+
+### HRL-1 through HRL-4 implementation checkpoint
+
+Implementation began only after the conditional matrix finding was folded into
+the freeze. The sequential spine now contains:
+
+- additive SQLite migrations v2 (resource tables), v3 (`context_digest_sha256`),
+  and v4 (resource priority), each preserving pre-migration state and backup
+  evidence;
+- atomic capacity-one admission with idempotency, queue visibility, priority
+  plus stable aging/tie-break promotion, heartbeat, restart round-trip,
+  re-entrant D13 inheritance, forged/stale-token demotion, and fail-closed
+  recovery;
+- retained-`Popen` bounded pytest execution using only
+  `<python> -m pytest <args>` and `shell=False`, with exact success/failure/
+  timeout outcomes and ambiguous termination held in `RECOVERY_REQUIRED`;
+- resource command handlers/CLI, `doctor` truthctl minimum-version check,
+  report-only storage ceilings (artifacts 1 GiB, receipts 256 MiB, inbox
+  64 MiB), CONTEXT digest binding, and canonical/generated rule adoption.
+
+Focused evidence on the implementation head: `test_conductor_*.py` **37
+passed**, including 50 concurrent admission attempts (1 ACTIVE/49 QUEUED),
+real subprocess pass/fail/timeout, focused/heavy classification, scheduler
+resource conflict, environment allowlisting, priority persistence, v2
+migration replay, H2 handshake refusal, read-only status seams, duplicate
+idempotency, inherited-child parent-process identity, and H6 quota readback.
+`compileall`,
+Ruff, `git diff --check`, and the managed rule sync check are green. The
+exact-head R2 review remains open; no PR is ready or merged.
+
+The gated full `scripts/tests` run completed on 2026-07-30 after installing the
+declared optional `requirements-truthdeck-mcp.txt` dependency (`mcp 1.29.0`):
+**407 passed, 11 subtests passed in 31.33 s**. The first attempt was preserved
+as a collection blocker (`ModuleNotFoundError: mcp`); it was not counted as a
+pass. No broker, runtime, account, order, arming, or WatchF state was touched.
+
+Current gate: **HRL-5 FULL SUITE COMPLETE; EXACT-HEAD R2 REVIEW PENDING.**
+
+### Acceptance criteria
+
+- `host:heavy` capacity is exactly 1 and enabled by default.
+- Two independent cooperative sessions cannot start two heavy pytest/CDP jobs
+  concurrently.
+- Busy work is visible with owner, purpose, queue age, and sanitized identity.
+- Full pytest preserves native output and exit code.
+- Resource leases survive restart and fail closed under ambiguous process loss.
+- CDP ownership remains in Fleet Manager; no Chrome lifecycle code enters
+  Conductor.
+- Heavy work fails closed when Conductor is unavailable.
+- An attempt-scoped inherited lease lets its bounded child run without a second
+  unit; two concurrent inherited children are refused; forged/stale tokens are
+  treated as fresh requests and cannot bypass capacity one.
+- Authorization transport is interactive tty-verified, child supervision uses
+  retained process handles, and `truthctl` minimum-version drift fails closed.
+- Migration-boundary replay, disk-full quarantine, `TDCONDUCTOR_*` prefix
+  isolation, and status growth/quota readback have explicit test rows. The
+  report-only ceilings are artifacts **1 GiB**, receipts **256 MiB**, and
+  inbox **64 MiB**.
+- Work Items persist an optional `context_digest_sha256` beside
+  `scope_digest_sha256`; authorization refuses a supplied CONTEXT digest that
+  does not match the durable Work Item binding.
+- Cross-runtime generated rules require the gate and hash-match their canonical
+  source.
+- Exact-head external R2 review reports no ship-blocking findings before merge.
+
+### Rollback
+
+1. stop accepting new resource requests;
+2. allow or explicitly reconcile the one active lease;
+3. revert the pytest/rules adoption and core code commit through the PR;
+4. leave additive resource tables and ledger events intact but inert;
+5. never delete `~/.conductor/conductor.db` as part of rollback.
+
+Rollback does not authorize direct concurrent heavy work. Until a replacement
+gate exists, operators run heavy jobs serially.
+
+### Deferred
+
+- capacity above 1 or weighted/multi-resource pools;
+- bulk file deletion, broad recursive source scans, model training, build, and
+  GPU-specific resource classes;
+- automatic termination of unrelated/foreign processes (the bounded pytest
+  adapter may terminate only its retained child on its own timeout);
+- generic shell execution;
+- MCP resource mutation;
+- WatchF/Fleet Manager implementation changes;
+- UI/dashboard beyond existing status output.
+
+#### Adjacent host-pressure evidence (not added to HRL-R2 scope)
+
+During the required host preflight on 2026-07-28, a Kimi-owned `rg.exe`
+(`PID 43980`) recursively searched `D:\APPS`, `C:\Users\dszub\.claude`, and
+`C:\Users\dszub\.codex`. The monitor observed a peak of 100% CPU and processor
+queue 226 before the process exited. This confirms that pytest and CDP are not
+the only possible heavy consumers, but interception of arbitrary agent commands
+has no bounded, proven adoption seam in this slice. It remains an explicit
+follow-up resource class; HRL-R2 must not claim to contain it.
+
+##### 2026-07-29 WPR attribution follow-up
+
+An operator-authorized elevated WPR `CPU` trace established exact attribution
+for one subsequent host-pressure window:
+
+- ETL span `91.8598542 s`, eight processors, zero lost buffers and zero lost
+  events; ETL SHA-256
+  `17FC2F7FC0EE0CED39FD1C7E9BAE273C42C6798F72A548EF9660A92FDCDA27C5`;
+- mean non-idle CPU was approximately `86.6%`;
+- no `pytest`, `auditf.py`, or `fuse.py` process ran; the Playwright match was
+  an idle MCP driver, not a test run;
+- Tsignal headless `python.exe` PID `31456` was the largest individual active
+  process at `11.69%` total-machine CPU (`85.92 s` CPU time);
+- the live system-pressure monitor PID `28976` used only `0.20%`, disproving it
+  as the primary pressure source for this interval;
+- Codex/ChatGPT desktop PID `31836` spawned `951` direct children
+  (`10.35/s`): 425 Git probes, 424 forced `taskkill /t /f` processes,
+  90 PowerShell probes, seven ChatGPT children, four GitHub CLI children, and
+  one Codex CLI child;
+- those PowerShell children included 51 process-tree polls and 39
+  performance/process polls; the associated `WmiPrvSE.exe` plus `Winmgmt`
+  service cost was `9.57%` total-machine CPU;
+- Antigravity `language_server.exe` spawned another 320 Git commands and VS
+  Code spawned 196, confirming multi-owner IDE/agent Git churn.
+
+The diagnosis is `ROOT_CAUSE_CONFIRMED_FOR_CAPTURE_WINDOW`: real concurrent
+user-space load, led by Codex/IDE process churn and amplified by the
+single-core-scale Tsignal backend load. It does not prove that every earlier
+spike had identical composition.
+
+Durable summary hashes:
+
+- analysis report SHA-256
+  `9E8D6747069A9FA3EB1478425351DB85EDD4AA1C84737BC4E345D4D01245D15C`;
+- machine-readable summary SHA-256
+  `D95BBF7032C82C0C34426DF889C99C3320C9B17AEAB8F2CE5A9B7A65934B0E50`.
+
+This evidence does not widen HRL-R2. The initial slice still coordinates only
+cooperative heavy pytest/Playwright and bounded CDP provider jobs. Generic
+Codex/IDE command interception, polling throttles, recursive-scan admission,
+and arbitrary process termination remain deferred. At the time of this incident
+attachment the gate was `HOLD_HOST_PRESSURE`; later HRL-R2 preflight and matrix
+evidence supersede that temporary state. No broker/runtime or unrelated process
+action was taken.
+
+### Amendment review and authorization state
+
+Risk remains **R2**: additive durable schemas, cross-session leases, subprocess
+lifecycle, and generated global policy.
+
+The operator supplied standing authorization:
+
+```text
+GO CONDUCTOR HOST RESOURCE LEASE R2
+```
+
+That token authorizes the bounded HRL-0 through HRL-5 lifecycle after the
+required R2 delta review clears. It does not authorize scope expansion, direct
+WatchF/CDP lifecycle changes, destructive cleanup, or bypassing
+`HOLD_HOST_PRESSURE`.
+
+Current gate: **HRL-5 FULL SUITE COMPLETE; EXACT-HEAD R2 REVIEW PENDING.**
+
+### HRL-0 `/fwf` Stage 1 - CEO delta review
+
+Review date: 2026-07-28. Exact base:
+`7ea759c366d486fd589ea2345ec9c215c43c3e4c`.
+
+**Mode: HOLD SCOPE.** The operator selected the product outcome: the Conductor
+being introduced for CDP queue coordination must also prevent overlapping
+heavy pytest work. The narrow complete solution is shared host admission, not a
+second test scheduler.
+
+#### Premise and leverage review
+
+- A separate pytest lockfile or Windows mutex would split queue truth from the
+  existing SQLite ledger, leases, heartbeat, status, and recovery.
+- Extending the existing persistent model gives one operator readback and one
+  fail-closed recovery path across every cooperative host.
+- A generic `run <command>` interface would be more convenient but would violate
+  the existing no-arbitrary-shell authority decision.
+- A dedicated pytest adapter is a real seam: pytest and CDP are two different
+  consumers of the same resource-admission interface.
+
+#### Alternatives
+
+| Alternative | Completeness | Decision |
+|---|---:|---|
+| Conductor resource lease plus bounded pytest and CDP adapters | 10/10 | ACCEPT |
+| separate pytest file lock beside Conductor | 5/10 | REJECT - split-brain ownership and weak recovery |
+| Windows global mutex only | 4/10 | REJECT - no durable queue, owner evidence, aging, or restart state |
+| generic Conductor shell runner | 8/10 operationally, 2/10 authority safety | REJECT - expands execution authority |
+| observe concurrent tests but do not block | 3/10 | REJECT - detects after overload begins |
+
+#### Binding amendment decisions
+
+- **D7 - one admission authority:** Conductor owns `host:heavy`; Fleet Manager
+  retains CDP role/profile and lifecycle ownership.
+- **D8 - capacity one:** the first pool has fixed capacity 1, enabled by
+  default. No environment override or auto-tuning.
+- **D9 - bounded pytest execution:** only validated
+  `<python> -m pytest <args>` is launchable; no shell and no arbitrary command.
+- **D10 - fail closed:** an unavailable/busy coordinator does not launch heavy
+  work.
+- **D11 - distribution is product scope:** canonical shared agent rules and
+  generated clients must adopt the gate; an unused core lease is not complete.
+- **D12 - no preemption:** active work is never killed or reprioritized. Later
+  work waits and remains visible.
+- **D13 - re-entrant lease inheritance (P1, binding before HRL-1):** an
+  attempt-scoped `TDCONDUCTOR_LEASE_ID` is passed through the bounded child
+  environment. A child whose ancestor holds an active lease on the same pool
+  inherits that lease without consuming another unit; a second concurrent
+  inherited child is refused, and forged or stale tokens are rejected as fresh
+  requests. This preserves capacity-one and prevents HRL-3/HRL-5 self-test
+  deadlock behind the ancestor's own `host:heavy` lease.
+
+#### Stage 2 delta findings folded into the HRL-0 freeze
+
+- **H2 (P2):** name the `authorize` transport as an operator-only,
+  tty-verified coordinator handshake; keep it out of inbox, argv, redirected
+  stdin, environment, MCP, and agent assignment paths.
+- **H3 (P2):** supervise bounded children through retained `Popen` handles
+  (`poll()`/`wait()` and Windows job containment where available), not WMI/CIM
+  or process-list polling; ambiguous identity remains `RECOVERY_REQUIRED`.
+- **H4 (P2):** `conductorctl doctor` must pin and fail closed on an unknown or
+  below-minimum `truthctl` version.
+- **H5 (P3):** retain the current strict preflight for this cleared run; record
+  a measured follow-up to calibrate p95 plus bounded max-excursion thresholds
+  without dropping monitor-coverage or continuous-absence proof.
+- **H6 (P3):** define numeric ceilings for `artifacts/`, `receipts/`, and
+  `inbox/`, and expose growth readback in `status --json`; retention remains
+  report-only and no automatic deletion enters HRL-R2.
+- **H7 (P3):** discovery cadence is event-triggered or manually invoked in the
+  MVP; no background polling or implicit external rate-limit budget.
+- **H8 (P3):** bind `CONTEXT.md` by digest alongside `scope_digest_sha256`.
+- **H9 (P3):** add a migration-boundary replay test that reproduces state or
+  fails closed to `QUARANTINED`.
+
+#### Accepted and deferred scope
+
+Accepted: one persistent pool, atomic admission, recovery, bounded pytest
+adapter, readback, shared-rule adoption, and a consumer contract for the
+separate CDP manager.
+
+Deferred: multi-capacity/weights, bulk-I/O/GPU/build classes, UI, MCP mutation,
+generic command execution, automatic termination, and direct WatchF
+implementation.
+
+**CEO verdict: CLEAR.** No product decision remains open. Continue to the R2
+matrix only after `HOLD_HOST_PRESSURE` clears.
+
+## GSTACK REVIEW REPORT
+
+Review date: 2026-07-30. Exact reviewed head:
+`310fa934f9b4c38278eaa607a0aea9f2063c4a38`.
+
+Scope Check: **CLEAN**
+
+Intent: implement the approved HRL-R2 Conductor `host:heavy` capacity-one
+lease and bounded pytest seam without touching WatchF, broker, or runtime
+execution paths.
+
+Delivered: additive durable resource request/pool/lease/event state, atomic
+admission and deterministic promotion, D13 inheritance and fail-closed
+recovery, bounded `<python> -m pytest` execution, read-only status/doctor
+seams, context-digest binding, and canonical rule/skill adoption.
+
+Evidence:
+
+- host preflight remained green; matrix verdict is
+  `MATRIX_CLEAR_CONDITIONAL_D13` with degraded LOW-MEDIUM lane confidence;
+- focused Conductor tests: **37 passed**;
+- full `scripts/tests`: **407 passed, 11 subtests passed in 31.33 s**;
+- `compileall`, Ruff, `git diff --check`, and managed-rule sync check passed;
+- graph-assisted exact-head impact pass completed; no affected runtime or
+  broker surface was found;
+- `gstack-review-read`: `NO_REVIEWS` before this review; no Greptile review was
+  available because no PR exists yet.
+
+Critical pass: **CLEAN** — no SQL/data-safety, race/concurrency,
+trust-boundary, shell-injection, enum-completeness, async/sync, field-name,
+time-window, or CI/distribution findings remain. The retained `Popen` handle,
+`shell=False`, `BEGIN IMMEDIATE`, allowlisted child environment, single-use
+TTY handshake, and fail-closed recovery paths were checked against the diff
+and tests. Design review was not applicable to this non-UI slice.
+
+Review outcome: **CLEAN**, 0 unresolved findings, quality score **8.8/10**.
+The branch is committed and ready for the draft-PR landing gate; no PR is
+ready or merged yet.
+
+Current gate: **HRL-5 EXACT-HEAD REVIEW CLEAN; DRAFT PR PENDING.**
 
 NO UNRESOLVED DECISIONS

@@ -9,9 +9,69 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
+import shutil
 import subprocess
 from typing import Any, Dict, Optional, Tuple, Union
 
+
+MIN_TRUTHCTL_VERSION = (1, 0, 0)
+
+
+def check_truthctl_version(executable: str = "truthctl") -> Dict[str, Any]:
+    """Return a fail-closed version check for the installed TruthDeck CLI."""
+    resolved = shutil.which(executable)
+    if not resolved:
+        return {
+            "ok": False,
+            "status": "UNKNOWN",
+            "version": None,
+            "required_minimum": ".".join(str(part) for part in MIN_TRUTHCTL_VERSION),
+            "error": "truthctl executable not found",
+        }
+    try:
+        result = subprocess.run(
+            [resolved, "version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return {
+            "ok": False,
+            "status": "UNKNOWN",
+            "version": None,
+            "required_minimum": ".".join(str(part) for part in MIN_TRUTHCTL_VERSION),
+            "error": str(err),
+        }
+
+    version_text = (result.stdout or result.stderr or "").strip()
+    match = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", version_text)
+    version = tuple(int(part) for part in match.groups()) if match else None
+    minimum = ".".join(str(part) for part in MIN_TRUTHCTL_VERSION)
+    if result.returncode != 0 or version is None:
+        return {
+            "ok": False,
+            "status": "UNKNOWN",
+            "version": version_text or None,
+            "required_minimum": minimum,
+            "error": f"truthctl version probe failed with exit code {result.returncode}",
+        }
+    if version < MIN_TRUTHCTL_VERSION:
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "version": ".".join(str(part) for part in version),
+            "required_minimum": minimum,
+            "error": "truthctl version is below the pinned minimum",
+        }
+    return {
+        "ok": True,
+        "status": "PASS",
+        "version": ".".join(str(part) for part in version),
+        "required_minimum": minimum,
+    }
 
 
 class ConductorTruthDeckSeam:

@@ -1,16 +1,25 @@
 """Unit tests for ConductorStore persistence, SQLite WAL, atomic inbox/receipts, and leader lock."""
 
 import pathlib
+import sqlite3
 import pytest
 
 from scripts.conductor_model import (
     CommandEnvelope,
+    HostResourceRequest,
+    HostResourceRequestState,
     Receipt,
     ReasonCode,
     WorkItem,
     WorkItemState,
 )
-from scripts.conductor_store import ConductorStore
+from scripts.conductor_store import (
+    ConductorStore,
+    STORAGE_QUOTAS_BYTES,
+    read_storage_status,
+    read_store_diagnostics,
+    read_store_status,
+)
 
 
 @pytest.fixture
@@ -23,6 +32,86 @@ def test_store_directory_creation(tmp_path: pathlib.Path):
     assert (tmp_path / "inbox").exists()
     assert (tmp_path / "receipts").exists()
     assert (tmp_path / "conductor.db").exists()
+
+
+def test_read_only_store_seams_do_not_create_missing_root(tmp_path: pathlib.Path):
+    root = tmp_path / "absent-conductor"
+    status = read_store_status(root)
+    diagnostics = read_store_diagnostics(root)
+    storage = read_storage_status(root)
+
+    assert status["store_state"] == "ABSENT"
+    assert diagnostics["root_exists"] is False
+    assert storage["retention_mode"] == "REPORT_ONLY"
+    assert not root.exists()
+
+
+def test_storage_status_reports_growth_and_fail_closed_quota(store: ConductorStore, monkeypatch: pytest.MonkeyPatch):
+    (store.inbox_dir / "env_sample.json").write_bytes(b"1234")
+    status = store.storage_status()
+    assert status["status"] == "PASS"
+    assert status["retention_mode"] == "REPORT_ONLY"
+    assert status["directories"]["inbox"]["files"] == 1
+    assert status["directories"]["inbox"]["bytes"] == 4
+    assert status["directories"]["inbox"]["ceiling_bytes"] > 4
+
+    monkeypatch.setitem(STORAGE_QUOTAS_BYTES, "inbox", 3)
+    blocked = store.storage_status()
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["directories"]["inbox"]["over_quota"] is True
+
+
+def test_context_digest_migration_replays_v2_work_item(tmp_path: pathlib.Path):
+    """A v2 database gains the H8 column without losing materialized state."""
+    db_path = tmp_path / "conductor.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_utc TEXT NOT NULL);
+        INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00Z');
+        INSERT INTO schema_migrations VALUES (2, '2026-01-01T00:00:01Z');
+        CREATE TABLE work_items (
+            work_item_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL, repo_id TEXT NOT NULL, repo_path TEXT NOT NULL,
+            plan_path TEXT NOT NULL, risk_class TEXT NOT NULL, workflow TEXT NOT NULL,
+            requested_terminal_stage TEXT NOT NULL, job_kind TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 50, dependency_ids_json TEXT NOT NULL,
+            authority_requirement TEXT NOT NULL, execution_budget_json TEXT NOT NULL,
+            scope_digest_sha256 TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL, created_by TEXT NOT NULL, schema_version TEXT NOT NULL
+        );
+        CREATE TABLE host_resource_requests (
+            request_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE NOT NULL,
+            resource_key TEXT NOT NULL, purpose TEXT NOT NULL, attempt_id TEXT NOT NULL,
+            agent_instance TEXT NOT NULL, state TEXT NOT NULL, parent_lease_id TEXT,
+            command_sha256 TEXT NOT NULL DEFAULT '', created_at_utc TEXT NOT NULL,
+            released_at_utc TEXT, reason_code TEXT, schema_version TEXT NOT NULL
+        );
+        INSERT INTO host_resource_requests VALUES (
+            'rr_v2', 'rr-key-v2', 'host:heavy', 'pytest_full', 'attempt-v2', 'agent-v2',
+            'QUEUED', NULL, '', '2026-01-01T00:00:03Z', NULL, 'HOST_RESOURCE_BUSY',
+            'conductor.resource-request.v1'
+        );
+        INSERT INTO work_items VALUES (
+            'wi_v2', 'key_v2', 'v2 item', 'repo', 'D:/repo', 'plan.md', 'R2', 'fwf',
+            'merged', 'engineering_plan_lifecycle', 50, '[]', 'standing_r2_go',
+            '{"max_attempts":1,"max_wall_seconds":7200,"max_cost_usd":null}',
+            'scope-v2', 'QUEUED', '2026-01-01T00:00:02Z', 'test', 'conductor.work-item.v1'
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = ConductorStore(root_dir=tmp_path)
+    item = migrated.get_work_item("wi_v2")
+    assert item is not None
+    assert item.state == WorkItemState.QUEUED
+    assert item.scope_digest_sha256 == "scope-v2"
+    assert item.context_digest_sha256 == ""
+    request = migrated.list_resource_requests()[0]
+    assert request.request_id == "rr_v2"
+    assert request.priority == 50
 
 
 def test_leader_lock(store: ConductorStore):
@@ -48,12 +137,14 @@ def test_work_item_persistence(store: ConductorStore):
         workflow="fwf",
         requested_terminal_stage="merged",
         job_kind="engineering_plan_lifecycle",
+        context_digest_sha256="ctx-test-digest",
     )
 
     store.save_work_item(item)
     fetched = store.get_work_item("wi_test_1")
     assert fetched is not None
     assert fetched.title == "Test Task"
+    assert fetched.context_digest_sha256 == "ctx-test-digest"
     assert fetched.state == WorkItemState.DISCOVERED
 
     # State transition
@@ -67,6 +158,24 @@ def test_work_item_persistence(store: ConductorStore):
 
     fetched_queued = store.get_work_item("wi_test_1")
     assert fetched_queued.state == WorkItemState.QUEUED
+
+
+def test_resource_request_persistence_preserves_priority(store: ConductorStore):
+    request = HostResourceRequest(
+        request_id="rr_priority",
+        idempotency_key="rr_priority_key",
+        resource_key="host:heavy",
+        purpose="pytest_heavy",
+        attempt_id="attempt-priority",
+        agent_instance="agent-priority",
+        state=HostResourceRequestState.QUEUED,
+        priority=900,
+    )
+    store.save_resource_request(request)
+
+    fetched = store.get_resource_request(request.request_id)
+    assert fetched is not None
+    assert fetched.priority == 900
 
 
 def test_inbox_and_receipt_atomic_protocol(store: ConductorStore):

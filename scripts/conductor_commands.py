@@ -25,6 +25,7 @@ from scripts.conductor_model import (
     WorkItemState,
 )
 from scripts.conductor_store import ConductorStore
+from scripts.conductor_resources import HostResourceManager
 
 
 class ConductorCommandProcessor:
@@ -32,6 +33,7 @@ class ConductorCommandProcessor:
 
     def __init__(self, store: ConductorStore):
         self.store = store
+        self.resources = HostResourceManager(store=store)
 
     def process_envelope(self, envelope: CommandEnvelope, envelope_source: str = "direct") -> Receipt:
         """Process a command envelope with idempotency protection and source provenance verification."""
@@ -101,6 +103,7 @@ class ConductorCommandProcessor:
             authority_requirement=item.authority_requirement,
             execution_budget=item.execution_budget,
             scope_digest_sha256=item.scope_digest_sha256,
+            context_digest_sha256=item.context_digest_sha256,
             state=WorkItemState.DISCOVERED,
             created_by=item.created_by,
         )
@@ -121,6 +124,7 @@ class ConductorCommandProcessor:
         interactive_proven = payload.get("interactive_provenance_proven", False)
         channel = payload.get("channel", "")
         session_token = payload.get("session_token")
+        handshake = payload.get("coordinator_handshake")
 
         # 1. Asynchronous inbox envelopes CANNOT grant operator GO authorization
         if envelope_source == "inbox_file" or channel in {"inbox_envelope", "agent_assignment", "env_var"}:
@@ -129,6 +133,8 @@ class ConductorCommandProcessor:
         # 2. Must claim interactive provenance
         if not interactive_proven or channel != "interactive_console":
             raise ValueError(f"Authorization refused: non-interactive channel '{channel}' cannot grant operator GO")
+        if not isinstance(handshake, dict) or handshake.get("channel") != "interactive_console" or not handshake.get("tty_verified"):
+            raise ValueError("Authorization refused: missing tty-verified coordinator handshake")
 
         # 3. Must verify single-use interactive session token from store locks
         token_path = self.store.locks_dir / "interactive_session.token"
@@ -144,6 +150,8 @@ class ConductorCommandProcessor:
 
         if not session_token or token_data.get("token") != session_token:
             raise ValueError("Authorization refused: invalid or mismatched interactive session token")
+        if handshake.get("session_pid") != token_data.get("pid"):
+            raise ValueError("Authorization refused: coordinator handshake identity mismatch")
 
         # Check token expiration (max 30s TTL)
         token_time = token_data.get("created_at_timestamp", 0)
@@ -153,6 +161,10 @@ class ConductorCommandProcessor:
         item = self.store.get_work_item(work_item_id)
         if not item:
             raise ValueError(f"WorkItem {work_item_id} not found")
+
+        requested_context_digest = payload.get("context_digest_sha256", item.context_digest_sha256)
+        if requested_context_digest != item.context_digest_sha256:
+            raise ValueError("Authorization refused: CONTEXT.md digest mismatch")
 
         auth_record = AuthorizationRecord(
             authorization_id=f"auth_{uuid.uuid4().hex[:12]}",
@@ -282,6 +294,57 @@ class ConductorCommandProcessor:
         self.store.save_lease(lease)
         return {"lease_id": lease_id, "heartbeat_sequence": sequence, "expires_at_utc": lease.expires_at_utc}
 
+    def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Admit or queue one named host resource consumer."""
+        return self.resources.request(
+            purpose=payload["purpose"],
+            attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"],
+            idempotency_key=payload.get("idempotency_key"),
+            command_sha256=payload.get("command_sha256", ""),
+            priority=int(payload.get("priority", 50)),
+            parent_lease_id=payload.get("parent_lease_id"),
+            environment=payload.get("environment"),
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
+            actor=payload.get("actor", "resource-command"),
+        )
+
+    def _handle_resource_heartbeat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.heartbeat(
+            payload["lease_id"],
+            int(payload["sequence"]),
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
+        )
+
+    def _handle_resource_release(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.release(
+            payload["request_id"],
+            actor=payload.get("actor", "resource-command"),
+            reason=payload.get("reason", "RESOURCE_RELEASED"),
+        )
+
+    def _handle_resource_reconcile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.reconcile(dry_run=bool(payload.get("dry_run", False)))
+
+    def _handle_resource_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.status()
+
+    def _handle_pytest(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the fixed Python-module pytest adapter through host admission."""
+        return self.resources.run_bounded_pytest(
+            python_executable=payload["python_executable"],
+            pytest_args=payload.get("pytest_args", []),
+            cwd=payload["cwd"],
+            attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"],
+            idempotency_key=payload.get("idempotency_key"),
+            parent_lease_id=payload.get("parent_lease_id"),
+            timeout_seconds=float(payload.get("timeout_seconds", 7200)),
+            heartbeat_interval_seconds=float(payload.get("heartbeat_interval_seconds", 30)),
+            base_environment=payload.get("environment"),
+            force_heavy=bool(payload.get("force_heavy", False)),
+        )
+
     def _handle_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Record an EvidenceCheckpoint."""
         checkpoint = EvidenceCheckpoint(
@@ -386,4 +449,5 @@ class ConductorCommandProcessor:
             "db_path": str(self.store.db_path),
             "total_work_items": len(work_items),
             "state_summary": summary,
+            "storage": self.store.storage_status(),
         }

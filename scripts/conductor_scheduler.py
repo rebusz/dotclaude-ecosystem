@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from scripts.conductor_model import WorkItem, WorkItemState
+from scripts.conductor_resources import HostResourceManager
 from scripts.conductor_store import ConductorStore
 
 
@@ -17,6 +18,13 @@ class ConductorScheduler:
 
     def __init__(self, store: ConductorStore):
         self.store = store
+        self.resources = HostResourceManager(store=store)
+
+    @staticmethod
+    def _resource_purpose(item: WorkItem) -> Optional[str]:
+        if item.job_kind in {"pytest_full", "pytest_heavy", "playwright", "cdp_provider"}:
+            return item.job_kind
+        return None
 
     def get_eligible_work_items(self) -> List[WorkItem]:
         """Return all WorkItems in READY state whose dependencies are completed."""
@@ -66,6 +74,19 @@ class ConductorScheduler:
                         "work_item_id": item.work_item_id,
                         "title": item.title,
                         "reason_code": "AUTHORIZATION_MISSING",
+                    })
+                    continue
+
+            resource_purpose = self._resource_purpose(item)
+            if resource_purpose:
+                resource_status = self.resources.status()
+                if resource_status["active_units"] or resource_status["recovery_required"]:
+                    rejected.append({
+                        "work_item_id": item.work_item_id,
+                        "title": item.title,
+                        "reason_code": "HOST_RESOURCE_BUSY",
+                        "resource_key": resource_status["resource_key"],
+                        "purpose": resource_purpose,
                     })
                     continue
 

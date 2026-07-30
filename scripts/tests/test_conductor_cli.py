@@ -40,6 +40,7 @@ def test_mcp_tool_calls(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch)
     status_res = handle_mcp_tool_call("conductor_status", {})
     assert "total_work_items" in status_res
     assert status_res["total_work_items"] == 1
+    assert status_res["storage"]["retention_mode"] == "REPORT_ONLY"
 
 
 def test_coordinator_single_pass_loop(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):

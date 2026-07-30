@@ -72,10 +72,29 @@ def test_enqueue_and_authorize_interactive_provenance(processor: ConductorComman
     assert rcp_no_tok.status == "ERROR"
     assert "refused" in rcp_no_tok.error_message.lower()
 
+    # Agent assignment must remain outside the authorization transport even if
+    # a caller presents the interactive-looking fields.
+    auth_assignment_cmd = CommandEnvelope(
+        command_id="cmd_auth_assignment",
+        command_type="authorize",
+        payload={
+            "work_item_id": work_item_id,
+            "interactive_provenance_proven": True,
+            "channel": "interactive_console",
+            "coordinator_handshake": {"channel": "interactive_console", "tty_verified": True, "session_pid": 1},
+            "session_token": "fake_token",
+        },
+        idempotency_key="idemp_auth_assignment",
+    )
+    rcp_assignment = processor.process_envelope(auth_assignment_cmd, envelope_source="agent_assignment")
+    assert rcp_assignment.status == "ERROR"
+    assert "refused" in rcp_assignment.error_message.lower()
+
     # 3. Direct call with valid single-use session token
     session_token = "tok_valid_123"
+    session_pid = 12345
     token_path = processor.store.locks_dir / "interactive_session.token"
-    token_path.write_text(json.dumps({"token": session_token, "created_at_timestamp": time.time()}), encoding="utf-8")
+    token_path.write_text(json.dumps({"token": session_token, "created_at_timestamp": time.time(), "pid": session_pid}), encoding="utf-8")
 
     auth_good_cmd = CommandEnvelope(
         command_id="cmd_auth_good",
@@ -85,6 +104,11 @@ def test_enqueue_and_authorize_interactive_provenance(processor: ConductorComman
             "interactive_provenance_proven": True,
             "channel": "interactive_console",
             "session_token": session_token,
+            "coordinator_handshake": {
+                "channel": "interactive_console",
+                "tty_verified": True,
+                "session_pid": session_pid,
+            },
             "operator_identity": "operator",
         },
         idempotency_key="idemp_auth_good",

@@ -22,6 +22,9 @@ SCHEMA_AUTHORIZATION = "conductor.authorization.v1"
 SCHEMA_STATUS = "conductor.status.v1"
 SCHEMA_COMMAND = "conductor.command.v1"
 SCHEMA_RECEIPT = "conductor.receipt.v1"
+SCHEMA_RESOURCE_REQUEST = "conductor.resource-request.v1"
+SCHEMA_RESOURCE_LEASE = "conductor.resource-lease.v1"
+SCHEMA_RESOURCE_EVENT = "conductor.resource-event.v1"
 
 
 class WorkItemState(str, Enum):
@@ -127,6 +130,7 @@ class WorkItem:
     authority_requirement: str = "standing_r2_go"
     execution_budget: ExecutionBudget = field(default_factory=ExecutionBudget)
     scope_digest_sha256: str = ""
+    context_digest_sha256: str = ""
     state: WorkItemState = WorkItemState.DISCOVERED
     created_at_utc: str = field(default_factory=current_utc_iso)
     created_by: str = "operator"
@@ -169,6 +173,7 @@ class WorkItem:
             authority_requirement=data.get("authority_requirement", "standing_r2_go"),
             execution_budget=budget,
             scope_digest_sha256=data.get("scope_digest_sha256", ""),
+            context_digest_sha256=data.get("context_digest_sha256", ""),
             state=state_val,
             created_at_utc=data.get("created_at_utc", current_utc_iso()),
             created_by=data.get("created_by", "operator"),
@@ -221,6 +226,67 @@ class Lease:
     expires_at_utc: str
     last_heartbeat_utc: str = field(default_factory=current_utc_iso)
     schema_version: str = SCHEMA_LEASE
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class HostResourceRequestState(str, Enum):
+    QUEUED = "QUEUED"
+    ACTIVE = "ACTIVE"
+    INHERITED = "INHERITED"
+    RELEASED = "RELEASED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    QUARANTINED = "QUARANTINED"
+
+
+@dataclass
+class HostResourceRequest:
+    request_id: str
+    idempotency_key: str
+    resource_key: str
+    purpose: str
+    attempt_id: str
+    agent_instance: str
+    state: HostResourceRequestState = HostResourceRequestState.QUEUED
+    priority: int = 50
+    parent_lease_id: Optional[str] = None
+    command_sha256: str = ""
+    created_at_utc: str = field(default_factory=current_utc_iso)
+    released_at_utc: Optional[str] = None
+    reason_code: Optional[str] = None
+    schema_version: str = SCHEMA_RESOURCE_REQUEST
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["state"] = self.state.value if isinstance(self.state, HostResourceRequestState) else self.state
+        return d
+
+
+@dataclass
+class HostResourceLease:
+    lease_id: str
+    request_id: str
+    resource_key: str
+    attempt_id: str
+    agent_instance: str
+    heartbeat_sequence: int
+    expires_at_utc: str
+    last_heartbeat_utc: str = field(default_factory=current_utc_iso)
+    process_pid: Optional[int] = None
+    process_start_time: Optional[float] = None
+    schema_version: str = SCHEMA_RESOURCE_LEASE
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class HostResourcePool:
+    resource_key: str
+    capacity: int = 1
+    enabled: bool = True
+    schema_version: str = "conductor.resource-pool.v1"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
