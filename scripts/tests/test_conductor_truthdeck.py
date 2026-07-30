@@ -2,9 +2,10 @@
 
 import json
 import pathlib
+import subprocess
 from unittest.mock import patch, MagicMock
 
-from scripts.conductor_truthdeck import ConductorTruthDeckSeam
+from scripts.conductor_truthdeck import ConductorTruthDeckSeam, check_truthctl_version
 from scripts.conductor_workflow import ConductorWorkflowBridge
 from scripts.conductor_model import WorkItem
 
@@ -43,3 +44,29 @@ def test_workflow_bridge_formatting():
     cmd = ConductorWorkflowBridge.get_workflow_command(item)
     assert cmd == "/fwf D:/dotclaude/dotclaude-ecosystem/design/plans/test.md"
     assert ConductorWorkflowBridge.validate_workflow_contract(item)
+
+
+def test_truthctl_version_check_fails_closed_on_unknown_and_accepts_pinned_minimum():
+    unknown = MagicMock(returncode=0, stdout="truthctl dev-build", stderr="")
+    with patch("scripts.conductor_truthdeck.shutil.which", return_value="truthctl"), patch(
+        "scripts.conductor_truthdeck.subprocess.run", return_value=unknown
+    ):
+        result = check_truthctl_version()
+    assert result["ok"] is False
+    assert result["status"] == "UNKNOWN"
+
+    accepted = MagicMock(returncode=0, stdout="1.0.0\n", stderr="")
+    with patch("scripts.conductor_truthdeck.shutil.which", return_value="truthctl"), patch(
+        "scripts.conductor_truthdeck.subprocess.run", return_value=accepted
+    ):
+        result = check_truthctl_version()
+    assert result["ok"] is True
+    assert result["status"] == "PASS"
+
+    with patch("scripts.conductor_truthdeck.shutil.which", return_value="truthctl"), patch(
+        "scripts.conductor_truthdeck.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("truthctl", 10),
+    ):
+        result = check_truthctl_version()
+    assert result["ok"] is False
+    assert result["status"] == "UNKNOWN"

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from scripts.conductor_model import (
     Attempt,
@@ -23,6 +23,7 @@ from scripts.conductor_model import (
     WorkItemState,
 )
 from scripts.conductor_store import ConductorStore
+from scripts.conductor_resources import HostResourceManager
 
 
 class ConductorCommandProcessor:
@@ -30,6 +31,7 @@ class ConductorCommandProcessor:
 
     def __init__(self, store: ConductorStore):
         self.store = store
+        self.resources = HostResourceManager(store=store)
 
     def process_envelope(self, envelope: CommandEnvelope, envelope_source: str = "direct") -> Receipt:
         """Process a command envelope with idempotency protection and source provenance verification."""
@@ -102,6 +104,7 @@ class ConductorCommandProcessor:
             authority_requirement=item.authority_requirement,
             execution_budget=item.execution_budget,
             scope_digest_sha256=item.scope_digest_sha256,
+            context_digest_sha256=item.context_digest_sha256,
             state=WorkItemState.DISCOVERED,
             created_by=item.created_by,
         )
@@ -121,6 +124,7 @@ class ConductorCommandProcessor:
         work_item_id: str,
         *,
         operator_identity: str,
+        context_digest_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Grant GO after the dedicated CLI has completed its attached-TTY ceremony.
 
@@ -130,6 +134,9 @@ class ConductorCommandProcessor:
         item = self.store.get_work_item(work_item_id)
         if not item:
             raise ValueError(f"WorkItem {work_item_id} not found")
+
+        if context_digest_sha256 is not None and context_digest_sha256 != item.context_digest_sha256:
+            raise ValueError("Authorization refused: CONTEXT.md digest mismatch")
 
         auth_record = AuthorizationRecord(
             authorization_id=f"auth_{uuid.uuid4().hex[:12]}",
@@ -259,6 +266,57 @@ class ConductorCommandProcessor:
         self.store.save_lease(lease)
         return {"lease_id": lease_id, "heartbeat_sequence": sequence, "expires_at_utc": lease.expires_at_utc}
 
+    def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Admit or queue one named host resource consumer."""
+        return self.resources.request(
+            purpose=payload["purpose"],
+            attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"],
+            idempotency_key=payload.get("idempotency_key"),
+            command_sha256=payload.get("command_sha256", ""),
+            priority=int(payload.get("priority", 50)),
+            parent_lease_id=payload.get("parent_lease_id"),
+            environment=payload.get("environment"),
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
+            actor=payload.get("actor", "resource-command"),
+        )
+
+    def _handle_resource_heartbeat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.heartbeat(
+            payload["lease_id"],
+            int(payload["sequence"]),
+            lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
+        )
+
+    def _handle_resource_release(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.release(
+            payload["request_id"],
+            actor=payload.get("actor", "resource-command"),
+            reason=payload.get("reason", "RESOURCE_RELEASED"),
+        )
+
+    def _handle_resource_reconcile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.reconcile(dry_run=bool(payload.get("dry_run", False)))
+
+    def _handle_resource_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.status()
+
+    def _handle_pytest(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the fixed Python-module pytest adapter through host admission."""
+        return self.resources.run_bounded_pytest(
+            python_executable=payload["python_executable"],
+            pytest_args=payload.get("pytest_args", []),
+            cwd=payload["cwd"],
+            attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"],
+            idempotency_key=payload.get("idempotency_key"),
+            parent_lease_id=payload.get("parent_lease_id"),
+            timeout_seconds=float(payload.get("timeout_seconds", 7200)),
+            heartbeat_interval_seconds=float(payload.get("heartbeat_interval_seconds", 30)),
+            base_environment=payload.get("environment"),
+            force_heavy=bool(payload.get("force_heavy", False)),
+        )
+
     def _handle_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Record an EvidenceCheckpoint."""
         checkpoint = EvidenceCheckpoint(
@@ -363,4 +421,5 @@ class ConductorCommandProcessor:
             "db_path": str(self.store.db_path),
             "total_work_items": len(work_items),
             "state_summary": summary,
+            "storage": self.store.storage_status(),
         }

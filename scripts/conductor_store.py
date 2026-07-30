@@ -25,12 +25,26 @@ from scripts.conductor_model import (
     CommandEnvelope,
     EvidenceCheckpoint,
     Lease,
+    HostResourceLease,
+    HostResourcePool,
+    HostResourceRequest,
+    HostResourceRequestState,
     Receipt,
     WorkItem,
     WorkItemState,
     can_transition,
     current_utc_iso,
 )
+
+
+# H6: explicit report-only ceilings.  These are bounded storage contracts,
+# not retention automation; status reports growth and operators decide any
+# cleanup after reviewing the durable evidence.
+STORAGE_QUOTAS_BYTES = {
+    "artifacts": 1_073_741_824,  # 1 GiB
+    "receipts": 268_435_456,  # 256 MiB
+    "inbox": 67_108_864,  # 64 MiB
+}
 
 
 def get_default_conductor_dir() -> pathlib.Path:
@@ -179,6 +193,46 @@ def read_work_item_snapshot(
         return None
 
 
+def _directory_usage(path: pathlib.Path) -> Dict[str, int]:
+    """Return recursive file count/bytes without following symlinks."""
+    file_count = 0
+    byte_count = 0
+    try:
+        for entry in path.rglob("*"):
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            try:
+                byte_count += entry.stat().st_size
+                file_count += 1
+            except OSError:
+                continue
+    except OSError:
+        return {"files": file_count, "bytes": byte_count, "read_error": 1}
+    return {"files": file_count, "bytes": byte_count, "read_error": 0}
+
+
+def read_storage_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
+    """Read storage growth and quota state without creating or mutating paths."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    usage: Dict[str, Dict[str, Any]] = {}
+    overall = "PASS"
+    for name, limit in STORAGE_QUOTAS_BYTES.items():
+        path = root / name
+        sample = _directory_usage(path)
+        over_quota = bool(sample["read_error"] or sample["bytes"] > limit)
+        if over_quota:
+            overall = "BLOCKED"
+        usage[name] = {
+            "path": str(path),
+            "files": sample["files"],
+            "bytes": sample["bytes"],
+            "ceiling_bytes": limit,
+            "over_quota": over_quota,
+            "read_error": bool(sample["read_error"]),
+        }
+    return {"status": overall, "retention_mode": "REPORT_ONLY", "directories": usage}
+
+
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
 
@@ -229,6 +283,35 @@ class ConductorStore:
     def close(self) -> None:
         """Close any lingering handles if applicable."""
         pass
+
+    @staticmethod
+    def _directory_usage(path: pathlib.Path) -> Dict[str, int]:
+        """Return recursive file count/bytes without following symlinks."""
+        return _directory_usage(path)
+
+    def storage_status(self) -> Dict[str, Any]:
+        """Report bounded storage growth and quota state without retention writes."""
+        usage: Dict[str, Dict[str, Any]] = {}
+        overall = "PASS"
+        for name, limit in STORAGE_QUOTAS_BYTES.items():
+            path = getattr(self, f"{name}_dir")
+            sample = self._directory_usage(path)
+            over_quota = bool(sample["read_error"] or sample["bytes"] > limit)
+            if over_quota:
+                overall = "BLOCKED"
+            usage[name] = {
+                "path": str(path),
+                "files": sample["files"],
+                "bytes": sample["bytes"],
+                "ceiling_bytes": limit,
+                "over_quota": over_quota,
+                "read_error": bool(sample["read_error"]),
+            }
+        return {
+            "status": overall,
+            "retention_mode": "REPORT_ONLY",
+            "directories": usage,
+        }
 
     def _init_db(self) -> None:
         """Initialize SQLite tables and forward-only schema migrations."""
@@ -387,6 +470,115 @@ class ConductorStore:
                     """
                 )
 
+            if current_version < 2:
+                # Resource admission is additive. Preserve the pre-migration DB
+                # before creating the host lease tables.
+                if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                    backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_resource_{int(time.time())}.db"
+                    shutil.copy2(self.db_path, backup_file)
+
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS host_resource_pools (
+                        resource_key TEXT PRIMARY KEY,
+                        capacity INTEGER NOT NULL,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        schema_version TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS host_resource_requests (
+                        request_id TEXT PRIMARY KEY,
+                        idempotency_key TEXT UNIQUE NOT NULL,
+                        resource_key TEXT NOT NULL,
+                        purpose TEXT NOT NULL,
+                        attempt_id TEXT NOT NULL,
+                        agent_instance TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        priority INTEGER NOT NULL DEFAULT 50,
+                        parent_lease_id TEXT,
+                        command_sha256 TEXT NOT NULL DEFAULT '',
+                        created_at_utc TEXT NOT NULL,
+                        released_at_utc TEXT,
+                        reason_code TEXT,
+                        schema_version TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS host_resource_leases (
+                        lease_id TEXT PRIMARY KEY,
+                        request_id TEXT UNIQUE NOT NULL,
+                        resource_key TEXT NOT NULL,
+                        attempt_id TEXT NOT NULL,
+                        agent_instance TEXT NOT NULL,
+                        heartbeat_sequence INTEGER NOT NULL,
+                        expires_at_utc TEXT NOT NULL,
+                        last_heartbeat_utc TEXT NOT NULL,
+                        process_pid INTEGER,
+                        process_start_time REAL,
+                        schema_version TEXT NOT NULL,
+                        FOREIGN KEY (request_id) REFERENCES host_resource_requests(request_id)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS host_resource_events (
+                        event_id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL,
+                        lease_id TEXT,
+                        previous_state TEXT,
+                        next_state TEXT NOT NULL,
+                        actor_identity TEXT NOT NULL,
+                        reason_code TEXT NOT NULL,
+                        recorded_at_utc TEXT NOT NULL,
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        schema_version TEXT NOT NULL,
+                        FOREIGN KEY (request_id) REFERENCES host_resource_requests(request_id)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_host_resource_requests_state
+                        ON host_resource_requests(resource_key, state, created_at_utc);
+                    CREATE INDEX IF NOT EXISTS idx_host_resource_leases_active
+                        ON host_resource_leases(resource_key, expires_at_utc);
+
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('host:heavy', 1, 1, 'conductor.resource-pool.v1');
+                    INSERT INTO schema_migrations (version, applied_at_utc)
+                        VALUES (2, datetime('now'));
+                    """
+                )
+
+            if current_version < 3:
+                # H8 binds the canonical CONTEXT.md identity to a WorkItem.
+                # Preserve old databases and keep the digest optional for
+                # legacy callers that have not supplied a context packet yet.
+                if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                    backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_context_{int(time.time())}.db"
+                    shutil.copy2(self.db_path, backup_file)
+
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
+                }
+                if "context_digest_sha256" not in columns:
+                    conn.execute(
+                        "ALTER TABLE work_items ADD COLUMN context_digest_sha256 TEXT NOT NULL DEFAULT ''"
+                    )
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (3, datetime('now'))"
+                )
+
+            if current_version < 4:
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+                }
+                if "priority" not in columns:
+                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_priority_{int(time.time())}.db"
+                        shutil.copy2(self.db_path, backup_file)
+                    conn.execute(
+                        "ALTER TABLE host_resource_requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 50"
+                    )
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (4, datetime('now'))"
+                )
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
@@ -532,14 +724,15 @@ class ConductorStore:
                     work_item_id, idempotency_key, title, repo_id, repo_path, plan_path,
                     risk_class, workflow, requested_terminal_stage, job_kind, priority,
                     dependency_ids_json, authority_requirement, execution_budget_json,
-                    scope_digest_sha256, state, created_at_utc, created_by, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scope_digest_sha256, context_digest_sha256, state, created_at_utc, created_by, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(work_item_id) DO UPDATE SET
                     priority = excluded.priority,
                     dependency_ids_json = excluded.dependency_ids_json,
                     authority_requirement = excluded.authority_requirement,
                     execution_budget_json = excluded.execution_budget_json,
                     scope_digest_sha256 = excluded.scope_digest_sha256,
+                    context_digest_sha256 = excluded.context_digest_sha256,
                     state = excluded.state
                 """,
                 (
@@ -558,6 +751,7 @@ class ConductorStore:
                     item.authority_requirement,
                     json.dumps(item.execution_budget.to_dict()),
                     item.scope_digest_sha256,
+                    item.context_digest_sha256,
                     item.state.value if isinstance(item.state, WorkItemState) else item.state,
                     item.created_at_utc,
                     item.created_by,
@@ -726,6 +920,186 @@ class ConductorStore:
                 ),
             )
 
+    def save_resource_pool(self, pool: HostResourcePool) -> None:
+        """Insert or update a host resource pool definition."""
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO host_resource_pools (resource_key, capacity, enabled, schema_version)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(resource_key) DO UPDATE SET
+                    capacity = excluded.capacity,
+                    enabled = excluded.enabled,
+                    schema_version = excluded.schema_version
+                """,
+                (pool.resource_key, pool.capacity, 1 if pool.enabled else 0, pool.schema_version),
+            )
+
+    def get_resource_pool(self, resource_key: str) -> Optional[HostResourcePool]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM host_resource_pools WHERE resource_key = ?", (resource_key,)
+            ).fetchone()
+        if not row:
+            return None
+        return HostResourcePool(
+            resource_key=row["resource_key"],
+            capacity=int(row["capacity"]),
+            enabled=bool(row["enabled"]),
+            schema_version=row["schema_version"],
+        )
+
+    def save_resource_request(self, request: HostResourceRequest) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO host_resource_requests (
+                    request_id, idempotency_key, resource_key, purpose, attempt_id,
+                    agent_instance, state, priority, parent_lease_id, command_sha256,
+                    created_at_utc, released_at_utc, reason_code, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(request_id) DO UPDATE SET
+                    state = excluded.state,
+                    priority = excluded.priority,
+                    parent_lease_id = excluded.parent_lease_id,
+                    released_at_utc = excluded.released_at_utc,
+                    reason_code = excluded.reason_code
+                """,
+                (
+                    request.request_id,
+                    request.idempotency_key,
+                    request.resource_key,
+                    request.purpose,
+                    request.attempt_id,
+                    request.agent_instance,
+                    request.state.value if isinstance(request.state, HostResourceRequestState) else request.state,
+                    request.priority,
+                    request.parent_lease_id,
+                    request.command_sha256,
+                    request.created_at_utc,
+                    request.released_at_utc,
+                    request.reason_code,
+                    request.schema_version,
+                ),
+            )
+
+    def save_resource_lease(self, lease: HostResourceLease) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO host_resource_leases (
+                    lease_id, request_id, resource_key, attempt_id, agent_instance,
+                    heartbeat_sequence, expires_at_utc, last_heartbeat_utc,
+                    process_pid, process_start_time, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(lease_id) DO UPDATE SET
+                    heartbeat_sequence = excluded.heartbeat_sequence,
+                    expires_at_utc = excluded.expires_at_utc,
+                    last_heartbeat_utc = excluded.last_heartbeat_utc,
+                    process_pid = excluded.process_pid,
+                    process_start_time = excluded.process_start_time
+                """,
+                (
+                    lease.lease_id,
+                    lease.request_id,
+                    lease.resource_key,
+                    lease.attempt_id,
+                    lease.agent_instance,
+                    lease.heartbeat_sequence,
+                    lease.expires_at_utc,
+                    lease.last_heartbeat_utc,
+                    lease.process_pid,
+                    lease.process_start_time,
+                    lease.schema_version,
+                ),
+            )
+
+    def get_resource_request(self, request_id: str) -> Optional[HostResourceRequest]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM host_resource_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        return self._row_to_resource_request(row) if row else None
+
+    def get_resource_request_by_idempotency(self, idempotency_key: str) -> Optional[HostResourceRequest]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM host_resource_requests WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+        return self._row_to_resource_request(row) if row else None
+
+    def list_resource_requests(
+        self, resource_key: Optional[str] = None, states: Optional[List[str]] = None
+    ) -> List[HostResourceRequest]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if resource_key:
+            clauses.append("resource_key = ?")
+            params.append(resource_key)
+        if states:
+            placeholders = ",".join("?" for _ in states)
+            clauses.append(f"state IN ({placeholders})")
+            params.extend(states)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM host_resource_requests{where} ORDER BY priority DESC, created_at_utc, request_id", params
+            ).fetchall()
+        return [self._row_to_resource_request(row) for row in rows]
+
+    def get_resource_lease(self, lease_id: str) -> Optional[HostResourceLease]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM host_resource_leases WHERE lease_id = ?", (lease_id,)
+            ).fetchone()
+        return self._row_to_resource_lease(row) if row else None
+
+    def list_resource_leases(self, resource_key: Optional[str] = None) -> List[HostResourceLease]:
+        query = "SELECT * FROM host_resource_leases"
+        params: tuple[Any, ...] = ()
+        if resource_key:
+            query += " WHERE resource_key = ?"
+            params = (resource_key,)
+        query += " ORDER BY expires_at_utc, lease_id"
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_resource_lease(row) for row in rows]
+
+    @staticmethod
+    def _row_to_resource_request(row: sqlite3.Row) -> HostResourceRequest:
+        return HostResourceRequest(
+            request_id=row["request_id"],
+            idempotency_key=row["idempotency_key"],
+            resource_key=row["resource_key"],
+            purpose=row["purpose"],
+            attempt_id=row["attempt_id"],
+            agent_instance=row["agent_instance"],
+            state=HostResourceRequestState(row["state"]),
+            priority=int(row["priority"]),
+            parent_lease_id=row["parent_lease_id"],
+            command_sha256=row["command_sha256"],
+            created_at_utc=row["created_at_utc"],
+            released_at_utc=row["released_at_utc"],
+            reason_code=row["reason_code"],
+            schema_version=row["schema_version"],
+        )
+
+    @staticmethod
+    def _row_to_resource_lease(row: sqlite3.Row) -> HostResourceLease:
+        return HostResourceLease(
+            lease_id=row["lease_id"],
+            request_id=row["request_id"],
+            resource_key=row["resource_key"],
+            attempt_id=row["attempt_id"],
+            agent_instance=row["agent_instance"],
+            heartbeat_sequence=int(row["heartbeat_sequence"]),
+            expires_at_utc=row["expires_at_utc"],
+            last_heartbeat_utc=row["last_heartbeat_utc"],
+            process_pid=row["process_pid"],
+            process_start_time=row["process_start_time"],
+            schema_version=row["schema_version"],
+        )
+
     def save_checkpoint(self, checkpoint: EvidenceCheckpoint) -> None:
         """Insert EvidenceCheckpoint."""
         with self._connection() as conn:
@@ -809,7 +1183,11 @@ class ConductorStore:
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
         with self._connection() as conn, open(out_p, "w", encoding="utf-8") as f:
-            for table in ["work_items", "attempts", "claims", "leases", "checkpoints", "events", "authorizations"]:
+            for table in [
+                "work_items", "attempts", "claims", "leases", "checkpoints", "events",
+                "authorizations", "host_resource_pools", "host_resource_requests",
+                "host_resource_leases", "host_resource_events",
+            ]:
                 cur = conn.execute(f"SELECT * FROM {table}")
                 for row in cur.fetchall():
                     item_dict = dict(row)
@@ -836,6 +1214,7 @@ class ConductorStore:
                 "authority_requirement": row["authority_requirement"],
                 "execution_budget": json.loads(row["execution_budget_json"]),
                 "scope_digest_sha256": row["scope_digest_sha256"],
+                "context_digest_sha256": row["context_digest_sha256"],
                 "state": row["state"],
                 "created_at_utc": row["created_at_utc"],
                 "created_by": row["created_by"],

@@ -131,3 +131,41 @@ def test_scheduler_dependency_blocking(scheduler: ConductorScheduler):
     assert selected is not None
     assert selected.work_item_id == parent_item.work_item_id
     assert any(r["work_item_id"] == child_item.work_item_id and r["reason_code"] == "DEPENDENCY_UNSATISFIED" for r in rejected)
+
+
+def test_scheduler_surfaces_host_resource_conflict_before_priority(scheduler: ConductorScheduler):
+    processor = ConductorCommandProcessor(store=scheduler.store)
+    processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_heavy",
+            command_type="enqueue",
+            payload={
+                "idempotency_key": "key_heavy",
+                "title": "Heavy Task",
+                "repo_id": "dotclaude-ecosystem",
+                "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+                "plan_path": "design/plans/heavy.md",
+                "risk_class": "R1",
+                "workflow": "fwf",
+                "requested_terminal_stage": "merged",
+                "job_kind": "pytest_full",
+                "priority": 100,
+            },
+            idempotency_key="idemp_heavy",
+        )
+    )
+    item = scheduler.store.get_work_item_by_idempotency_key("key_heavy")
+    scheduler.store.transition_work_item_state(item.work_item_id, WorkItemState.READY, "operator", "TEST_READY")
+    active = scheduler.resources.request(
+        purpose="pytest_heavy",
+        attempt_id="resource-active",
+        agent_instance="resource-agent",
+    )
+
+    selected, rejected = scheduler.select_next_work_item()
+    assert selected is None
+    assert any(
+        entry["work_item_id"] == item.work_item_id and entry["reason_code"] == "HOST_RESOURCE_BUSY"
+        for entry in rejected
+    )
+    scheduler.resources.release(active["request_id"])

@@ -29,6 +29,24 @@
 - An approved audited plan (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carries standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens. Re-ask only for scope expansion, unresolved failure/conflict, a real-money/Combine trigger, a destructive action, or a pause.
 - Validate each slice; final reports state changes, tests, remaining work, and repo state.
 
+## Conductor Host-Resource Gate
+
+- TruthDeck Conductor owns the durable `host:heavy` capacity-one lease for
+  cooperative heavy pytest, Playwright, and CDP-provider work; adapters must
+  request it before launch and remain visible in Conductor readback.
+- A bounded child may inherit an active attempt-scoped
+  `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
+  stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There
+  is no preemption or automatic retry across an ambiguous owner.
+- Bounded pytest uses only `<python> -m pytest <args>` with a retained
+  `Popen` handle and `shell=False`; WMI/CIM/process-list polling and arbitrary
+  shell execution are not substitutes for ownership evidence.
+- `authorize --interactive` is an operator-only tty-verified coordinator
+  handshake with an exact prompted GO. Authorization cannot be granted by
+  argv flags alone, inbox, environment, MCP, or agent assignment paths.
+- Storage growth is read back with numeric ceilings and report-only retention;
+  status must be checked before starting another heavy lane.
+
 ## Land-On-Main Lifecycle
 
 - Finished, locally validated work reaches `main` under your own hands — the operator never hand-reconciles commits, merges, or divergence.
