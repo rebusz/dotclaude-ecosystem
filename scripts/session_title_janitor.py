@@ -57,6 +57,23 @@ ALIASES = {
 MARKERS = {"MASTER", "INV", "GLOBAL"}
 
 
+def force_utf8_stdio() -> None:
+    """Session titles are Polish/emoji-heavy; a cp1252 console must not kill the run.
+
+    The scheduled runner exports PYTHONIOENCODING, but a manual run inherits the
+    legacy console codepage and died mid-listing on the first `l` with a stroke —
+    in `--apply` that aborts every session after the offending title.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except (AttributeError, ValueError, OSError):
+                pass
+
+
 def repo_from_cwd(cwd: str) -> str | None:
     """`D:\\APPS\\Tsignal 5.0\\.claude\\worktrees\\x` -> `Tsignal`."""
     if not cwd:
@@ -146,6 +163,7 @@ def atomic_write(path: str, data: dict) -> None:
 
 
 def main() -> int:
+    force_utf8_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="write changes")
     ap.add_argument("--limit", type=int, default=0,
