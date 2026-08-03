@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 STORE_GLOB = os.path.join(
     os.environ.get("APPDATA", ""),
@@ -168,6 +169,10 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="write changes")
     ap.add_argument("--limit", type=int, default=0,
                     help="only touch the N most recently active sessions")
+    ap.add_argument("--skip-active-hours", type=float, default=6.0,
+                    help="leave alone sessions touched within N hours; the "
+                         "running app flushes its in-memory title over those. "
+                         "0 sweeps everything (safe only with CCD closed).")
     args = ap.parse_args()
 
     paths = glob.glob(STORE_GLOB)
@@ -190,7 +195,27 @@ def main() -> int:
         sessions = sessions[: args.limit]
 
     changed = 0
+    skipped_hot = 0
+    cutoff_ms = (time.time() - args.skip_active_hours * 3600) * 1000
     for path, d in sessions:
+        # A session CCD currently holds in memory gets its old title flushed
+        # back within minutes (2026-07-25: 13 of 21 renames reverted). Cold
+        # sessions are never rewritten, so those stamps stick.
+        #
+        # Judge hotness by `lastActivityAt` (CCD owns it) and NOT by file
+        # mtime: our own rename bumps mtime, which made every session we just
+        # stamped look hot for the next 6h and would defer re-stamping a title
+        # the app did revert.
+        if args.skip_active_hours:
+            last = d.get("lastActivityAt")
+            if last is None:
+                try:
+                    last = os.path.getmtime(path) * 1000
+                except OSError:
+                    last = 0
+            if last > cutoff_ms:
+                skipped_hot += 1
+                continue
         raw_dir = None
         cwd = d.get("cwd") or ""
         parts = re.split(r"[\\/]+", cwd)
@@ -210,7 +235,8 @@ def main() -> int:
             atomic_write(path, d)
 
     print(f"\n{len(sessions)} sessions checked, {changed} "
-          f"{'renamed' if args.apply else 'would be renamed'}")
+          f"{'renamed' if args.apply else 'would be renamed'}"
+          f", {skipped_hot} skipped as hot")
     if args.apply and changed:
         print("NOTE: the CCD app caches titles in memory; restart it to see "
               "the new titles in the sidebar.")

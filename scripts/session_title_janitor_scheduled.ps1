@@ -1,16 +1,23 @@
 # Session-title janitor runner.
 #
-# The CCD app holds session titles in memory and flushes them to disk, so any
-# write made while it runs is overwritten (2026-07-25: 13 of 21 renames were
-# reverted within minutes). Disk is only authoritative while the app is closed.
+# 2026-08-03 root cause: the old gate refused to run whenever ANY process named
+# `claude` existed. That matches the CLI (`AppData\Roaming\Claude\claude-code\
+# *\claude.exe`, `.local\bin\claude.exe`) as well as the desktop app, and the
+# operator runs both around the clock — so the janitor logged `SKIP: CCD
+# running` every 15 min for 9 days and stamped nothing.
 #
-# CCD ships as an MSIX Store package, so its launcher cannot be wrapped. Instead
-# this task polls and stamps dates whenever CCD is NOT running; the next launch
-# then reads already-conforming titles.
+# The "disk is only authoritative while the app is closed" premise was too
+# broad. Measured on 2026-08-03: 469 of 519 store files had not been rewritten
+# in over 7 days, and 167 titles already carry the janitor's `<DD MON>` stamp
+# with mtimes from 07-17..07-25 — i.e. writes to IDLE sessions persist
+# indefinitely. Only sessions CCD currently holds hot get flushed back over
+# (2026-07-25: 13 of 21 reverted within minutes — those were the live ones).
 #
-# Registered as Windows task `ClaudeSessionTitleJanitor` through the companion
-# WScript launcher so the polling run never creates a visible console window.
-# Canonical copies live in dotclaude-ecosystem/scripts/.
+# So: always run, and let `--skip-active-hours` protect the hot sessions. When
+# the desktop app is genuinely down nothing can revert, so sweep everything.
+#
+# Registered as Windows task `ClaudeSessionTitleJanitor`. Canonical copy lives in
+# dotclaude-ecosystem/scripts/.
 
 $ErrorActionPreference = 'Stop'
 
@@ -23,11 +30,17 @@ function Write-Log([string]$msg) {
     Add-Content -Path $log -Value $line -Encoding utf8
 }
 
-# Fail closed: if CCD is up, do nothing. Writing now would be silently reverted.
-$ccd = Get-Process -Name 'claude' -ErrorAction SilentlyContinue
-if ($ccd) {
-    Write-Log "SKIP: CCD running ($($ccd.Count) processes)"
-    exit 0
+# Only the MSIX desktop app caches titles in memory. The CLI does not, and must
+# never gate this run — conflating the two is what stalled the janitor for 9 days.
+$desktop = @(Get-Process -Name 'claude' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*\WindowsApps\*' })
+
+if ($desktop.Count -gt 0) {
+    # App is up: skip sessions it may be holding hot, stamp the cold remainder.
+    $skipHours = 6
+} else {
+    # App is down: disk is fully authoritative, sweep everything.
+    $skipHours = 0
 }
 
 $py = Join-Path $env:USERPROFILE '.claude\.venv\Scripts\python.exe'
@@ -39,7 +52,7 @@ if (-not (Test-Path $script)) {
 }
 
 $env:PYTHONIOENCODING = 'utf-8'
-$out = & $py $script --apply 2>&1
+$out = & $py $script --apply --skip-active-hours $skipHours 2>&1
 $code = $LASTEXITCODE
 
 # Preserve the real exit code and the summary line — never report a clean run
@@ -49,5 +62,5 @@ if ($code -ne 0) {
     Write-Log "FAIL exit=$code :: $($out -join ' | ')"
     exit $code
 }
-Write-Log "OK :: $summary"
+Write-Log "OK (desktop=$($desktop.Count) skipHours=$skipHours) :: $summary"
 exit 0
