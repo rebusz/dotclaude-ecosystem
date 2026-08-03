@@ -28,14 +28,29 @@ import sys
 import tempfile
 import time
 
-STORE_GLOB = os.path.join(
-    os.environ.get("APPDATA", ""),
-    "Claude",
-    "claude-code-sessions",
-    "*",
-    "*",
-    "local_*.json",
-)
+def store_globs() -> list[str]:
+    """Session-store locations, most authoritative first.
+
+    CCD ships as an MSIX package, so its writes to `%APPDATA%\\Claude` are
+    redirected into the package's private LocalCache. Anything CCD launched
+    inherits the package identity and sees a merged view at the classic path,
+    which is why a hand-run janitor works. The Windows scheduled task runs
+    OUTSIDE that identity and sees only the real filesystem, where the classic
+    path does not exist at all — measured 2026-08-03: `rootExists=False`,
+    0 files, so every scheduled run was a silent no-op.
+
+    The package path is correct from both contexts, so it wins.
+    """
+    roots = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        roots.extend(sorted(glob.glob(os.path.join(
+            local, "Packages", "Claude_*", "LocalCache", "Roaming",
+            "Claude", "claude-code-sessions"))))
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        roots.append(os.path.join(appdata, "Claude", "claude-code-sessions"))
+    return [os.path.join(r, "*", "*", "local_*.json") for r in roots]
 
 MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
           "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
@@ -175,10 +190,19 @@ def main() -> int:
                          "0 sweeps everything (safe only with CCD closed).")
     args = ap.parse_args()
 
-    paths = glob.glob(STORE_GLOB)
+    candidates = store_globs()
+    paths: list[str] = []
+    store_used = ""
+    for pattern in candidates:
+        paths = glob.glob(pattern)
+        if paths:
+            store_used = pattern
+            break
     if not paths:
-        print(f"no session store found under {STORE_GLOB}", file=sys.stderr)
+        print("no session store found; tried:\n  " + "\n  ".join(candidates),
+              file=sys.stderr)
         return 1
+    print(f"store: {store_used}")
 
     sessions = []
     for p in paths:
