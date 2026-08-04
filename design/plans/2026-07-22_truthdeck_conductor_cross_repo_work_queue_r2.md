@@ -1800,8 +1800,7 @@ migration replay, H2 handshake refusal, read-only status seams, duplicate
 idempotency, inherited-child parent-process identity, H6 quota readback, and
 the post-#63 command-envelope GO refusal.
 `compileall`,
-Ruff, `git diff --check`, and the managed rule sync check are green. The
-exact-head R2 review remains open; no PR is ready or merged.
+Ruff, `git diff --check`, and the managed rule sync check are green.
 
 The gated full `scripts/tests` run completed on 2026-07-30 after installing the
 declared optional `requirements-truthdeck-mcp.txt` dependency (`mcp 1.29.0`):
