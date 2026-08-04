@@ -1809,8 +1809,6 @@ declared optional `requirements-truthdeck-mcp.txt` dependency (`mcp 1.29.0`):
 as a collection blocker (`ModuleNotFoundError: mcp`); it was not counted as a
 pass. No broker, runtime, account, order, arming, or WatchF state was touched.
 
-Current gate: **HRL-5 FULL SUITE COMPLETE; EXACT-HEAD R2 REVIEW PENDING.**
-
 ### Acceptance criteria
 
 - `host:heavy` capacity is exactly 1 and enabled by default.
@@ -1931,8 +1929,6 @@ That token authorizes the bounded HRL-0 through HRL-5 lifecycle after the
 required R2 delta review clears. It does not authorize scope expansion, direct
 WatchF/CDP lifecycle changes, destructive cleanup, or bypassing
 `HOLD_HOST_PRESSURE`.
-
-Current gate: **HRL-5 FULL SUITE COMPLETE; EXACT-HEAD R2 REVIEW PENDING.**
 
 ### HRL-0 `/fwf` Stage 1 - CEO delta review
 
