@@ -1,10 +1,10 @@
 ---
 title: TruthDeck Conductor - Cross-Repo Agent Work Queue
 date: 2026-07-22
-status: in-progress
-status_detail: core-shipped-pr61-containment-shipped-pr62-host-resource-lease-r2-approved-awaiting-delta-review
+status: shipped
+status_detail: shipped-core-pr61-containment-pr62-hrl-r2-pr64-merged-operator-synced
 risk: R2
-phase: implementation
+phase: shipped
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, orchestration, queue, persistence, truthdeck, multi-host, host-resource, pytest]
 related:
