@@ -559,6 +559,30 @@ def check_codex_hooks(alarms: list[str]) -> None:
                       "run python scripts/codex_hooks_doctor.py")
 
 
+def check_cursor_hooks(alarms: list[str]) -> None:
+    """Append one ASCII-safe alarm if the Cursor ecosystem hook block is absent or
+    drifted in ~/.cursor/hooks.json. Fail-soft (C1); positive trigger = ~/.cursor
+    present (Cursor deployed). Read-only: install_cursor_session_lifecycle.py owns
+    wiring; this only detects. Scope is CU3-narrow: sessionStart/sessionEnd only
+    (CLI-proven); IDE and preCompact remain out of scope per the plan's own gates."""
+    try:
+        from pathlib import Path
+        import cursor_hooks_doctor as chd
+        home = _managed_hooks_home or Path.home()
+        if not chd.deployed(home):
+            return  # Cursor not deployed on this host -> skip silently
+        verdict, detail = chd.cursor_hooks_status(home)
+        if chd.block_invalidated(verdict):
+            safe_detail = detail.encode("ascii", "replace").decode("ascii")
+            alarms.append(
+                "CURSOR HOOKS: ecosystem hook block is "
+                f"{verdict} in ~/.cursor/hooks.json ({safe_detail}). "
+                "Run: python scripts/install_cursor_session_lifecycle.py --apply")
+    except Exception as exc:  # noqa: BLE001 - detector must never crash the janitor (C1)
+        alarms.append(f"CURSOR HOOKS: check failed ({type(exc).__name__}); "
+                      "run python scripts/cursor_hooks_doctor.py")
+
+
 def main(argv: list[str]) -> int:
     # Windows scheduled-task consoles default to cp1252; make non-ASCII output
     # (em-dashes etc.) safe rather than crashing the deploy tool on encode.
@@ -593,6 +617,7 @@ def main(argv: list[str]) -> int:
     r = analyze(a.repo, base, protect=protect)
     check_managed_hooks(r.alarms)
     check_codex_hooks(r.alarms)
+    check_cursor_hooks(r.alarms)
 
     if a.json:
         print(json.dumps(r.__dict__, indent=2))
