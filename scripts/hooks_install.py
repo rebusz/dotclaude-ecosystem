@@ -456,6 +456,7 @@ def uninstall(*, home: Path, apply: bool) -> dict[str, Any]:
         return {"mode": "noop", "reason": "no sidecar manifest; nothing owned"}
     before = load_settings(settings_path)
     owned = {(e["event"], e["command"]) for e in sidecar["entries"]}
+    expected = len(sidecar["entries"])  # handler count, not the deduped tuple set
     after = json.loads(json.dumps(before))
     hooks = after.get("hooks", {})
     removed, partial = 0, False
@@ -481,10 +482,10 @@ def uninstall(*, home: Path, apply: bool) -> dict[str, Any]:
                 hooks[event] = kept_groups
             else:
                 hooks.pop(event, None)
-    if removed < len(owned):
+    if removed < expected:
         partial = True
     if not apply:
-        return {"mode": "dry-run", "would_remove": removed, "owned": len(owned),
+        return {"mode": "dry-run", "would_remove": removed, "owned": expected,
                 "partial": partial}
     if removed:
         atomic_write_bytes(settings_path, (json.dumps(after, indent=2) + "\n").encode("utf-8"))
@@ -493,7 +494,7 @@ def uninstall(*, home: Path, apply: bool) -> dict[str, Any]:
     except OSError:
         pass
     result = {"mode": "PARTIAL_UNINSTALL" if partial else "applied",
-              "removed": removed, "owned": len(owned)}
+              "removed": removed, "owned": expected}
     if partial:
         result["backup"] = sidecar.get("settings_backup")
     return result

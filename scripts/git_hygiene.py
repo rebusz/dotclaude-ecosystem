@@ -475,20 +475,55 @@ def do_deploy(repo: str, r: Report, base: str) -> None:
         print(f"  DEPLOY FAILED: {cp.stderr.strip()}")
 
 
+_managed_hooks_home = None  # test seam: overrides Path.home() when set
+
+
 def check_managed_hooks(alarms: list[str]) -> None:
     """Append one ASCII-safe alarm if the ecosystem's managed hook block is absent or
     drifted in ~/.claude/settings.json (Matrix B6, plan C1/C2). Fail-soft: any error
     becomes a visible note, never an unhandled crash that kills the janitor run (C1).
-    Positive trigger (C2): runs only when hooks_install resolves its OWN ecosystem repo
-    root; otherwise skips silently, no alarm, no error."""
+
+    Positive trigger (C2): the ecosystem is "deployed on this host" when a sidecar
+    manifest exists, OR this file runs from the installed ~/.claude/scripts copy, OR it
+    runs from an ecosystem checkout. This must not assume the janitor runs from the
+    checkout: the scheduled task runs the flat ~/.claude/scripts copy, which has no
+    .git/templates above it. The checkout root comes from the sidecar (which records it)
+    or, failing that, a walk-up from __file__. If deployed but no checkout/sidecar is
+    resolvable, that is itself the "never wired" death -> alarm. Not deployed -> skip."""
     try:
         from pathlib import Path
-        import hooks_install  # sibling in scripts/; import is the positive-trigger probe
-        try:
-            root = hooks_install.resolve_checkout(None)
-        except hooks_install.HookInstallError:
-            return  # this git_hygiene.py is not inside the ecosystem checkout -> skip
-        report = hooks_install.status(home=Path.home(), checkout=root)
+        import hooks_install  # sibling on sys.path; presence here is a deployment signal
+        home = _managed_hooks_home or Path.home()
+        sidecar = hooks_install.read_sidecar(home)
+
+        # Resolve a checkout to load the manifest from: sidecar first (works from any cwd),
+        # then a walk-up from __file__ (works when running inside the checkout).
+        checkout = None
+        if sidecar and isinstance(sidecar.get("checkout_root"), str):
+            cand = Path(sidecar["checkout_root"])
+            if (cand / "templates" / "hooks.manifest.json").is_file():
+                checkout = cand
+        if checkout is None:
+            try:
+                checkout = hooks_install.resolve_checkout(None)
+            except hooks_install.HookInstallError:
+                checkout = None
+
+        installed_copy = Path(__file__).resolve().parent == (home / ".claude" / "scripts").resolve()
+        deployed = sidecar is not None or checkout is not None or installed_copy
+        if not deployed:
+            return  # not an ecosystem host -> skip silently
+
+        if checkout is None:
+            # Ecosystem is deployed here but the block was never wired / manifest is gone.
+            alarms.append(
+                "MANAGED HOOKS: ecosystem hook block is not installed in "
+                "~/.claude/settings.json (no sidecar/manifest found; checked that file "
+                "only). Run: python scripts/hooks_install.py install --apply  then /hooks "
+                "for the authoritative merged view.")
+            return
+
+        report = hooks_install.status(home=home, checkout=checkout)
         if hooks_install.block_invalidated(report):
             alarms.append(
                 "MANAGED HOOKS: ecosystem hook block is "
