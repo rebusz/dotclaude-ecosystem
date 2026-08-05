@@ -38,7 +38,7 @@ skills/
 templates/
   CLAUDE.md.template                  ← global instructions (Plan Lifecycle Hooks contract)
   AGENTS.md.template                  ← Codex CLI / VS Code Codex extension equivalent
-  settings.json.template              ← hooks (PostToolUse, UserPromptSubmit, Stop)
+  hooks.manifest.json                 ← canonical Claude hook block; wired by scripts/hooks_install.py
 
 install/
   install.ps1                         ← Windows bootstrap

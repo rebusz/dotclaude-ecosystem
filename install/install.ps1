@@ -53,17 +53,12 @@ if (Test-Path $CodexHome) {
     Write-Host "  copied bundled skills -> ~/.codex/skills/" -ForegroundColor Green
 }
 
-# settings.json -- merge hooks
-Write-Host "[4/6] Merge hooks into ~/.claude/settings.json" -ForegroundColor Cyan
-$SettingsTpl = Join-Path $RepoRoot "templates\settings.json.template"
-$SettingsDst = Join-Path $ClaudeHome "settings.json"
-if (Test-Path $SettingsDst) {
-    Write-Host "  existing settings.json found -- manual merge required, see install_notes.md" -ForegroundColor Yellow
-    Copy-Item -Path $SettingsTpl -Destination "$SettingsDst.from-template" -Force
-} else {
-    Copy-Item -Path $SettingsTpl -Destination $SettingsDst -Force
-    Write-Host "  installed fresh settings.json" -ForegroundColor Green
-}
+# settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
+Write-Host "[4/6] Wire managed hooks into ~/.claude/settings.json" -ForegroundColor Cyan
+$HooksInstaller = Join-Path $RepoRoot "scripts\hooks_install.py"
+& py $HooksInstaller install --checkout $RepoRoot            # dry-run diff
+& py $HooksInstaller install --checkout $RepoRoot --apply    # merge managed block, foreign hooks preserved
+Write-Host "  managed hook block wired (run: py $HooksInstaller doctor)" -ForegroundColor Green
 
 # CLAUDE.md
 Write-Host "[5/6] Install CLAUDE.md template" -ForegroundColor Cyan

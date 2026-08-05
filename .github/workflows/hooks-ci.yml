@@ -1,0 +1,39 @@
+name: Hooks Installer CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "scripts/hooks_install.py"
+      - "scripts/git_hygiene.py"
+      - "scripts/tests/test_hooks_install.py"
+      - "scripts/tests/test_hooks_janitor.py"
+      - "templates/hooks.manifest.json"
+      - ".github/workflows/hooks-ci.yml"
+
+jobs:
+  hooks:
+    if: github.event.pull_request.draft == false
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest "ruff==0.15.20"
+      - run: >-
+          python -m pytest -q
+          scripts/tests/test_hooks_install.py
+          scripts/tests/test_hooks_janitor.py
+      - run: >-
+          python -m ruff check
+          scripts/hooks_install.py
+          scripts/git_hygiene.py
+          scripts/tests/test_hooks_install.py
+          scripts/tests/test_hooks_janitor.py
+      - run: >-
+          python -m compileall -q
+          scripts/hooks_install.py
+          scripts/git_hygiene.py
+      # validate the shipped manifest loads under the code-owned schema/allowlist
+      - run: python scripts/hooks_install.py version

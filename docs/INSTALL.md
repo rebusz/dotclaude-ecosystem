@@ -36,9 +36,9 @@ The installer is **idempotent** — safe to re-run. It backs up your existing `~
 | `skills/executor/` | `~/.claude/skills/executor/` | copy (overwrite) |
 | `templates/CLAUDE.md.template` | `~/.claude/CLAUDE.md` | install fresh, OR copy as `.from-template` if exists |
 | `templates/AGENTS.md.template` | `~/.codex/AGENTS.md` | install fresh, OR append "Plan Lifecycle Hooks" section if exists |
-| `templates/settings.json.template` | `~/.claude/settings.json` | install fresh, OR copy as `.from-template` if exists |
+| `templates/hooks.manifest.json` | `~/.claude/settings.json` | `scripts/hooks_install.py install --apply` — handler-granular merge of the managed hook block; foreign hooks preserved; sidecar-tracked; dry-run first |
 
-If you have an existing `settings.json` or `CLAUDE.md`, the installer leaves them in place and drops a `.from-template` sibling for manual merge.
+The hook block is wired by `scripts/hooks_install.py` from `templates/hooks.manifest.json`, not a wholesale copy: existing foreign hooks and non-hook settings keys are preserved, the managed block is recorded in a sidecar manifest, and `hooks_install.py doctor` reports whether the block is present/absent/drifted in `settings.json` (run `/hooks` for the merged multi-source view). A `CLAUDE.md` that already exists is left in place with a `.from-template` sibling for manual merge.
 
 ## After install
 

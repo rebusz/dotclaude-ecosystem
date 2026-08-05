@@ -1,0 +1,76 @@
+{
+  "schema_version": "dceco.hooks.manifest.v1",
+  "description": "Canonical ecosystem Claude hook block. Transcribed verbatim from the live ~/.claude/settings.json pre-image (2026-08-04). The installer (scripts/hooks_install.py) resolves {checkout_root} and {interpreter} per machine and renders each entry into ~/.claude/settings.json as its own group. Do not collapse Write/Edit pairs here (see plan decision B8). Change this file, then run: python scripts/hooks_install.py install --apply",
+  "entries": [
+    {
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "script": "session_router.py",
+      "interpreter": "python",
+      "timeout": 5
+    },
+    {
+      "event": "SessionEnd",
+      "matcher": "*",
+      "script": "session_lifecycle.py",
+      "interpreter": "python",
+      "timeout": 2
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Write",
+      "script": "autocommit_design_docs.py",
+      "interpreter": "python",
+      "timeout": 30
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit",
+      "script": "autocommit_design_docs.py",
+      "interpreter": "python",
+      "timeout": 30
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Write",
+      "script": "auto_sync_context_hook.py",
+      "interpreter": "python",
+      "timeout": 10
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit",
+      "script": "auto_sync_context_hook.py",
+      "interpreter": "python",
+      "timeout": 10
+    },
+    {
+      "event": "Stop",
+      "matcher": "*",
+      "script": "answer_footer.py",
+      "interpreter": "python",
+      "timeout": 5
+    },
+    {
+      "event": "Stop",
+      "matcher": "*",
+      "script": "repo_hygiene_nudge.py",
+      "interpreter": "python",
+      "timeout": 10
+    },
+    {
+      "event": "Stop",
+      "matcher": "*",
+      "script": "memory_size_guard.py",
+      "interpreter": "python",
+      "timeout": 10
+    },
+    {
+      "event": "UserPromptSubmit",
+      "matcher": "*",
+      "script": "plan_keyword_detector.py",
+      "interpreter": "python",
+      "timeout": 15
+    }
+  ]
+}
