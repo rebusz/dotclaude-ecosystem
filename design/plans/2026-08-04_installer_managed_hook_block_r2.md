@@ -1,10 +1,10 @@
 ---
 title: Installer-Managed settings.json Hook Block
 date: 2026-08-04
-status: in-progress
-status_detail: reviewed-ceo-matrix-eng-clear-awaiting-r2-go
+status: shipped
+status_detail: shipped-pr69-merged-7cae806-hooks-installer-live
 risk: R2
-phase: plan
+phase: shipped
 repos: [dotclaude-ecosystem]
 tags: [agent-tooling, installer, hooks, settings, drift-detection, janitor]
 related:
