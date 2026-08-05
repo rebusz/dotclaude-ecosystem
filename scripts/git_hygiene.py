@@ -547,9 +547,12 @@ def check_codex_hooks(alarms: list[str]) -> None:
             return  # Codex not deployed on this host -> skip silently
         verdict, detail = chd.codex_hooks_status(home)
         if chd.block_invalidated(verdict):
+            # detail may embed a localized OSError strerror (non-ASCII on e.g. Polish
+            # Windows); force ASCII so the alarm stays C1-safe.
+            safe_detail = detail.encode("ascii", "replace").decode("ascii")
             alarms.append(
                 "CODEX HOOKS: ecosystem hook block is "
-                f"{verdict} in ~/.codex/hooks.json ({detail}). "
+                f"{verdict} in ~/.codex/hooks.json ({safe_detail}). "
                 "Run: python scripts/install_codex_session_lifecycle.py")
     except Exception as exc:  # noqa: BLE001 - detector must never crash the janitor (C1)
         alarms.append(f"CODEX HOOKS: check failed ({type(exc).__name__}); "

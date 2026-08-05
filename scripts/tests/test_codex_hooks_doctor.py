@@ -129,6 +129,20 @@ class JanitorCodexAlarmTests(unittest.TestCase):
         git_hygiene.check_codex_hooks(alarms)
         self.assertEqual(alarms, [])
 
+    def test_alarm_stays_ascii_on_localized_detail(self) -> None:
+        # A MALFORMED detail carrying a localized (non-ASCII) OSError strerror must not
+        # leak non-ASCII into the alarm (C1). Simulate via a non-ASCII detail.
+        orig = chd.codex_hooks_status
+        chd.codex_hooks_status = lambda home: ("MALFORMED", "Odmowa dostępu")
+        (self.home / ".codex").mkdir()
+        alarms: list[str] = []
+        try:
+            git_hygiene.check_codex_hooks(alarms)
+        finally:
+            chd.codex_hooks_status = orig
+        self.assertEqual(len(alarms), 1)
+        alarms[0].encode("ascii")  # must not raise
+
     def test_check_never_raises(self) -> None:
         orig = chd.codex_hooks_status
         chd.codex_hooks_status = lambda home: (_ for _ in ()).throw(RuntimeError("boom"))
