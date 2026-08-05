@@ -6,8 +6,10 @@ on:
     paths:
       - "scripts/hooks_install.py"
       - "scripts/git_hygiene.py"
+      - "scripts/codex_hooks_doctor.py"
       - "scripts/tests/test_hooks_install.py"
       - "scripts/tests/test_hooks_janitor.py"
+      - "scripts/tests/test_codex_hooks_doctor.py"
       - "templates/hooks.manifest.json"
       - ".github/workflows/hooks-ci.yml"
 
@@ -25,15 +27,19 @@ jobs:
           python -m pytest -q
           scripts/tests/test_hooks_install.py
           scripts/tests/test_hooks_janitor.py
+          scripts/tests/test_codex_hooks_doctor.py
       - run: >-
           python -m ruff check
           scripts/hooks_install.py
           scripts/git_hygiene.py
+          scripts/codex_hooks_doctor.py
           scripts/tests/test_hooks_install.py
           scripts/tests/test_hooks_janitor.py
+          scripts/tests/test_codex_hooks_doctor.py
       - run: >-
           python -m compileall -q
           scripts/hooks_install.py
           scripts/git_hygiene.py
+          scripts/codex_hooks_doctor.py
       # validate the shipped manifest loads under the code-owned schema/allowlist
       - run: python scripts/hooks_install.py version
