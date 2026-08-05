@@ -33,6 +33,12 @@ class ReferenceTests(unittest.TestCase):
         self.assertFalse(chd._references_adapter(None))
         self.assertFalse(chd._references_adapter(123))
 
+    def test_coincidental_substring_not_falsely_recognized(self) -> None:
+        # Regression: doctor must not report OK because a foreign command merely
+        # MENTIONS the adapter filename without actually invoking it.
+        self.assertFalse(chd._references_adapter(
+            'echo "reminder: review cursor_session_adapter.py before merging"'))
+
 
 class StatusTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -72,6 +78,15 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(v, "MISSING")
         self.assertIn("sessionEnd", detail)
         self.assertTrue(chd.block_invalidated(v))
+
+    def test_missing_not_falsely_ok_on_coincidental_substring(self) -> None:
+        _write_cursor_hooks(self.home, {
+            "sessionStart": [{"command": 'echo "see cursor_session_adapter.py"'}],
+            "sessionEnd": [_adapter_handler()],
+        })
+        v, detail = chd.cursor_hooks_status(self.home)
+        self.assertEqual(v, "MISSING")
+        self.assertIn("sessionStart", detail)
 
     def test_missing_when_sessionend_event_absent_entirely(self) -> None:
         _write_cursor_hooks(self.home, {"sessionStart": [_adapter_handler()]})

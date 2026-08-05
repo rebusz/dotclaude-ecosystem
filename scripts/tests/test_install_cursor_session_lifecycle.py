@@ -26,12 +26,17 @@ class InstallCursorTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _install(self) -> ics.InstallResult:
+        # skip_cli_preflight: these tests exercise merge/rollback/crash-recovery
+        # logic in isolation. They must not depend on a real cursor-agent binary
+        # being on PATH (CI runners will not have one installed). Preflight itself
+        # is covered by PreflightTests below via subprocess mocking.
         return ics.install(
             hooks_path=self.hooks_path,
             hooks_template_path=TEMPLATE,
             adapter_path=ADAPTER,
             python_executable=Path(sys.executable),
             backup_root=self.backup_root,
+            skip_cli_preflight=True,
         )
 
     # ── fresh ──────────────────────────────────────────────────────────
@@ -79,6 +84,36 @@ class InstallCursorTests(unittest.TestCase):
         start_cmds = [h["command"] for h in data["hooks"]["sessionStart"]]
         self.assertIn("py foreign_start.py", start_cmds)
         self.assertEqual(sum("cursor_session_adapter.py" in c for c in start_cmds), 1)
+
+    def test_coincidental_substring_command_treated_as_foreign(self) -> None:
+        # Regression: a foreign handler that merely MENTIONS the adapter filename
+        # (e.g. an echo/comment) must never be misclassified as owned and dropped.
+        self.hooks_path.parent.mkdir(parents=True)
+        self.hooks_path.write_text(json.dumps({
+            "version": 1,
+            "hooks": {"sessionStart": [
+                {"command": 'echo "reminder: review cursor_session_adapter.py before merging"'},
+            ]},
+        }), encoding="utf-8")
+        self._install()
+        data = json.loads(self.hooks_path.read_bytes())
+        cmds = [h["command"] for h in data["hooks"]["sessionStart"]]
+        self.assertIn('echo "reminder: review cursor_session_adapter.py before merging"', cmds)
+        self.assertEqual(sum(ics._references_adapter(c) for c in cmds), 1)
+
+    def test_two_token_unquoted_reference_still_recognized(self) -> None:
+        # The tokenizer's whitespace-split fallback correctly handles the simple
+        # `interpreter script.py` shape too, not only quoted forms.
+        self.assertTrue(ics._references_adapter("py cursor_session_adapter.py"))
+
+    def test_untokenizable_or_non_matching_commands_not_claimed(self) -> None:
+        self.assertFalse(ics._references_adapter("cursor_session_adapter.py"))  # single token
+        self.assertFalse(ics._references_adapter("py --flag cursor_session_adapter.py extra"))  # last token != adapter
+        self.assertFalse(ics._references_adapter(None))
+        self.assertFalse(ics._references_adapter(123))
+
+    def test_exact_adapter_reference_recognized_regardless_of_path_prefix(self) -> None:
+        self.assertTrue(ics._references_adapter('py "C:/anywhere/cursor_session_adapter.py"'))
 
     def test_reinstall_after_hand_edit_does_not_duplicate_owned_handler(self) -> None:
         self._install()
@@ -178,6 +213,75 @@ class InstallCursorTests(unittest.TestCase):
         out = json.loads(r.stdout)
         self.assertEqual(out["mode"], "dry-run")
         self.assertFalse(self.hooks_path.exists())
+
+
+class PreflightTests(unittest.TestCase):
+    """CU3 requirement 1: preflight installed CLI version, reject unsupported schema.
+    Mocks subprocess.run so these tests never depend on a real cursor-agent binary
+    being present (CI runners will not have one)."""
+
+    def setUp(self) -> None:
+        self._orig_run = ics.subprocess.run
+        self._orig_which = ics.shutil.which
+
+    def tearDown(self) -> None:
+        ics.subprocess.run = self._orig_run
+        ics.shutil.which = self._orig_which
+
+    def _stub_run(self, *, returncode=0, stdout="2026.07.23-e383d2b", raises=None):
+        def fake_run(args, **kwargs):
+            if raises is not None:
+                raise raises
+            class R:
+                pass
+            r = R()
+            r.returncode = returncode
+            r.stdout = stdout
+            return r
+        ics.subprocess.run = fake_run
+
+    def test_valid_version_shape_accepted(self) -> None:
+        self._stub_run(stdout="2026.07.23-e383d2b\n")
+        version = ics._preflight_cli_version(cursor_agent=Path("fake-cursor-agent"))
+        self.assertEqual(version, "2026.07.23-e383d2b")
+
+    def test_unsupported_version_shape_rejected(self) -> None:
+        self._stub_run(stdout="not-a-version")
+        with self.assertRaises(ics.PreflightError):
+            ics._preflight_cli_version(cursor_agent=Path("fake-cursor-agent"))
+
+    def test_nonzero_exit_rejected(self) -> None:
+        self._stub_run(returncode=1, stdout="")
+        with self.assertRaises(ics.PreflightError):
+            ics._preflight_cli_version(cursor_agent=Path("fake-cursor-agent"))
+
+    def test_missing_executable_rejected(self) -> None:
+        ics.shutil.which = lambda name: None
+        with self.assertRaises(ics.PreflightError):
+            ics._preflight_cli_version(cursor_agent=None)
+
+    def test_timeout_rejected(self) -> None:
+        import subprocess as sp
+        self._stub_run(raises=sp.TimeoutExpired(cmd="cursor-agent", timeout=10))
+        with self.assertRaises(ics.PreflightError):
+            ics._preflight_cli_version(cursor_agent=Path("fake-cursor-agent"))
+
+    def test_install_gates_on_preflight_by_default(self) -> None:
+        # Integration proof that install() actually calls the preflight (not just
+        # that the standalone function works) -- mocked, no real binary required.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self._stub_run(returncode=1, stdout="")
+            with self.assertRaises(ics.PreflightError):
+                ics.install(
+                    hooks_path=home / "hooks.json",
+                    hooks_template_path=TEMPLATE,
+                    adapter_path=ADAPTER,
+                    python_executable=Path(sys.executable),
+                    backup_root=home / "backups",
+                    cursor_agent=Path("fake-cursor-agent"),
+                )
+            self.assertFalse((home / "hooks.json").exists())  # no mutation on preflight failure
 
 
 if __name__ == "__main__":

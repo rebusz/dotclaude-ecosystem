@@ -32,6 +32,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,12 +41,17 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hooks_install import render_command  # noqa: E402 - reuse the proven Claude renderer
+from hooks_install import _command_path_token, render_command  # noqa: E402 - reuse proven helpers
+from cursor_session_adapter import _CURSOR_CLI_VERSION_RE  # noqa: E402 - single source of the version shape
 from session_state import atomic_write_bytes  # noqa: E402
 
 ADAPTER_NAME = "cursor_session_adapter.py"
 REQUIRED_EVENTS = ("sessionStart", "sessionEnd")
 MANIFEST_SCHEMA = "cursor.session.lifecycle.install.v1"
+
+
+class PreflightError(ValueError):
+    """Raised when the installed Cursor Agent CLI version is missing or unsupported."""
 
 
 @dataclass(frozen=True)
@@ -101,7 +108,43 @@ def _restore_if_installed(path: Path, *, installed: bytes, previous: bytes | Non
 
 
 def _references_adapter(command: object) -> bool:
-    return isinstance(command, str) and ADAPTER_NAME in command
+    """Anchored ownership check (CU3 requirement 3: "refuse malformed/ambiguous
+    ownership"). A bare substring match would misclassify any foreign command that
+    merely mentions our filename (e.g. a comment, an unrelated echo) as owned, and
+    silently drop it on reinstall. Extract the quote-aware path token and require
+    its exact basename to equal the adapter filename; a command that cannot be
+    confidently tokenized is treated as foreign (never claimed, never dropped)."""
+    if not isinstance(command, str):
+        return False
+    token = _command_path_token(command)
+    if token is None:
+        return False
+    return Path(token.replace("\\", "/")).name == ADAPTER_NAME
+
+
+def _preflight_cli_version(cursor_agent: Path | None = None) -> str:
+    """Locate the Cursor Agent CLI and validate its --version output matches the
+    exact shape the shipped adapter (CU1) already recognizes at runtime
+    (_CURSOR_CLI_VERSION_RE). Fail closed: missing executable, non-zero exit,
+    timeout, or an unrecognized version shape all raise PreflightError with no
+    mutation performed by the caller. This is CU3 requirement 1."""
+    exe = cursor_agent
+    if exe is None:
+        found = shutil.which("cursor-agent")
+        if found is None:
+            raise PreflightError("cursor-agent executable not found on PATH")
+        exe = Path(found)
+    try:
+        proc = subprocess.run([str(exe), "--version"], capture_output=True, text=True,
+                              timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PreflightError(f"cursor-agent --version failed to run: {exc}") from exc
+    if proc.returncode != 0:
+        raise PreflightError(f"cursor-agent --version exited {proc.returncode}")
+    version = proc.stdout.strip()
+    if not _CURSOR_CLI_VERSION_RE.fullmatch(version):
+        raise PreflightError(f"unsupported cursor-agent version shape: {version!r}")
+    return version
 
 
 def _merge_hooks(existing: dict[str, Any] | None, command: str) -> dict[str, Any]:
@@ -138,10 +181,17 @@ def install(
     adapter_path: Path,
     python_executable: Path,
     backup_root: Path,
+    cursor_agent: Path | None = None,
+    skip_cli_preflight: bool = False,
 ) -> InstallResult:
     """Install the rendered Cursor hook and record its provenance. Dry semantics
     are the caller's responsibility (fresh home == dry apply; the CLI --apply flag
-    gates real-machine mutation)."""
+    gates real-machine mutation). CU3 requirement 1: preflight the installed CLI
+    version and reject an unsupported schema before any mutation. skip_cli_preflight
+    exists only for tests that exercise merge/rollback logic in isolation from a
+    real cursor-agent binary; the CLI entrypoint never sets it."""
+    if not skip_cli_preflight:
+        _preflight_cli_version(cursor_agent)
     adapter = adapter_path.resolve(strict=True)  # raises if the adapter script is absent
     interpreter = python_executable.resolve(strict=True)
     command = render_command(str(interpreter), adapter.parents[1], adapter.name)
@@ -227,7 +277,7 @@ def rollback(
     if existed is True:
         if not isinstance(backup_raw, str):
             raise ValueError("manifest backup is missing: hooks")
-        backup_path = Path(backup_raw)
+        backup_path = Path(backup_raw).resolve(strict=False)
         if allowed_backup_root is not None and backup_path.parent.parent != allowed_backup_root.resolve(strict=False):
             raise ValueError("backup path is outside the allowed backup root")
         previous = _read_optional(backup_path)
@@ -265,11 +315,21 @@ def main() -> int:
         command = render_command(str(interpreter), root, ADAPTER_NAME)
         existing = json.loads(previous) if previous is not None else None
         merged = _merge_hooks(existing, command)
+        try:
+            cli_version = _preflight_cli_version()
+            cli_supported = True
+        except PreflightError as exc:
+            cli_version = None
+            cli_supported = False
+            preflight_error = str(exc)
         print(json.dumps({
             "mode": "dry-run",
             "hooks_path": str(args.hooks_path),
             "would_change": previous != _encoded(merged),
             "rendered_command": command,
+            "cli_version": cli_version,
+            "cli_supported": cli_supported,
+            **({} if cli_supported else {"cli_preflight_error": preflight_error}),
         }, indent=2))
         return 0
 

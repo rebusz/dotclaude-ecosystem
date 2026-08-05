@@ -28,19 +28,36 @@ _ENC_RE = re.compile(r"-Enc(?:odedCommand)?\s+([A-Za-z0-9+/=]{8,})", re.IGNORECA
 _BLOCK_INVALIDATING = frozenset({"MISSING", "NEVER_INSTALLED", "MALFORMED"})
 
 
+def _last_quoted_token(text: str) -> str | None:
+    """Return the content of the LAST single- or double-quoted segment in text, or
+    None if it can't be confidently tokenized. Codex's decoded PowerShell wrapper is
+    `& 'exe' 'path'` -- the adapter path is the final quoted token, not the first."""
+    matches = re.findall(r"'([^']*)'|\"([^\"]*)\"", text)
+    if not matches:
+        return None
+    single, double = matches[-1]
+    return single or double or None
+
+
 def _references_adapter(command: object) -> bool:
+    """Anchored check (mirrors the Cursor/Claude fix): a bare substring match would
+    false-report a handler as owned if it merely mentions the filename without
+    invoking it. Require the exact basename of the extracted path token to equal
+    the adapter filename, whether the command is plain or -EncodedCommand-wrapped."""
     if not isinstance(command, str) or not command:
         return False
-    if ADAPTER in command:
-        return True  # plain (non-encoded) command
     m = _ENC_RE.search(command)
-    if not m:
+    if m:
+        try:
+            decoded = base64.b64decode(m.group(1)).decode("utf-16-le", errors="replace")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        token = _last_quoted_token(decoded)
+    else:
+        token = _last_quoted_token(command)
+    if token is None:
         return False
-    try:
-        decoded = base64.b64decode(m.group(1)).decode("utf-16-le", errors="replace")
-    except (ValueError, UnicodeDecodeError):
-        return False
-    return ADAPTER in decoded
+    return Path(token.replace("\\", "/")).name == ADAPTER
 
 
 def _event_has_adapter(hooks: dict, event: str) -> bool:

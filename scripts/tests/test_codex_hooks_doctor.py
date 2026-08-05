@@ -47,6 +47,18 @@ class DecoderTests(unittest.TestCase):
         self.assertFalse(chd._references_adapter("py something_else.py"))
         self.assertFalse(chd._references_adapter(None))
 
+    def test_coincidental_substring_not_falsely_recognized(self) -> None:
+        # Regression: a foreign command that merely mentions the adapter filename
+        # (plain, or encoded as PowerShell -EncodedCommand) must not be treated as
+        # an owned handler.
+        self.assertFalse(chd._references_adapter(
+            'echo "reminder: review codex_session_adapter.py before merging"'))
+        mention = _encoded_command("echo see codex_session_adapter.py")  # last quoted token, not a real path
+        # _last_quoted_token extracts the final quoted segment; here that segment
+        # IS the mention string itself (single-quoted), whose basename is not the
+        # adapter filename once treated as a path.
+        self.assertFalse(chd._references_adapter(mention))
+
 
 class StatusTests(unittest.TestCase):
     def setUp(self) -> None:

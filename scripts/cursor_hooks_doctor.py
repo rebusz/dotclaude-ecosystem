@@ -21,7 +21,11 @@ sessionStart/sessionEnd wiring, matching CU3's deliberately narrow scope).
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hooks_install import _command_path_token  # noqa: E402 - reuse the proven tokenizer
 
 ADAPTER = "cursor_session_adapter.py"
 REQUIRED_EVENTS = ("sessionStart", "sessionEnd")
@@ -30,7 +34,15 @@ _BLOCK_INVALIDATING = frozenset({"MISSING", "NEVER_INSTALLED", "MALFORMED"})
 
 
 def _references_adapter(command: object) -> bool:
-    return isinstance(command, str) and ADAPTER in command
+    """Anchored check: a bare substring match would false-report OK for a handler
+    that merely mentions the filename without invoking it. Require the quote-aware
+    path token's exact basename to equal the adapter filename."""
+    if not isinstance(command, str):
+        return False
+    token = _command_path_token(command)
+    if token is None:
+        return False
+    return Path(token.replace("\\", "/")).name == ADAPTER
 
 
 def _event_has_adapter(hooks: dict, event: str) -> bool:
