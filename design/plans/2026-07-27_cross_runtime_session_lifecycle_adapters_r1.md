@@ -2,7 +2,7 @@
 title: Cross-Runtime Session Lifecycle Adapters - Codex Shipped, Cursor Discovery
 date: 2026-07-27
 status: active
-status_detail: cursor-cu1-cli-complete-landing-gated-by-exact-head
+status_detail: cursor-cu3-installer-shipped-pr72-cu4-activation-awaiting-operator-go
 risk: R1
 phase: landing
 repos: [dotclaude-ecosystem]
@@ -921,11 +921,23 @@ This plan's diagrams are the only new cross-host diagrams.
   stable native format.
   - Verify: two-new-chat plus resume/compact append stability, exact-ID pairing,
     malformed/incomplete behavior, bound-path mismatch, and no database scan.
-- [ ] **CU3 (P1)** — implement and test idempotent user-level install/rollback.
+- [x] **CU3 (P1)** — implement and test idempotent user-level install/rollback.
   - Verify: fresh/repeat/conflict/interruption/rollback against temporary homes.
+  - Result (2026-08-05): PR #72 (`281ffdf`), 78 focused tests (installer +
+    doctor + janitor). Adversarial review found and fixed 3 ship-blockers before
+    landing: missing CLI-version preflight (requirement 1), an unanchored
+    substring ownership match able to drop a foreign handler and produce a false
+    doctor `OK` (requirement 3) — the identical bug was independently present in
+    the already-shipped Codex detector and fixed in the same round. All CU3
+    verify categories (fresh/repeat/conflict/interruption/rollback) covered
+    against temporary homes only; never touched the real `~/.cursor/hooks.json`.
+    Full `scripts/tests`: 499 passed, 11 subtests, 0 failures.
 - [ ] **CU4 (P1)** — merge first, activate second, then run exact IDE and CLI
   acceptance.
   - Verify: all required live flows or explicit per-surface degraded verdicts.
+  - Gate: separate explicit operator authorization (per this plan's own per-slice
+    token discipline), matching the --apply pattern already used for Claude/Codex.
+    Real `~/.cursor/hooks.json` activation is deliberately NOT part of CU3.
 
 ### Implementation review fixes
 
