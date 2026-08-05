@@ -10,18 +10,27 @@ on:
       - "scripts/state_reaper.py"
       - "scripts/curator_claims.py"
       - "scripts/codex_session_adapter.py"
+      - "scripts/cursor_session_adapter.py"
       - "scripts/transcript_projection.py"
       - "scripts/install_codex_session_lifecycle.py"
+      - "scripts/install_cursor_session_lifecycle.py"
+      - "scripts/codex_hooks_doctor.py"
+      - "scripts/cursor_hooks_doctor.py"
       - "scripts/tests/test_session_state.py"
       - "scripts/tests/test_session_router.py"
       - "scripts/tests/test_session_lifecycle.py"
       - "scripts/tests/test_state_reaper.py"
       - "scripts/tests/test_curator_claims.py"
       - "scripts/tests/test_codex_session_adapter.py"
+      - "scripts/tests/test_cursor_session_adapter.py"
       - "scripts/tests/test_transcript_projection.py"
       - "scripts/tests/test_install_codex_session_lifecycle.py"
+      - "scripts/tests/test_install_cursor_session_lifecycle.py"
+      - "scripts/tests/test_codex_hooks_doctor.py"
+      - "scripts/tests/test_cursor_hooks_doctor.py"
       - "skills/curator/**"
       - "templates/codex_hooks.json.template"
+      - "templates/cursor_hooks.json.template"
       - "templates/session_registry.json.template"
       - "design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md"
       - "design/plans/2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md"
@@ -45,8 +54,12 @@ jobs:
           scripts/tests/test_state_reaper.py
           scripts/tests/test_curator_claims.py
           scripts/tests/test_codex_session_adapter.py
+          scripts/tests/test_cursor_session_adapter.py
           scripts/tests/test_transcript_projection.py
           scripts/tests/test_install_codex_session_lifecycle.py
+          scripts/tests/test_install_cursor_session_lifecycle.py
+          scripts/tests/test_codex_hooks_doctor.py
+          scripts/tests/test_cursor_hooks_doctor.py
       - run: >-
           python -m ruff check
           scripts/session_state.py
@@ -55,16 +68,24 @@ jobs:
           scripts/state_reaper.py
           scripts/curator_claims.py
           scripts/codex_session_adapter.py
+          scripts/cursor_session_adapter.py
           scripts/transcript_projection.py
           scripts/install_codex_session_lifecycle.py
+          scripts/install_cursor_session_lifecycle.py
+          scripts/codex_hooks_doctor.py
+          scripts/cursor_hooks_doctor.py
           scripts/tests/test_session_state.py
           scripts/tests/test_session_router.py
           scripts/tests/test_session_lifecycle.py
           scripts/tests/test_state_reaper.py
           scripts/tests/test_curator_claims.py
           scripts/tests/test_codex_session_adapter.py
+          scripts/tests/test_cursor_session_adapter.py
           scripts/tests/test_transcript_projection.py
           scripts/tests/test_install_codex_session_lifecycle.py
+          scripts/tests/test_install_cursor_session_lifecycle.py
+          scripts/tests/test_codex_hooks_doctor.py
+          scripts/tests/test_cursor_hooks_doctor.py
       - run: >-
           python -m compileall -q
           scripts/session_state.py
@@ -73,5 +94,9 @@ jobs:
           scripts/state_reaper.py
           scripts/curator_claims.py
           scripts/codex_session_adapter.py
+          scripts/cursor_session_adapter.py
           scripts/transcript_projection.py
           scripts/install_codex_session_lifecycle.py
+          scripts/install_cursor_session_lifecycle.py
+          scripts/codex_hooks_doctor.py
+          scripts/cursor_hooks_doctor.py

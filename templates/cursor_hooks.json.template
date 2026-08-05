@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "{{COMMAND}}",
+        "timeout": 5
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "{{COMMAND}}",
+        "timeout": 5
+      }
+    ]
+  }
+}
