@@ -48,17 +48,12 @@ if [ -d "$CODEX_HOME" ]; then
     echo "  copied bundled skills -> ~/.codex/skills/"
 fi
 
-# settings.json
-echo "[4/6] Merge hooks into ~/.claude/settings.json"
-SETTINGS_TPL="$REPO_ROOT/templates/settings.json.template"
-SETTINGS_DST="$CLAUDE_HOME/settings.json"
-if [ -f "$SETTINGS_DST" ]; then
-    echo "  existing settings.json found — manual merge required, see install_notes.md"
-    cp "$SETTINGS_TPL" "$SETTINGS_DST.from-template"
-else
-    cp "$SETTINGS_TPL" "$SETTINGS_DST"
-    echo "  installed fresh settings.json"
-fi
+# settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
+echo "[4/6] Wire managed hooks into ~/.claude/settings.json"
+HOOKS_INSTALLER="$REPO_ROOT/scripts/hooks_install.py"
+python3 "$HOOKS_INSTALLER" install --checkout "$REPO_ROOT"            # dry-run diff
+python3 "$HOOKS_INSTALLER" install --checkout "$REPO_ROOT" --apply    # merge managed block, foreign hooks preserved
+echo "  managed hook block wired (run: python3 $HOOKS_INSTALLER doctor)"
 
 # CLAUDE.md
 echo "[5/6] Install CLAUDE.md template"

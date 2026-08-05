@@ -475,6 +475,31 @@ def do_deploy(repo: str, r: Report, base: str) -> None:
         print(f"  DEPLOY FAILED: {cp.stderr.strip()}")
 
 
+def check_managed_hooks(alarms: list[str]) -> None:
+    """Append one ASCII-safe alarm if the ecosystem's managed hook block is absent or
+    drifted in ~/.claude/settings.json (Matrix B6, plan C1/C2). Fail-soft: any error
+    becomes a visible note, never an unhandled crash that kills the janitor run (C1).
+    Positive trigger (C2): runs only when hooks_install resolves its OWN ecosystem repo
+    root; otherwise skips silently, no alarm, no error."""
+    try:
+        from pathlib import Path
+        import hooks_install  # sibling in scripts/; import is the positive-trigger probe
+        try:
+            root = hooks_install.resolve_checkout(None)
+        except hooks_install.HookInstallError:
+            return  # this git_hygiene.py is not inside the ecosystem checkout -> skip
+        report = hooks_install.status(home=Path.home(), checkout=root)
+        if hooks_install.block_invalidated(report):
+            alarms.append(
+                "MANAGED HOOKS: ecosystem hook block is "
+                f"{report.overall} in ~/.claude/settings.json (checked that file only). "
+                "Run: python scripts/hooks_install.py install --apply  "
+                "then /hooks for the authoritative merged view.")
+    except Exception as exc:  # noqa: BLE001 - detector must never crash the janitor (C1)
+        alarms.append(f"MANAGED HOOKS: check failed ({type(exc).__name__}); "
+                      "run python scripts/hooks_install.py doctor")
+
+
 def main(argv: list[str]) -> int:
     # Windows scheduled-task consoles default to cp1252; make non-ASCII output
     # (em-dashes etc.) safe rather than crashing the deploy tool on encode.
@@ -507,6 +532,7 @@ def main(argv: list[str]) -> int:
     protect = {_norm(p) for p in a.protect}
     protect.add(_norm(os.getcwd()))   # never reap the worktree we are running from
     r = analyze(a.repo, base, protect=protect)
+    check_managed_hooks(r.alarms)
 
     if a.json:
         print(json.dumps(r.__dict__, indent=2))
