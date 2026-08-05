@@ -2,6 +2,11 @@
 
 ## New Modules
 
+- ✅ **DONE (2026-08-04, PR #69 → `7cae806`)** — shipped as
+  `design/plans/2026-08-04_installer_managed_hook_block_r2.md` (`scripts/hooks_install.py` +
+  `templates/hooks.manifest.json` + a guarded `git_hygiene.py` detector + `hooks-ci.yml`). The
+  bootstraps now call the installer; the orphaned `settings.json.template` is retired. History kept
+  below for context.
 - [P2][M] **Installer-managed `settings.json` hook block.** Installers copy `scripts/*.py`, so
   modules ship; the `settings.json` hook entries do not, so every machine wires hooks by hand and
   nothing detects a machine that never did. That is the one failure mode where the system is
