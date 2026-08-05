@@ -535,6 +535,27 @@ def check_managed_hooks(alarms: list[str]) -> None:
                       "run python scripts/hooks_install.py doctor")
 
 
+def check_codex_hooks(alarms: list[str]) -> None:
+    """Append one ASCII-safe alarm if the Codex ecosystem hook block is absent or drifted in
+    ~/.codex/hooks.json. Fail-soft (C1); positive trigger = ~/.codex present (Codex deployed).
+    Read-only: install_codex_session_lifecycle.py owns wiring; this only detects."""
+    try:
+        from pathlib import Path
+        import codex_hooks_doctor as chd
+        home = _managed_hooks_home or Path.home()
+        if not chd.deployed(home):
+            return  # Codex not deployed on this host -> skip silently
+        verdict, detail = chd.codex_hooks_status(home)
+        if chd.block_invalidated(verdict):
+            alarms.append(
+                "CODEX HOOKS: ecosystem hook block is "
+                f"{verdict} in ~/.codex/hooks.json ({detail}). "
+                "Run: python scripts/install_codex_session_lifecycle.py")
+    except Exception as exc:  # noqa: BLE001 - detector must never crash the janitor (C1)
+        alarms.append(f"CODEX HOOKS: check failed ({type(exc).__name__}); "
+                      "run python scripts/codex_hooks_doctor.py")
+
+
 def main(argv: list[str]) -> int:
     # Windows scheduled-task consoles default to cp1252; make non-ASCII output
     # (em-dashes etc.) safe rather than crashing the deploy tool on encode.
@@ -568,6 +589,7 @@ def main(argv: list[str]) -> int:
     protect.add(_norm(os.getcwd()))   # never reap the worktree we are running from
     r = analyze(a.repo, base, protect=protect)
     check_managed_hooks(r.alarms)
+    check_codex_hooks(r.alarms)
 
     if a.json:
         print(json.dumps(r.__dict__, indent=2))
