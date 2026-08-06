@@ -686,6 +686,43 @@ def _run_reaper(
         append_hook_error("LIFECYCLE_REAP_FAILED", type(exc).__name__, state_dir=state_dir)
 
 
+def _record_worktree_close(
+    *,
+    session_id: str,
+    registration: RepositoryRegistration,
+    evidence: SessionEvidence,
+    lifecycle_verdict: str,
+    owner_runtime: str,
+    state_dir: Path,
+    now: datetime,
+) -> None:
+    """Persist advisory terminal custody; never mutate the checkout."""
+
+    try:
+        from worktree_lifecycle import record_session_close
+
+        record_session_close(
+            session_id=session_id,
+            repo=registration.name,
+            worktree_root=registration.worktree_root,
+            head=evidence.head,
+            branch=evidence.branch,
+            dirty_paths=evidence.dirty_paths,
+            work_reached_trunk=evidence.work_reached_trunk,
+            git_ok=evidence.git_ok,
+            owner_runtime=owner_runtime,
+            lifecycle_verdict=lifecycle_verdict,
+            state_dir=state_dir,
+            now=now,
+        )
+    except Exception as exc:  # noqa: BLE001 - hooks stay fail-open
+        append_hook_error(
+            "LIFECYCLE_WORKTREE_RECORD_FAILED",
+            type(exc).__name__,
+            state_dir=state_dir,
+        )
+
+
 def _binding_matches_event(
     binding: dict[str, Any] | None,
     *,
@@ -711,6 +748,7 @@ def handle_event(
     registry_path: Path | None = None,
     state_dir: Path | None = None,
     now: datetime | None = None,
+    owner_runtime: str = "claude",
 ) -> None:
     """Persist the SessionEnd verdict. SessionEnd stdout is intentionally empty."""
 
@@ -798,6 +836,15 @@ def handle_event(
             },
         }
         write_verdict(verdict, state_dir=target_state)
+        _record_worktree_close(
+            session_id=session_id,
+            registration=registration,
+            evidence=evidence,
+            lifecycle_verdict=decision.verdict,
+            owner_runtime=owner_runtime,
+            state_dir=target_state,
+            now=current_time,
+        )
         _run_reaper(state_dir=target_state, session_id=session_id, now=current_time)
     except Exception as exc:  # noqa: BLE001 - SessionEnd must fail open
         append_hook_error("LIFECYCLE_FAILED", type(exc).__name__, state_dir=target_state)

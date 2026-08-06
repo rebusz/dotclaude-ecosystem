@@ -305,6 +305,39 @@ def _persist_session_binding(session_id: str, *, state_dir: Path) -> None:
         append_hook_error("ROUTER_ENV_BIND_FAILED", type(exc).__name__, state_dir=state_dir)
 
 
+def _record_worktree_start(
+    *,
+    session_id: str,
+    registration: RepositoryRegistration,
+    facts: GitFacts,
+    owner_runtime: str,
+    state_dir: Path,
+    now: datetime,
+) -> None:
+    """Persist advisory worktree custody without affecting router output."""
+
+    try:
+        from worktree_lifecycle import record_session_start
+
+        record_session_start(
+            session_id=session_id,
+            repo=registration.name,
+            worktree_root=registration.worktree_root,
+            head=facts.head,
+            branch=facts.branch,
+            dirty_paths=facts.dirty_paths,
+            owner_runtime=owner_runtime,
+            state_dir=state_dir,
+            now=now,
+        )
+    except Exception as exc:  # noqa: BLE001 - hooks stay fail-open
+        append_hook_error(
+            "ROUTER_WORKTREE_RECORD_FAILED",
+            type(exc).__name__,
+            state_dir=state_dir,
+        )
+
+
 def _compact_context(
     plan: dict[str, Any] | None,
     pending_verdict: dict[str, Any] | None = None,
@@ -477,6 +510,7 @@ def handle_event(
     state_dir: Path | None = None,
     now: datetime | None = None,
     run_maintenance: bool = True,
+    owner_runtime: str = "claude",
 ) -> dict[str, Any]:
     """Handle one SessionStart payload and return advisory JSON output."""
 
@@ -537,6 +571,14 @@ def handle_event(
                 registration=registration,
                 facts=facts,
                 transcript_path=transcript_path,
+                state_dir=target_state,
+                now=current_time,
+            )
+            _record_worktree_start(
+                session_id=session_id,
+                registration=registration,
+                facts=facts,
+                owner_runtime=owner_runtime,
                 state_dir=target_state,
                 now=current_time,
             )

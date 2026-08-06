@@ -7,6 +7,7 @@ on:
       - "scripts/session_state.py"
       - "scripts/session_router.py"
       - "scripts/session_lifecycle.py"
+      - "scripts/worktree_lifecycle.py"
       - "scripts/state_reaper.py"
       - "scripts/curator_claims.py"
       - "scripts/codex_session_adapter.py"
@@ -19,6 +20,7 @@ on:
       - "scripts/tests/test_session_state.py"
       - "scripts/tests/test_session_router.py"
       - "scripts/tests/test_session_lifecycle.py"
+      - "scripts/tests/test_worktree_lifecycle.py"
       - "scripts/tests/test_state_reaper.py"
       - "scripts/tests/test_curator_claims.py"
       - "scripts/tests/test_codex_session_adapter.py"
@@ -34,6 +36,7 @@ on:
       - "templates/session_registry.json.template"
       - "design/plans/2026-07-25_session_lifecycle_and_hook_hardening_r1.md"
       - "design/plans/2026-07-27_cross_runtime_session_lifecycle_adapters_r1.md"
+      - "design/plans/2026-08-06_worktree_task_close_lifecycle_r1.md"
       - ".github/workflows/session-lifecycle-ci.yml"
 
 jobs:
@@ -51,6 +54,7 @@ jobs:
           scripts/tests/test_session_state.py
           scripts/tests/test_session_router.py
           scripts/tests/test_session_lifecycle.py
+          scripts/tests/test_worktree_lifecycle.py
           scripts/tests/test_state_reaper.py
           scripts/tests/test_curator_claims.py
           scripts/tests/test_codex_session_adapter.py
@@ -65,6 +69,7 @@ jobs:
           scripts/session_state.py
           scripts/session_router.py
           scripts/session_lifecycle.py
+          scripts/worktree_lifecycle.py
           scripts/state_reaper.py
           scripts/curator_claims.py
           scripts/codex_session_adapter.py
@@ -77,6 +82,7 @@ jobs:
           scripts/tests/test_session_state.py
           scripts/tests/test_session_router.py
           scripts/tests/test_session_lifecycle.py
+          scripts/tests/test_worktree_lifecycle.py
           scripts/tests/test_state_reaper.py
           scripts/tests/test_curator_claims.py
           scripts/tests/test_codex_session_adapter.py
@@ -91,6 +97,7 @@ jobs:
           scripts/session_state.py
           scripts/session_router.py
           scripts/session_lifecycle.py
+          scripts/worktree_lifecycle.py
           scripts/state_reaper.py
           scripts/curator_claims.py
           scripts/codex_session_adapter.py

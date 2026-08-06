@@ -177,6 +177,7 @@ def handle_event(
                     ),
                     registry_path=registry_path,
                     state_dir=state_dir,
+                    owner_runtime="cursor",
                 )
             )
         transcript_path = _absolute_transcript(event.get("transcript_path"))
@@ -202,6 +203,7 @@ def handle_event(
                 },
                 registry_path=registry_path,
                 state_dir=state_dir,
+                owner_runtime="cursor",
             )
             return {}
         binding = read_session_binding(session_id, state_dir=state_dir)
@@ -228,6 +230,7 @@ def handle_event(
                 normalized,
                 registry_path=registry_path,
                 state_dir=state_dir,
+                owner_runtime="cursor",
             )
         )
     except (TypeError, ValueError) as exc:
