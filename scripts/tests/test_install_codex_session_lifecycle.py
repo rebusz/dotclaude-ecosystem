@@ -221,6 +221,7 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
         launcher, _, _ = command.partition(" -NoLogo ")
         self.assertTrue(Path(launcher).is_absolute())
         self.assertTrue(Path(launcher).is_file())
+        self.assertIn(" -WindowStyle Hidden -EncodedCommand ", command)
         self.assertEqual(
             _decode_windows_command(command),
             (
@@ -254,6 +255,21 @@ class TestCodexLifecycleInstaller(unittest.TestCase):
                 Path("C:/old/codex_session_adapter.py"),
             ),
         }
+
+        self.assertTrue(
+            installer._handler_is_owned(
+                handler,
+                command="different command",
+                adapter_filename="codex_session_adapter.py",
+            )
+        )
+
+    def test_owned_handler_recognizes_previous_encoded_launcher(self):
+        previous_command = installer._windows_command(
+            Path("C:/old/python.exe"),
+            Path("C:/old/codex_session_adapter.py"),
+        ).replace(" -WindowStyle Hidden", "")
+        handler = {"type": "command", "commandWindows": previous_command}
 
         self.assertTrue(
             installer._handler_is_owned(

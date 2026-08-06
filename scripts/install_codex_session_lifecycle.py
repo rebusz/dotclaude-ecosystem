@@ -20,7 +20,12 @@ from typing import Any
 from session_state import atomic_write_bytes, resolve_repository
 
 _WINDOWS_COMMAND_ARGUMENTS = (
-    " -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+    " -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand "
+)
+_WINDOWS_ENCODED_COMMAND = re.compile(
+    r"(?i)\s+-NoLogo\s+-NoProfile\s+-NonInteractive"
+    r"(?:\s+-WindowStyle\s+Hidden)?\s+-EncodedCommand\s+"
+    r"([A-Za-z0-9+/=]+)\s*$"
 )
 
 
@@ -111,11 +116,11 @@ def _windows_command(*arguments: str | Path) -> str:
 
 
 def _decoded_windows_command(command: str) -> str | None:
-    _, marker, encoded = command.partition(_WINDOWS_COMMAND_ARGUMENTS)
-    if not marker or not encoded:
+    match = _WINDOWS_ENCODED_COMMAND.search(command)
+    if match is None:
         return None
     try:
-        return base64.b64decode(encoded, validate=True).decode("utf-16-le")
+        return base64.b64decode(match.group(1), validate=True).decode("utf-16-le")
     except (UnicodeDecodeError, ValueError):
         return None
 
