@@ -110,6 +110,7 @@ class TestCodexSessionAdapter(unittest.TestCase):
             event,
             registry_path=registry_path,
             state_dir=state_dir,
+            owner_runtime="codex",
         )
 
     def test_persisted_end_delegates_and_returns_no_stdout_payload(self):
@@ -131,6 +132,7 @@ class TestCodexSessionAdapter(unittest.TestCase):
             event,
             registry_path=registry_path,
             state_dir=state_dir,
+            owner_runtime="codex",
         )
 
     def test_null_end_reuses_only_exact_session_binding_transcript(self):
@@ -161,6 +163,7 @@ class TestCodexSessionAdapter(unittest.TestCase):
             delegated,
             registry_path=None,
             state_dir=state_dir,
+            owner_runtime="codex",
         )
         self.assertIsNone(event["transcript_path"])
 

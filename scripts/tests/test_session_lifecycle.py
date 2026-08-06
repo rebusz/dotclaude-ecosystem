@@ -503,9 +503,15 @@ class TestLifecyclePersistence(unittest.TestCase):
                     "collect_evidence",
                     return_value=_evidence(),
                 ),
+                mock.patch.object(lifecycle, "_record_worktree_close") as record_close,
                 mock.patch.object(lifecycle, "_run_reaper"),
             ):
-                result = lifecycle.handle_event(event, state_dir=state_dir, now=NOW)
+                result = lifecycle.handle_event(
+                    event,
+                    state_dir=state_dir,
+                    now=NOW,
+                    owner_runtime="cursor",
+                )
 
             self.assertIsNone(result)
             verdict = lifecycle.read_verdict(
@@ -516,6 +522,10 @@ class TestLifecyclePersistence(unittest.TestCase):
             self.assertIsNone(verdict["surfaced_at"])
             self.assertIsNone(verdict["consumed_at"])
             self.assertEqual(verdict["start_sha"], "a" * 40)
+            self.assertEqual(record_close.call_count, 1)
+            self.assertEqual(record_close.call_args.kwargs["session_id"], "session-a")
+            self.assertEqual(record_close.call_args.kwargs["owner_runtime"], "cursor")
+            self.assertEqual(record_close.call_args.kwargs["lifecycle_verdict"], "ARCHIVE-OK")
 
     def test_session_end_ignores_tampered_scratch_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:

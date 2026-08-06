@@ -91,13 +91,20 @@ class TestSessionRouter(unittest.TestCase):
             with (
                 mock.patch.object(router, "resolve_repository", return_value=_registration(root)),
                 mock.patch.object(router, "_git_facts", return_value=facts),
+                mock.patch.object(router, "_record_worktree_start") as record_start,
             ):
                 output = router.handle_event(
                     _event(cwd=root),
                     state_dir=state_dir,
                     now=NOW,
                     run_maintenance=False,
+                    owner_runtime="codex",
                 )
+
+            self.assertEqual(record_start.call_count, 1)
+            self.assertEqual(record_start.call_args.kwargs["session_id"], "session-a")
+            self.assertEqual(record_start.call_args.kwargs["facts"], facts)
+            self.assertEqual(record_start.call_args.kwargs["owner_runtime"], "codex")
 
             loaded = state.read_session_plan("session-a", state_dir=state_dir)
             self.assertIsNotNone(loaded)

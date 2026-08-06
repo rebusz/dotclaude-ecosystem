@@ -60,6 +60,7 @@ def handle_event(
                     event,
                     registry_path=registry_path,
                     state_dir=state_dir,
+                    owner_runtime="codex",
                 )
             )
         if event.get("hook_event_name") == "SessionEnd":
@@ -91,6 +92,7 @@ def handle_event(
                 delegated_event,
                 registry_path=registry_path,
                 state_dir=state_dir,
+                owner_runtime="codex",
             )
         return {}
     except Exception as exc:  # noqa: BLE001 - host lifecycle hooks must fail open
