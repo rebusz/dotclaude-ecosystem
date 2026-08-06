@@ -60,8 +60,9 @@ custody/handoff feature lands; this slice classifies it but does not remove it.
 | `DIRTY_CUSTODY` | tracked or untracked work exists | preserve + manifest |
 | `LOCKED_CUSTODY` | worktree is locked | preserve + owner review |
 | `COMMITTED_UNMERGED_CUSTODY` | clean branch not contained in base | preserve + handoff |
+| `DETACHED_UNMERGED_CUSTODY` | clean detached checkout not contained in base | preserve + handoff |
 | `ELIGIBLE_MERGED_REMOVE` | clean, unlocked, non-primary branch contained in base | receipt only |
-| `ELIGIBLE_DETACHED_REMOVE` | clean, unlocked, non-primary detached baseline | receipt only |
+| `ELIGIBLE_DETACHED_REMOVE` | clean, unlocked, non-primary detached checkout contained in base | receipt only |
 | `UNKNOWN_PRESERVE` | any fact could not be proven | preserve |
 
 ## Implementation slices
