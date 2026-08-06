@@ -4,7 +4,8 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 
 ## 1. Skille per-agent (z katalogow)
 
-### Global — wszystkie agenty (`~/.agents/skills`) — 15
+### Global — wszystkie agenty (`~/.agents/skills`) — 18
+- `agent-reach` — MUST USE when user wants to 调研/research/搜索/search/查/找/look up anything on the internet — e.g.
 - `codebase-design` — Shared vocabulary for designing deep modules.
 - `design-taste-frontend` — Anti-slop frontend skill for landing pages, portfolios, and redesigns.
 - `diagnosing-bugs` — Diagnosis loop for hard bugs and performance regressions.
@@ -13,16 +14,19 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `gpt-taste` — Elite UX/UI & Advanced GSAP Motion Engineer.
 - `handoff` — Compact the current conversation into a handoff document for another agent to pick up.
 - `image-to-code` — Elite website image-to-code skill for Codex.
+- `impeccable` — Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherw...
 - `improve-codebase-architecture` — Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
+- `last30days` — Research what people actually say about any topic in the last 30 days.
 - `minimalist-ui` — Clean editorial-style interfaces.
-- `prototype` — Build a throwaway prototype to flesh out a design — a runnable terminal app for state/business-logic questions, or several radically different UI variations...
+- `prototype` — Build a throwaway prototype to answer a design question.
 - `redesign-existing-projects` — Upgrades existing websites and apps to premium quality.
 - `tdd` — Test-driven development.
 - `triage` — Move issues and external PRs through a state machine of triage roles — categorise, verify, grill if needed, and write agent-ready briefs.
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 
-### Claude Code (`~/.claude/skills`) — 79
+### Claude Code (`~/.claude/skills`) — 84
 - `gstack` — Router for the gstack skill suite.
+- `agent-reach` — MUST USE when user wants to 调研/research/搜索/search/查/找/look up anything on the internet — e.g.
 - `autoplan` — Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision princi...
 - `benchmark` — Performance regression detection using the browse daemon.
 - `benchmark-models` — Cross-model benchmark for gstack skills.
@@ -52,7 +56,7 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `gpt-taste` — Elite UX/UI & Advanced GSAP Motion Engineer.
 - `grill-me` — A relentless interview to sharpen a plan or design.
 - `grill-with-docs` — A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go.
-- `grilling` — Grill the user relentlessly about a plan or design.
+- `grilling` — Grill the user relentlessly about a plan, decision, or idea.
 - `gstack` — Router for the gstack skill suite.
 - `gstack-upgrade` — Upgrade gstack to the latest version.
 - `guard` — Full safety mode: destructive command warnings + directory-scoped edits.
@@ -80,11 +84,13 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `plan-devex-review` — Interactive developer experience plan review.
 - `plan-eng-review` — Eng manager-mode plan review.
 - `plan-tune` — Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).
-- `prototype` — Build a throwaway prototype to flesh out a design — a runnable terminal app for state/business-logic questions, or several radically different UI variations...
+- `ponytail-on-demand` — Find the smallest correct implementation for bounded R0/R1 coding, refactoring, dependency, or design tasks.
+- `prototype` — Build a throwaway prototype to answer a design question.
 - `qa` — Systematically QA test a web application and fix bugs found.
 - `qa-only` — Report-only QA testing.
 - `redesign-existing-projects` — Upgrades existing websites and apps to premium quality.
 - `research` — Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo.
+- `resolving-merge-conflicts` — Use when you need to resolve an in-progress git merge/rebase conflict.
 - `retro` — Weekly engineering retrospective.
 - `review` — Pre-landing PR review.
 - `scrape` — Pull data from a web page.
@@ -97,15 +103,18 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `sync-gbrain` — Keep gbrain current with this repo's code and refresh agent search guidance in CLAUDE.md.
 - `tdd` — Test-driven development.
 - `triage` — Move issues and external PRs through a state machine of triage roles — categorise, verify, grill if needed, and write agent-ready briefs.
+- `truthdeck` — Produce deterministic evidence snapshots and one advisory next action without mutating application repositories or runtime.
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 - `unfreeze` — Clear the freeze boundary set by /freeze, allowing edits to all directories again.
+- `wait-what` — Stop.
 - `whatnext` — Steering ritual — answer "what next / co dalej / priorytety / are we drifting" with a STEERING BRIEF grounded in the income north-star, the vision DoD, a cov...
-- `writing-great-skills` — Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.
+- `writing-for-agents` — Writing documents for agents.
 
-### Codex (`~/.codex/skills`) — 70
+### Codex (`~/.codex/skills`) — 76
 - `design-taste-frontend` — Anti-slop frontend skill for landing pages, portfolios, and redesigns.
 - `diagnoze` — Use when the user invokes /diagnoze or /diagnose, reports a bug, regression, broken runtime, failing test, bad replay, flaky behavior, or asks for root-cause...
 - `domain-modeling` — Build and sharpen a repo's shared domain language.
+- `executor` — Launch the autonomous executor agent.
 - `frontend-house-rules` — House rules layered on top of the taste-skill family (design-taste-frontend, gpt-taste, minimalist-ui, redesign-existing-projects) for ALL web / UI / fronten...
 - `gpt-taste` — Elite UX/UI & Advanced GSAP Motion Engineer.
 - `grill-me` — Stress-test a plan, design, slice, PRD, or architecture proposal before implementation.
@@ -165,26 +174,31 @@ _Auto-generowane przez `scripts/skills_index.py` — sekcje per-agent czytane na
 - `gstack-upgrade` — Upgrade gstack to the latest version.
 - `image-to-code` — Elite website image-to-code skill for Codex.
 - `improve` — Use when the user invokes /improve, asks for architecture improvement, refactoring opportunities, deeper modules, better test seams, or codebase AI-navigabil...
-- `master-agent` — Route Codex mode commands through the canonical dszub master-agent protocol.
+- `last30days` — Research what people actually say about any topic in the last 30 days.
+- `master-agent` — Master Agent mode system for structured engineering work.
 - `minimalist-ui` — Clean editorial-style interfaces.
+- `ponytail-on-demand` — Find the smallest correct implementation for bounded R0/R1 coding, refactoring, dependency, or design tasks.
+- `ponytail-on-demand` — Find the smallest correct implementation for bounded R0/R1 coding, refactoring, dependency, or design tasks.
 - `prototype` — Use when the user invokes /prototype, wants a throwaway logic/UI experiment, wants to feel out a state model, compare UI variants, or sanity-check an idea be...
 - `redesign-existing-projects` — Upgrades existing websites and apps to premium quality.
+- `run-model-team` — Orchestrate repository work with fixed model ownership: GPT-5.6 Sol at high reasoning and normal service speed for planning, architecture, queue management,...
 - `tdd` — Use when the user invokes /tdd, asks for test-driven development, wants a behavior implemented test-first, or a bug fixed by writing the regression test befo...
 - `tester` — Supervisor-led test automation for Tsignal and related Windows runtime flows.
+- `truthdeck` — Produce deterministic evidence snapshots and one advisory next action without mutating application repositories or runtime.
 - `tsu-dashboard-taste` — Override for real-time trading/financial dashboards (TSU cockpit, tray panel, live P&L/price/position views).
 - `zoom-out` — Use when the user invokes /zoom-out, asks for broader context, wants to understand a module/path/repo before acting, or seems lost in implementation details.
 
 ### Cursor (`~/.cursor/skills-cursor`) — 19
-- `automate` — Use this skill to create Cursor Automations.
 - `babysit` — Keep a PR merge-ready by triaging comments, resolving clear conflicts, and fixing CI in a loop.
-- `canvas` — A Cursor Canvas is a live React app that the user can open beside the chat.
+- `canvas`
 - `create-hook` — Create Cursor hooks.
 - `create-rule` — Create Cursor rules for persistent AI guidance.
 - `create-skill` — Create Cursor Agent Skills.
 - `create-subagent` — Create custom subagents for specialized AI tasks.
+- `env-setup` — Explain, inspect, configure, and troubleshoot Cloud Agent development environments.
 - `loop` — Run a prompt or skill in this session on a recurring or variable interval (e.g.
+- `migrate-to-builds` — Test that a Cloud Agent environment will work with prebuilt environment builds and recommend any required changes.
 - `migrate-to-skills` — Convert 'Applied intelligently' Cursor rules (.cursor/rules/*.mdc) and slash commands (.cursor/commands/*.md) to Agent Skills format (.cursor/skills/).
-- `onboard` — Use /onboard for a focused Cursor onboarding flow that learns basic preferences, picks a first goal, and routes the user to the right next action.
 - `review` — Review code changes with the Bugbot or Security Review subagent.
 - `review-bugbot` — Review code changes with Bugbot subagent.
 - `review-security` — Review code changes with Security Review subagent.
@@ -215,3 +229,4 @@ code-review - simplify - verify - run - init - review - security-review - loop -
 docx - pdf - pptx - xlsx - algorithmic-art - skill-creator - consolidate-memory - setup-cowork
 
 > Komendy z dialogiem terminala (/permissions, /config, /agents, /doctor, /hooks) dzialaja tylko w interaktywnym `claude`, nie w sesji nieinteraktywnej.
+

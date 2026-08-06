@@ -39,6 +39,7 @@ same z opisu — ich nie musisz pamiętać. Nawyk musisz zbudować tylko dla
 | Przed commitem nietrywialnej zmiany | `/verify` | przejedź flow end-to-end, nie tylko testy |
 | Przed merge | `/code-review` (R2/R3 zawsze; R1 przy dużym diffie); R3: zaproponuj operatorowi `ultra` | gate wg klasy ryzyka — nie do pominięcia |
 | Kod działa, chcesz go odchudzić | `/simplify` | reuse/uproszczenia bez polowania na bugi |
+| Odpowiedź agenta nie zagrała / za gęsta | `/wait-what` (Matt, NOWY) | re-pitch: prościej, z kontekstem i językiem domeny |
 | Kontekst sesji pełny / przekazujesz pracę | `/handoff` (kompaktuje rozmowę) lub `/context-save` | kondensat zamiast re-czytania historii |
 | "Czy myśmy tego już nie rozwiązali?" | `mem-search` (claude-mem) | 388k tokenów przeszłych sesji jest przeszukiwalne |
 | Research: fakty z docs/API, delegowane w tło | `/research` (Matt, NOWY) | background agent, cytowane źródła, plik .md w repo |
@@ -46,20 +47,22 @@ same z opisu — ich nie musisz pamiętać. Nawyk musisz zbudować tylko dla
 | Research: co ludzie mówią OSTATNIO | `/last30days` | Reddit/X/HN/YT z last 30 days |
 | Pytanie o TSU (arming, custody, depth, porty...) | nic — skille `tsu-*` triggerują się same | 11 destylowanych skilli; nie odbudowuj wiedzy ręcznie |
 | Nowe repo / odświeżenie wiedzy repo | `/distill-repo` | builder biblioteki skilli per-repo (ręczny, po epiku/~4 tyg.) |
-| Piszesz/poprawiasz skilla | `/writing-great-skills` + `skill-creator` | słownik + failure modes (Negation, Negative Space) |
+| Piszesz/poprawiasz skilla | `/writing-for-agents` (dawniej writing-great-skills) + `skill-creator` | słownik wchłonięty do SKILL.md; obejmuje też CLAUDE.md/AGENTS.md |
 | Frontend/UI | samo się załaduje (taste stack); live dashboardy: `tsu-dashboard-taste` nadpisuje | anti-slop + zakaz animacji na live danych |
 | Zmiana wygląda groźnie (delete/reset/prod) | `/careful` lub `/guard`, `/freeze` na katalog | guardraile zanim coś zniknie |
 | Koniec tygodnia / po wysyłce | `/retro`, `/learn` (zapis lekcji) | compounding: lekcje wracają w następnych sesjach |
 
-## 2. Jak używać pakietu grill (nowo zainstalowany, v1.1.0)
+## 2. Jak używać pakietu grill (v1.2.2)
 
 Trzy warianty, jeden silnik (`grilling`):
 
-- **`/grill-me`** — czysty wywiad o plan/design. Mechanika: pyta o JEDNĄ rzecz
-  na raz i czeka; fakty sprawdza sam w repo, ale **decyzje są Twoje** — każdą
-  wykłada z własną rekomendacją; nie zacznie implementować, dopóki nie
-  potwierdzisz shared understanding. Kiedy: zanim powstanie plan/spec; gdy
-  czujesz "wiem czego chcę, ale nie umiem tego wysłowić".
+- **`/grill-me`** — czysty wywiad o plan/design. Mechanika (od v1.2.2): mapuje
+  temat jako drzewo decyzji i pyta **rundami po frontierze** — wszystkie pytania,
+  których zależności już rozstrzygnięte, naraz, każde ponumerowane i z własną
+  rekomendacją; fakty sprawdza sam (subagentami w tle), ale **decyzje są Twoje**.
+  Koniec, gdy frontier pusty; nie zacznie implementować, dopóki nie potwierdzisz
+  shared understanding. Kiedy: zanim powstanie plan/spec; gdy czujesz "wiem
+  czego chcę, ale nie umiem tego wysłowić".
 - **`/grill-with-docs`** — jak wyżej + kotwiczy pytania w istniejących
   dokumentach/kodzie i buduje domain model. Kiedy: feature w istniejącym
   systemie, gdzie diabeł tkwi w obecnych kontraktach.
