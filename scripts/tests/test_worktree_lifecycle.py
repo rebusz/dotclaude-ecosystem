@@ -180,6 +180,15 @@ class TestTerminalClassification(unittest.TestCase):
                     ),
                     lifecycle.ELIGIBLE_DETACHED_REMOVE,
                 ),
+                (
+                    dict(
+                        git_ok=True,
+                        dirty_paths=(),
+                        work_reached_trunk=False,
+                        metadata=_metadata(root, branch=None),
+                    ),
+                    lifecycle.DETACHED_UNMERGED_CUSTODY,
+                ),
             ]
             for kwargs, expected in cases:
                 with self.subTest(expected=expected):
