@@ -1,0 +1,48 @@
+diff --git a/browse/src/bun-polyfill.cjs b/browse/src/bun-polyfill.cjs
+index e0ada11..b36f39e 100644
+--- a/browse/src/bun-polyfill.cjs
++++ b/browse/src/bun-polyfill.cjs
+@@ -75,6 +75,9 @@ globalThis.Bun = {
+       timeout: options.timeout,
+       env: options.env,
+       cwd: options.cwd,
++      // Windows: without this every probe (e.g. the tasklist liveness check)
++      // pops a visible console window. Bun.spawnSync never shows one.
++      windowsHide: true,
+     });
+ 
+     return {
+@@ -91,6 +94,9 @@ globalThis.Bun = {
+       stdio,
+       env: options.env,
+       cwd: options.cwd,
++      // Windows: without this, spawning a console app (bun.exe) from Node
++      // creates a new console window. Bun.spawn never shows one.
++      windowsHide: true,
+     });
+ 
+     return {
+diff --git a/browse/src/error-handling.ts b/browse/src/error-handling.ts
+index 2c4e271..1419b25 100644
+--- a/browse/src/error-handling.ts
++++ b/browse/src/error-handling.ts
+@@ -39,6 +39,19 @@ export function safeKill(pid: number, signal: NodeJS.Signals | number): void {
+ /** Check if a PID is alive. Pure boolean probe — returns false for ALL errors. */
+ export function isProcessAlive(pid: number): boolean {
+   if (IS_WINDOWS) {
++    // Signal 0 is a cheap, synchronous existence probe that works on Windows
++    // and never spawns a child. Preferred over tasklist: the spawn path costs
++    // ~230ms (measured), pops a console window under the Node polyfill, and
++    // its 3s timeout returns an empty buffer under load — reported as "dead",
++    // which made the watchdog respawn a live agent and leak the old one.
++    try {
++      process.kill(pid, 0);
++      return true;
++    } catch (err: any) {
++      if (err?.code === 'EPERM') return true;  // exists, owned by another user
++      if (err?.code === 'ESRCH') return false; // definitively gone
++      // Anything else: fall through to the tasklist probe below.
++    }
+     try {
+       const result = Bun.spawnSync(
+         ['tasklist', '/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'],
