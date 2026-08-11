@@ -3,5 +3,11 @@
 *.json text eol=lf
 *.py text eol=lf
 *.ps1 text eol=crlf
+# Patches MUST stay LF: git apply compares the patch bytes against the target
+# file, so a CRLF-converted patch fails with "patch does not apply" (verified
+# 2026-07-24 against install/patches/gstack/). With core.autocrlf=true these
+# would be checked out as CRLF and silently stop applying.
+*.patch text eol=lf
+*.diff text eol=lf
 *.pdf binary
 *.xlsx binary
