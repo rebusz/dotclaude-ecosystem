@@ -46,6 +46,10 @@
   argv flags alone, inbox, environment, MCP, or agent assignment paths.
 - Storage growth is read back with numeric ceilings and report-only retention;
   status must be checked before starting another heavy lane.
+- **CI runner pool exemption (decided 2026-08-13, zero-spend CI plan §8):** the
+  workstation's GitHub Actions self-hosted runner pool is EXEMPT from the capacity-one
+  `host:heavy` lease — governed instead by pool size, BelowNormal priority, the pilot
+  SLO drain ladder, and `TsignalCiWatchdog` readback (`~/.claude/state/ci_watchdog/`).
 
 ## Land-On-Main Lifecycle
 
@@ -53,7 +57,7 @@
 - ONE clean path per change: branch -> validate -> commit -> draft PR -> risk-routed review gate -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout. Report it in one line.
 - Never create avoidable divergence (no cherry-pick onto local main alongside a PR for the same change). An agent usually works in a `.claude/worktrees/...` branch while the operator runs from `D:/APPS/<repo>`; after merge, fast-forward that checkout.
 - R2/R3 lands via draft PR + review gate — never direct-push or self-merge to `main`; R0 docs and CI-ignored paths may use the normal flow. Real-money/Combine triggers, production deploys, and destructive actions still need just-in-time GO. Details -> `agent-rules/refs/delegated-execution-protocol.md`.
-- Metered Actions: keep implementation PRs draft while work moves, batch pushes, validate locally, then `gh pr ready` once for the single paid CI run. State draft-vs-ready and what validation ran in the final summary.
+- CI Discipline: Tsignal and TSU CI runs on the workstation's self-hosted runner pool — unmetered, but each runner is capacity-one and shares the box with the live trading stack. Keep implementation PRs draft while work moves, batch pushes, validate locally, then `gh pr ready` once — one CI pass per change instead of occupying a runner on every push. Small repos still on GitHub-hosted free tier do spend hosted minutes; the same batching keeps them inside it. State draft-vs-ready and what validation ran in the final summary.
 
 ## Commit And Push Defaults
 
