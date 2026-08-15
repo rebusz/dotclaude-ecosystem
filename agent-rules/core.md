@@ -25,7 +25,7 @@
 ## Execution Defaults
 
 - Assess whether work splits into independent lanes; run or delegate them concurrently when the tooling supports it.
-- Use the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost.
+- Use the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost. Perplexity Max is the **CoderPX** manual relay lane (agent packet -> operator paste -> draft PR/inbox -> same agent verifies and lands; never automate the Perplexity web UI, Perplexity never merges): protocol + packet template in `D:/APPS/_shared/coderpx/README.md`.
 - An approved audited plan (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carries standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens. Re-ask only for scope expansion, unresolved failure/conflict, a real-money/Combine trigger, a destructive action, or a pause.
 - Validate each slice; final reports state changes, tests, remaining work, and repo state.
 
