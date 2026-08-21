@@ -1,5 +1,6 @@
 """Unit tests for conductorctl CLI, conductord coordinator, and conductor_mcp server."""
 
+import json
 import pathlib
 import pytest
 
@@ -77,3 +78,45 @@ def test_coordinator_single_pass_loop(tmp_path: pathlib.Path, monkeypatch: pytes
     receipt = store.get_receipt("idemp_inbox_loop")
     assert receipt is not None
     assert receipt.status == "SUCCESS"
+
+
+def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    """Drive the real conductorctl surface, refusal branch included."""
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+
+    from datetime import datetime, timedelta, timezone
+
+    from scripts import conductorctl
+    from scripts.conductor_resources import DEFAULT_LEASE_TTL_SECONDS, HostResourceManager
+
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store)
+    wedged = manager.request(purpose="cdp_provider", attempt_id="at-cli", agent_instance="inst-cli")
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    queued = manager.request(purpose="pytest_full", attempt_id="at-cli-queued", agent_instance="inst-cli")
+
+    # Without attestation the CLI must fail closed and exit non-zero.
+    assert conductorctl.main(["resource-recover", "--request-id", wedged["request_id"]]) == 1
+    refusal = json.loads(capsys.readouterr().out)
+    assert refusal["status"] == "ERROR"
+    assert "OWNER_LIVENESS_UNPROVEN" in refusal["error_message"]
+
+    exit_code = conductorctl.main(
+        [
+            "resource-recover",
+            "--request-id",
+            wedged["request_id"],
+            "--attest-owner-gone",
+            "--reason",
+            "owning agent host is gone",
+        ]
+    )
+    assert exit_code == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "SUCCESS"
+    assert receipt["result"]["evidence"] == "OPERATOR_ATTESTED"
+    assert receipt["result"]["promoted"]["request_id"] == queued["request_id"]
+
+    status = HostResourceManager(ConductorStore(root_dir=tmp_path)).status()
+    assert status["recovery_required"] == 0
+    assert status["active_units"] == 1

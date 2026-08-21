@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 import pathlib
+import subprocess
 import sys
+
+import psutil
 
 import pytest
 
 from scripts.conductor_resources import (
+    DEFAULT_LEASE_TTL_SECONDS,
     HostResourceManager,
     ResourceAdmissionError,
     ResourceBusyError,
@@ -303,3 +308,138 @@ def test_pytest_adapter_filters_secret_environment_and_rejects_arbitrary_executa
             attempt_id="at-arbitrary",
             agent_instance="inst",
         )
+
+
+def _wedge(manager: HostResourceManager, *, purpose: str = "cdp_provider") -> dict:
+    """Drive a real request into RECOVERY_REQUIRED the way expiry does."""
+    request = manager.request(purpose=purpose, attempt_id="at-wedge", agent_instance="inst-wedge")
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert manager.status()["recovery_required"] == 1
+    return request
+
+
+def _set_lease_process(manager: HostResourceManager, lease_id: str, pid, start_time) -> None:
+    with manager.store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_leases SET process_pid = ?, process_start_time = ? WHERE lease_id = ?",
+            (pid, start_time, lease_id),
+        )
+
+
+def _events(manager: HostResourceManager, request_id: str) -> list:
+    with manager.store._connection() as conn:
+        return conn.execute(
+            "SELECT * FROM host_resource_events WHERE request_id = ? ORDER BY recorded_at_utc",
+            (request_id,),
+        ).fetchall()
+
+
+def test_release_still_refuses_a_recovery_required_request(manager: HostResourceManager):
+    request = _wedge(manager)
+    with pytest.raises(ResourceAdmissionError, match="RECOVERY_REQUIRED_RELEASE_REFUSED"):
+        manager.release(request["request_id"])
+    assert manager.status()["recovery_required"] == 1
+
+
+def test_recover_refuses_while_the_recorded_owner_is_alive(manager: HostResourceManager):
+    request = _wedge(manager)
+    _set_lease_process(
+        manager, request["lease_id"], os.getpid(), psutil.Process(os.getpid()).create_time()
+    )
+
+    with pytest.raises(ResourceAdmissionError, match="OWNER_PROCESS_ALIVE"):
+        manager.recover(request["request_id"])
+    # Attestation is not an override: a live process outranks an operator claim.
+    with pytest.raises(ResourceAdmissionError, match="OWNER_PROCESS_ALIVE"):
+        manager.recover(request["request_id"], operator_attestation=True, reason="I say it is dead")
+    assert manager.status()["recovery_required"] == 1
+
+
+def test_recover_refuses_an_unrecorded_owner_without_attestation(manager: HostResourceManager):
+    request = _wedge(manager)
+    with pytest.raises(ResourceAdmissionError, match="OWNER_LIVENESS_UNPROVEN"):
+        manager.recover(request["request_id"])
+    with pytest.raises(ValueError, match="requires a reason"):
+        manager.recover(request["request_id"], operator_attestation=True, reason="   ")
+    assert manager.status()["recovery_required"] == 1
+
+
+def test_recover_attested_frees_capacity_and_promotes_the_queue(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    queued = manager.request(purpose="pytest_full", attempt_id="at-queued", agent_instance="inst-queued")
+    assert queued["state"] == HostResourceRequestState.QUEUED.value
+
+    result = manager.recover(
+        wedged["request_id"],
+        operator_attestation=True,
+        reason="codex-root-4075 host is gone; no surviving process",
+        actor="operator_cli",
+    )
+
+    assert result["status"] == "RECOVERED"
+    assert result["evidence"] == "OPERATOR_ATTESTED"
+    assert result["attested"] is True
+    assert result["promoted"]["request_id"] == queued["request_id"]
+
+    status = manager.status()
+    assert status["recovery_required"] == 0
+    assert status["queued"] == 0
+    assert status["active_units"] == 1
+
+    recorded = _events(manager, wedged["request_id"])[-1]
+    assert recorded["previous_state"] == HostResourceRequestState.RECOVERY_REQUIRED.value
+    assert recorded["next_state"] == HostResourceRequestState.RELEASED.value
+    assert recorded["actor_identity"] == "operator_cli"
+    details = json.loads(recorded["details_json"])
+    assert details["evidence"] == "OPERATOR_ATTESTED"
+    assert "codex-root-4075" in details["operator_reason"]
+
+
+def test_recover_needs_no_attestation_once_the_owner_process_is_gone(manager: HostResourceManager):
+    request = _wedge(manager, purpose="pytest_heavy")
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    _set_lease_process(manager, request["lease_id"], dead.pid, None)
+
+    result = manager.recover(request["request_id"])
+
+    assert result["status"] == "RECOVERED"
+    assert result["evidence"] == "OWNER_PROCESS_GONE"
+    assert result["attested"] is False
+    assert manager.status()["recovery_required"] == 0
+
+
+def test_recover_treats_a_reused_pid_as_a_dead_owner(manager: HostResourceManager):
+    request = _wedge(manager)
+    # Same pid, a start time that predates it: the original owner is gone and
+    # the OS handed the number to somebody else.
+    _set_lease_process(manager, request["lease_id"], os.getpid(), 1.0)
+
+    result = manager.recover(request["request_id"])
+
+    assert result["evidence"] == "OWNER_PID_REUSED"
+    assert manager.status()["recovery_required"] == 0
+
+
+def test_recover_refuses_a_request_that_is_not_wedged(manager: HostResourceManager):
+    active = manager.request(purpose="pytest_full", attempt_id="at-live", agent_instance="inst-live")
+    with pytest.raises(ResourceAdmissionError, match="RESOURCE_REQUEST_NOT_RECOVERABLE"):
+        manager.recover(active["request_id"])
+    with pytest.raises(ResourceAdmissionError, match="RESOURCE_REQUEST_NOT_FOUND"):
+        manager.recover("rr_does_not_exist")
+
+
+def test_recover_refuses_while_an_inherited_child_still_holds_the_lease(manager: HostResourceManager):
+    parent = manager.request(purpose="cdp_provider", attempt_id="at-parent", agent_instance="inst-parent")
+    child = manager.request(
+        purpose="pytest_focused",
+        attempt_id="at-child",
+        agent_instance="inst-child",
+        parent_lease_id=parent["lease_id"],
+    )
+    assert child["state"] == HostResourceRequestState.INHERITED.value
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    with pytest.raises(ResourceBusyError, match="INHERITED_CHILD_ACTIVE"):
+        manager.recover(parent["request_id"], operator_attestation=True, reason="parent host died")
+    assert manager.status()["recovery_required"] == 1
