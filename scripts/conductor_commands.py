@@ -295,6 +295,15 @@ class ConductorCommandProcessor:
             reason=payload.get("reason", "RESOURCE_RELEASED"),
         )
 
+    def _handle_resource_recover(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Clear one RECOVERY_REQUIRED request once its owner is proven gone."""
+        return self.resources.recover(
+            payload["request_id"],
+            operator_attestation=bool(payload.get("operator_attestation", False)),
+            reason=payload.get("reason", ""),
+            actor=payload.get("actor", "resource-command"),
+        )
+
     def _handle_resource_reconcile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.resources.reconcile(dry_run=bool(payload.get("dry_run", False)))
 

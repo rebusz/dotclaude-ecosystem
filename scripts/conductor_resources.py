@@ -463,6 +463,111 @@ class HostResourceManager:
                 "dry_run": dry_run,
             }
 
+    def recover(
+        self,
+        request_id: str,
+        *,
+        operator_attestation: bool = False,
+        reason: str = "",
+        actor: str = "resource-recovery",
+    ) -> Dict[str, Any]:
+        """Clear one RECOVERY_REQUIRED request once its owner is proven gone.
+
+        ``release`` refuses this state on purpose: an expired lease is an
+        ambiguity boundary, not a death certificate.  Recovery is the explicit
+        crossing of that boundary and it demands evidence.
+
+        A lease that recorded its bounded child yields that evidence on its own:
+        the pid is gone, or the pid was reused and its start time no longer
+        matches the one recorded at admission.  A lease that never recorded a
+        child - a consumer that took capacity and died before attaching one -
+        cannot be adjudicated by the harness at all, so an operator must attest
+        the owner is gone and say why.  Attestation never overrides a process
+        that is still running.  Both paths write their evidence into the event
+        ledger, so a recovered slot always names who freed it and on what basis.
+        """
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM host_resource_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if not row:
+                raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_FOUND")
+            if row["state"] != HostResourceRequestState.RECOVERY_REQUIRED.value:
+                raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_RECOVERABLE")
+
+            lease_row = conn.execute(
+                "SELECT * FROM host_resource_leases WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            lease_id = lease_row["lease_id"] if lease_row else row["parent_lease_id"]
+
+            inherited_children = conn.execute(
+                """
+                SELECT COUNT(*) FROM host_resource_requests
+                WHERE parent_lease_id = ? AND state = ?
+                """,
+                (lease_id or "", HostResourceRequestState.INHERITED.value),
+            ).fetchone()[0]
+            if inherited_children:
+                # The split-brain the release refusal exists to prevent: the
+                # parent is gone but a child still believes it holds capacity.
+                raise ResourceBusyError("INHERITED_CHILD_ACTIVE")
+
+            owner_gone, evidence = self._owner_liveness(
+                lease_row["process_pid"] if lease_row else None,
+                lease_row["process_start_time"] if lease_row else None,
+            )
+            if not owner_gone:
+                if evidence == "OWNER_PROCESS_ALIVE":
+                    raise ResourceAdmissionError("OWNER_PROCESS_ALIVE")
+                if not operator_attestation:
+                    raise ResourceAdmissionError("OWNER_LIVENESS_UNPROVEN")
+                if not reason.strip():
+                    raise ValueError("operator attestation requires a reason")
+                evidence = "OPERATOR_ATTESTED"
+
+            reason_code = "RECOVERY_ATTESTED" if evidence == "OPERATOR_ATTESTED" else "RECOVERY_OWNER_GONE"
+            conn.execute(
+                "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
+                (HostResourceRequestState.RELEASED.value, current_utc_iso(), reason_code, request_id),
+            )
+            self._event(
+                conn,
+                request_id,
+                lease_id,
+                HostResourceRequestState.RECOVERY_REQUIRED.value,
+                HostResourceRequestState.RELEASED.value,
+                actor,
+                reason_code,
+                details={
+                    "evidence": evidence,
+                    "operator_reason": reason.strip(),
+                    "recovered_lease_id": lease_id,
+                },
+            )
+            promoted = self._promote_locked(conn, actor=actor)
+            return {
+                "request_id": request_id,
+                "status": "RECOVERED",
+                "evidence": evidence,
+                "attested": evidence == "OPERATOR_ATTESTED",
+                "promoted": promoted,
+            }
+
+    @staticmethod
+    def _owner_liveness(pid: Optional[int], start_time: Optional[float]) -> tuple[bool, str]:
+        """Adjudicate a recorded lease process as gone, alive, or unrecorded."""
+        if pid is None:
+            return False, "OWNER_UNRECORDED"
+        try:
+            observed_start = psutil.Process(int(pid)).create_time()
+        except (OSError, ValueError, psutil.Error):
+            return True, "OWNER_PROCESS_GONE"
+        if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
+            # Same pid, different process: the owner died and the OS reused it.
+            return True, "OWNER_PID_REUSED"
+        return False, "OWNER_PROCESS_ALIVE"
+
     def status(self) -> Dict[str, Any]:
         pool = self.store.get_resource_pool(self.resource_key)
         requests = self.store.list_resource_requests(resource_key=self.resource_key)
@@ -818,15 +923,35 @@ class HostResourceManager:
         return {"request_id": request.request_id, "lease_id": lease_id, "state": HostResourceRequestState.ACTIVE.value}
 
     @staticmethod
-    def _event(conn: Any, request_id: str, lease_id: Optional[str], previous: Optional[str], next_state: str, actor: str, reason: str) -> None:
+    def _event(
+        conn: Any,
+        request_id: str,
+        lease_id: Optional[str],
+        previous: Optional[str],
+        next_state: str,
+        actor: str,
+        reason: str,
+        details: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         conn.execute(
             """
             INSERT INTO host_resource_events (
                 event_id, request_id, lease_id, previous_state, next_state,
                 actor_identity, reason_code, recorded_at_utc, details_json, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (f"hre_{uuid.uuid4().hex[:12]}", request_id, lease_id, previous, next_state, actor, reason, current_utc_iso(), "conductor.resource-event.v1"),
+            (
+                f"hre_{uuid.uuid4().hex[:12]}",
+                request_id,
+                lease_id,
+                previous,
+                next_state,
+                actor,
+                reason,
+                current_utc_iso(),
+                json.dumps(dict(details or {}), sort_keys=True),
+                "conductor.resource-event.v1",
+            ),
         )
 
     @staticmethod

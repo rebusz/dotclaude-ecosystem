@@ -58,6 +58,22 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_release = subparsers.add_parser("resource-release", help="Release a host resource request")
     p_resource_release.add_argument("--request-id", required=True)
 
+    p_resource_recover = subparsers.add_parser(
+        "resource-recover",
+        help="Clear a RECOVERY_REQUIRED host resource request once its owner is proven gone",
+    )
+    p_resource_recover.add_argument("--request-id", required=True)
+    p_resource_recover.add_argument(
+        "--attest-owner-gone",
+        action="store_true",
+        help="Operator attestation for a lease that never recorded a child process; refused while a recorded process is alive",
+    )
+    p_resource_recover.add_argument(
+        "--reason",
+        default="",
+        help="Why the owner is known to be gone (required with --attest-owner-gone)",
+    )
+
     p_resource_reconcile = subparsers.add_parser("resource-reconcile", help="Reconcile expired host resource leases")
     p_resource_reconcile.add_argument("--dry-run", action="store_true")
 
@@ -194,6 +210,22 @@ def main(argv: list[str] | None = None) -> int:
         receipt = processor.process_envelope(envelope)
         print(json.dumps(receipt.to_dict(), indent=2))
         return 0
+
+    elif args.command == "resource-recover":
+        envelope = CommandEnvelope(
+            command_id=f"cmd_{uuid.uuid4().hex[:12]}",
+            command_type="resource_recover",
+            payload={
+                "request_id": args.request_id,
+                "operator_attestation": args.attest_owner_gone,
+                "reason": args.reason,
+                "actor": "operator_cli",
+            },
+            idempotency_key=f"idemp_resource_recover_{uuid.uuid4().hex[:8]}",
+        )
+        receipt = processor.process_envelope(envelope)
+        print(json.dumps(receipt.to_dict(), indent=2))
+        return 0 if receipt.status == "SUCCESS" else 1
 
     elif args.command == "resource-reconcile":
         envelope = CommandEnvelope(
