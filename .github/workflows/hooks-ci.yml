@@ -86,3 +86,9 @@ jobs:
           $null = [scriptblock]::Create((Get-Content install/install.ps1 -Raw))
       - shell: pwsh
         run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+
+  conductor-posix-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n install/install.sh
