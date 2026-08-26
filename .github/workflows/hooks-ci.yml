@@ -57,6 +57,7 @@ jobs:
       # validate the shipped manifest loads under the code-owned schema/allowlist
       - run: python scripts/hooks_install.py version
 
+  # Conductor install/admission validation gate
   conductor:
     runs-on: windows-latest
     steps:
