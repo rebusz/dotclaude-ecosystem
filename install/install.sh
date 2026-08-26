@@ -4,6 +4,16 @@
 
 set -euo pipefail
 
+INSTALL_CONDUCTOR=0
+if [ "${1:-}" = "--install-conductor" ]; then
+    INSTALL_CONDUCTOR=1
+    shift
+fi
+if [ "$#" -ne 0 ]; then
+    echo "usage: $0 [--install-conductor]" >&2
+    exit 2
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLAUDE_HOME="${HOME}/.claude"
 CODEX_HOME="${HOME}/.codex"
@@ -96,6 +106,27 @@ for f in MEMORY.md ECOSYSTEM_IDEA_BOX.md; do
     fi
 done
 
+# Conductor has its own ownership-checked installer. A live manifest is an
+# admission boundary for fail-closed clients, so a normal ecosystem install
+# must never create it implicitly.
+CONDUCTOR_INSTALLER="$REPO_ROOT/scripts/conductor_install.py"
+echo
+if [ "$INSTALL_CONDUCTOR" -eq 1 ]; then
+    echo "[Conductor] Explicit runtime install requested (activation-sensitive)"
+    python3 "$CONDUCTOR_INSTALLER" install --repo-root "$REPO_ROOT" --home "$HOME"
+    echo "  installer-owned Conductor runtime installed"
+else
+    echo "[Conductor] Runtime install not requested; read-only status only"
+    set +e
+    python3 "$CONDUCTOR_INSTALLER" status --repo-root "$REPO_ROOT" --home "$HOME"
+    CONDUCTOR_STATUS_EXIT=$?
+    set -e
+    if [ "$CONDUCTOR_STATUS_EXIT" -ne 0 ]; then
+        echo "  Conductor status is non-clean (exit $CONDUCTOR_STATUS_EXIT); no Conductor mutation performed"
+    fi
+    echo "  no Conductor install was attempted; use --install-conductor only after runtime GO"
+fi
+
 echo
 echo "=== Install complete ==="
 echo
@@ -105,3 +136,4 @@ echo "  2. Review ~/.claude/settings.json hooks"
 echo "  3. (Optional) Set up your private context repo for AI tool sharing"
 echo "  4. Run: python ~/.claude/scripts/plan_catalog.py to generate PLANS.md"
 echo "  5. Run: python ~/.claude/scripts/vision_catalog.py to generate VISIONS.md"
+echo "  6. Conductor stays read-only/uninstalled unless --install-conductor is explicitly supplied after runtime GO"
