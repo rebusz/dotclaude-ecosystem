@@ -1,0 +1,51 @@
+name: Conductor CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "scripts/conductor*.py"
+      - "scripts/tests/test_conductor*.py"
+      - "skills/conductor/**"
+      - "install/install.ps1"
+      - "install/install.sh"
+      - "docs/INSTALL.md"
+      - "requirements-conductor-mcp.txt"
+      - ".github/workflows/conductor-ci.yml"
+
+jobs:
+  conductor-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: >-
+          python -m pip install pytest "ruff==0.15.20" psutil
+          -r requirements-conductor-mcp.txt
+      - shell: pwsh
+        run: |
+          $tests = @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m pytest -q @tests
+      - shell: pwsh
+        run: |
+          $files = @(Get-ChildItem scripts/conductor*.py) + @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m ruff check @files
+      - shell: pwsh
+        run: |
+          $files = @(Get-ChildItem scripts/conductor*.py) + @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m py_compile @files
+      - shell: pwsh
+        run: |
+          $null = [scriptblock]::Create((Get-Content install/install.ps1 -Raw))
+      - shell: pwsh
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+
+  installer-posix-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n install/install.sh
