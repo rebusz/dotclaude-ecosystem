@@ -32,7 +32,7 @@ Copy-Item -Path "$ScriptsSrc\*.py" -Destination $ScriptsDst -Force
 
 # Skills
 Write-Host "[3/6] Copy skills -> ~/.claude/skills/" -ForegroundColor Cyan
-$BundledSkills = @("master-agent", "executor", "distill-repo", "ponytail-on-demand")
+$BundledSkills = @("master-agent", "executor", "distill-repo", "ponytail-on-demand", "run-model-team")
 foreach ($skill in $BundledSkills) {
     $src = Join-Path $RepoRoot "skills\$skill"
     $dst = Join-Path $ClaudeHome "skills\$skill"
@@ -40,7 +40,7 @@ foreach ($skill in $BundledSkills) {
     Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 }
 if (Test-Path $CodexHome) {
-    $CodexSkills = @("master-agent", "executor", "ponytail-on-demand")
+    $CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team")
     foreach ($skill in $CodexSkills) {
         $src = Join-Path $RepoRoot "skills\$skill"
         $dst = Join-Path $CodexHome "skills\$skill"

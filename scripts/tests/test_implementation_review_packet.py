@@ -180,9 +180,9 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         powershell = (ROOT / "install" / "install.ps1").read_text(encoding="utf-8")
         shell = (ROOT / "install" / "install.sh").read_text(encoding="utf-8")
 
-        self.assertIn('$CodexSkills = @("master-agent", "executor", "ponytail-on-demand")', powershell)
+        self.assertIn('$CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team")', powershell)
         self.assertIn('Join-Path $CodexHome "skills\\$skill"', powershell)
-        self.assertIn("CODEX_SKILLS=(master-agent executor ponytail-on-demand)", shell)
+        self.assertIn("CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team)", shell)
         self.assertIn('for skill in "${CODEX_SKILLS[@]}"', shell)
         self.assertIn('$CODEX_HOME/skills/$skill', shell)
 
