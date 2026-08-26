@@ -31,13 +31,13 @@ cp "$REPO_ROOT/scripts/"*.py "$CLAUDE_HOME/scripts/"
 
 # Skills
 echo "[3/6] Copy skills -> ~/.claude/skills/"
-BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand)
+BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand run-model-team)
 for skill in "${BUNDLED_SKILLS[@]}"; do
     mkdir -p "$CLAUDE_HOME/skills/$skill"
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
 done
 if [ -d "$CODEX_HOME" ]; then
-    CODEX_SKILLS=(master-agent executor ponytail-on-demand)
+    CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team)
     for skill in "${CODEX_SKILLS[@]}"; do
         if [ -d "$CODEX_HOME/skills/$skill" ]; then
             cp -R "$CODEX_HOME/skills/$skill" "$CODEX_HOME/skills/$skill.bak.$STAMP"

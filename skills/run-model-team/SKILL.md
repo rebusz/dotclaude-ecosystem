@@ -150,7 +150,7 @@ default model-team boundary.
 
 ### Perplexity CoderPX CDP
 
-Use `D:/APPS/WatchF/scripts/perplexity_audit.py --probe-models` for the current
+Use `D:/APPS/WatchF/scripts/coderpx.py --probe-models` for the current
 picker, then dispatch a fully rendered `coderpx.packet.v2` packet through
 `D:/APPS/WatchF/scripts/coderpx.py --model <visible-model-fragment>`. CoderPX
 owns the Conductor + on-demand `chrome_ppl` lifecycle and writes response plus
@@ -191,10 +191,11 @@ python <dispatcher> run --role perplexity --repo <isolated-worktree> --prompt-fi
 python <dispatcher> run --role fable --repo <repo> --prompt-file <packet> --task-kind architecture --critical --out <result.json>
 ```
 
-Workers may edit and test only inside their packet. They do not commit, push,
-merge, mark Ready, restart runtimes, or trigger external/live effects. Sol or
-the owning workflow inspects the real diff and test exit code before accepting
-anything.
+Workers may edit and test only inside their packet. The sole commit/push
+exception is a packet-authorized CoderPX implementation branch plus Draft PR;
+no worker merges, marks Ready, restarts runtimes, or triggers external/live
+effects. Sol or the owning workflow inspects the real diff and test exit code
+before accepting anything.
 
 ## Review and closeout
 
@@ -207,4 +208,3 @@ After every ship-blocking repair: validate, commit, push the corrected head, and
 review that exact head again. Final reporting separates implementation,
 validation, review, PR/merge state, and runtime/broker proof, and includes the
 queue plus every provider result or blocking artifact.
-

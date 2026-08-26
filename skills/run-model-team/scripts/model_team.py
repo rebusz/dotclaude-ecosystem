@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -73,7 +74,7 @@ PERPLEXITY_DRIVER = Path(
 PERPLEXITY_PROBE_DRIVER = Path(
     os.environ.get(
         "MODEL_TEAM_PERPLEXITY_PROBE_DRIVER",
-        str(WATCHF_ROOT / "scripts/perplexity_audit.py"),
+        str(PERPLEXITY_DRIVER),
     )
 )
 
@@ -653,6 +654,37 @@ def _require_coderpx_packet(prompt: str) -> None:
         )
 
 
+def _validate_coderpx_result(
+    metadata: dict[str, object],
+    *,
+    packet_path: Path,
+    response_path: Path,
+    requested_model: str,
+) -> None:
+    try:
+        manifest_response_path = Path(str(metadata["response_path"])).resolve()
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise DispatchError("CoderPX manifest response_path is invalid") from exc
+    response_sha256 = hashlib.sha256(response_path.read_bytes()).hexdigest()
+    packet_sha256 = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+    requested_label = str(metadata.get("requested_model_label") or "").strip()
+    verified_model = str(metadata.get("verified_model") or "").strip()
+    valid = (
+        metadata.get("schema") == "coderpx.result.v1"
+        and metadata.get("status") == "SUCCESS"
+        and metadata.get("exit_code") == 0
+        and manifest_response_path == response_path.resolve()
+        and metadata.get("response_sha256") == response_sha256
+        and metadata.get("packet_sha256") == packet_sha256
+        and metadata.get("requested_model_fragment") == requested_model
+        and bool(requested_label)
+        and bool(verified_model)
+        and requested_label.lower() in verified_model.lower()
+    )
+    if not valid:
+        raise DispatchError("CoderPX success manifest contract failed")
+
+
 def _fable_command(prompt: str) -> list[str]:
     executable = _executable("claude")
     if not executable:
@@ -840,12 +872,30 @@ def run_role(args: argparse.Namespace) -> int:
         )
         return 0
 
-    completed = _capture(
-        command,
-        timeout_s=args.timeout_s,
-        input_text=stdin,
-        cwd=repo if args.role not in {"chatgpt", "perplexity"} else WATCHF_ROOT,
-    )
+    outer_timeout_s = args.timeout_s + 120 if args.role == "perplexity" else args.timeout_s
+    try:
+        completed = _capture(
+            command,
+            timeout_s=outer_timeout_s,
+            input_text=stdin,
+            cwd=repo if args.role not in {"chatgpt", "perplexity"} else WATCHF_ROOT,
+        )
+    except DispatchError:
+        if args.role == "perplexity":
+            print(
+                json.dumps(
+                    {
+                        "status": "NO_RESULT",
+                        "role": "perplexity",
+                        "exit_code": 70,
+                        "response_path": str(out),
+                        "metadata_path": str(artifact_dir),
+                    },
+                    indent=2,
+                ),
+                file=sys.stderr,
+            )
+        raise
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[-3000:]
         if args.role == "perplexity":
@@ -879,8 +929,14 @@ def run_role(args: argparse.Namespace) -> int:
             metadata = json.loads(artifact_dir.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise DispatchError("CoderPX metadata is invalid JSON") from exc
-        if metadata.get("status") != "SUCCESS" or metadata.get("exit_code") != 0:
-            raise DispatchError("CoderPX success manifest contract failed")
+        if not isinstance(metadata, dict):
+            raise DispatchError("CoderPX metadata must be a JSON object")
+        _validate_coderpx_result(
+            metadata,
+            packet_path=prompt_file,
+            response_path=out,
+            requested_model=args.provider_model,
+        )
         print(
             json.dumps(
                 {
@@ -968,4 +1024,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
