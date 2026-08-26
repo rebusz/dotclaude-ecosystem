@@ -40,6 +40,36 @@ The installer is **idempotent** — safe to re-run. It backs up your existing `~
 
 The hook block is wired by `scripts/hooks_install.py` from `templates/hooks.manifest.json`, not a wholesale copy: existing foreign hooks and non-hook settings keys are preserved, the managed block is recorded in a sidecar manifest, and `hooks_install.py doctor` reports whether the block is present/absent/drifted in `settings.json` (run `/hooks` for the merged multi-source view). A `CLAUDE.md` that already exists is left in place with a `.from-template` sibling for manual merge.
 
+## Conductor runtime: explicit activation-sensitive install
+
+The normal ecosystem installer copies Conductor source files into `~/.claude/scripts/`, but it **does not** make that source copy an installed Conductor command owner. By default it runs only the read-only `scripts/conductor_install.py status` check and never creates `~/.conductor/install-manifest.json`.
+
+This distinction is intentional. `~/.conductor/conductor.db`, receipts, logs, or locks are durable **state**, not proof that the command runtime is installed. Fail-closed clients may treat a valid `conductor.install.v1` manifest as an admission boundary, so creating the live manifest must remain an explicit operator action.
+
+The canonical owner is `scripts/conductor_install.py`. Its default installation root is `~/.conductor/`; it installs the runtime under `~/.conductor/app/scripts/`, records SHA-256 ownership digests, and writes the canonical command tuple for `conductorctl` into `~/.conductor/install-manifest.json`. A TruthDeck `truthdeck.install.v1` manifest is a different contract and is not interchangeable.
+
+Read-only status is safe before activation:
+
+```powershell
+py scripts/conductor_install.py status --repo-root $PWD --home $env:USERPROFILE
+```
+
+```bash
+python3 scripts/conductor_install.py status --repo-root "$PWD" --home "$HOME"
+```
+
+Only after the runtime activation gate has been explicitly approved, use the opt-in installation path:
+
+```powershell
+.\install\install.ps1 -InstallConductor
+```
+
+```bash
+bash install/install.sh --install-conductor
+```
+
+Those opt-ins call the official installer; they do not synthesize or copy a manifest. The resulting `conductor.install.v1` manifest contains exactly these top-level fields: `schema_version`, `files`, `source_head_sha`, `source_tree_sha256`, `interpreter`, `canonical_commands`, and `shims`.
+
 ## After install
 
 1. **Personalize `~/.claude/CLAUDE.md`** — fill in the ecosystem table with your repos, customize risk classes
