@@ -1,4 +1,4 @@
-name: Installer CI
+name: Hooks CI
 
 on:
   pull_request:
