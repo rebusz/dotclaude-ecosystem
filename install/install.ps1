@@ -1,6 +1,10 @@
 # dotclaude-ecosystem installer (Windows)
 # Idempotent: safe to re-run.
 
+param(
+    [switch]$InstallConductor
+)
+
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -103,6 +107,28 @@ foreach ($f in @("MEMORY.md", "ECOSYSTEM_IDEA_BOX.md")) {
     }
 }
 
+# Conductor has its own ownership-checked installer.  A live manifest is an
+# admission boundary for fail-closed clients, so a normal ecosystem install
+# must never create it implicitly.
+$ConductorInstaller = Join-Path $RepoRoot "scripts\conductor_install.py"
+Write-Host ""
+if ($InstallConductor) {
+    Write-Host "[Conductor] Explicit runtime install requested (activation-sensitive)" -ForegroundColor Yellow
+    & py $ConductorInstaller install --repo-root $RepoRoot --home $env:USERPROFILE
+    if ($LASTEXITCODE -ne 0) {
+        throw "Conductor installer failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "  installer-owned Conductor runtime installed" -ForegroundColor Green
+} else {
+    Write-Host "[Conductor] Runtime install not requested; read-only status only" -ForegroundColor Cyan
+    & py $ConductorInstaller status --repo-root $RepoRoot --home $env:USERPROFILE
+    $ConductorStatusExit = $LASTEXITCODE
+    if ($ConductorStatusExit -ne 0) {
+        Write-Host "  Conductor status is non-clean (exit $ConductorStatusExit); no Conductor mutation performed" -ForegroundColor Yellow
+    }
+    Write-Host "  no Conductor install was attempted; use -InstallConductor only after runtime GO" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "=== Install complete ===" -ForegroundColor Green
 Write-Host ""
@@ -112,3 +138,4 @@ Write-Host "  2. Review ~/.claude/settings.json hooks"
 Write-Host "  3. (Optional) Set up your private context repo for AI tool sharing"
 Write-Host "  4. Run: python ~/.claude/scripts/plan_catalog.py to generate PLANS.md"
 Write-Host "  5. Run: python ~/.claude/scripts/vision_catalog.py to generate VISIONS.md"
+Write-Host "  6. Conductor stays read-only/uninstalled unless -InstallConductor is explicitly supplied after runtime GO"
