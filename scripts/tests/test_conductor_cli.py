@@ -120,3 +120,74 @@ def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: py
     status = HostResourceManager(ConductorStore(root_dir=tmp_path)).status()
     assert status["recovery_required"] == 0
     assert status["active_units"] == 1
+
+
+def test_conductor_doctor_gate_clear_and_occupied(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+    from scripts.conductor_resources import HostResourceManager
+
+    store = ConductorStore(root_dir=tmp_path)
+    # Clear gate: doctor must report PASS
+    code = conductorctl.main(["doctor", "--json"])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["doctor_status"] == "PASS"
+    assert doc["resource"]["active_units"] == 0
+    assert doc["resource"]["pool_exists"] is True
+
+    # Merely occupied gate (ACTIVE request): doctor must still report PASS (occupied is healthy)
+    manager = HostResourceManager(store)
+    manager.request(purpose="pytest_full", attempt_id="at-doc-1", agent_instance="inst-doc")
+    code = conductorctl.main(["doctor", "--json"])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["doctor_status"] == "PASS"
+    assert doc["resource"]["active_units"] == 1
+    assert doc["resource"]["recovery_required"] == 0
+
+
+def test_conductor_doctor_fails_when_recovery_required(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from datetime import datetime, timedelta, timezone
+    from scripts import conductorctl
+    from scripts.conductor_resources import DEFAULT_LEASE_TTL_SECONDS, HostResourceManager
+
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store)
+    manager.request(purpose="pytest_full", attempt_id="at-doc-rec", agent_instance="inst-doc")
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    conductorctl.main(["doctor", "--json"])
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["doctor_status"] == "BLOCKED"
+    assert doc["resource"]["recovery_required"] >= 1
+
+
+def test_conductor_doctor_fails_when_pool_disabled(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+
+    store = ConductorStore(root_dir=tmp_path)
+    with store._connection() as conn:
+        conn.execute("UPDATE host_resource_pools SET enabled = 0 WHERE resource_key = 'host:heavy'")
+
+    conductorctl.main(["doctor", "--json"])
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["doctor_status"] == "BLOCKED"
+    assert doc["resource"]["enabled"] is False
+
+
+def test_conductor_doctor_fails_when_pool_row_absent(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+
+    store = ConductorStore(root_dir=tmp_path)
+    with store._connection() as conn:
+        conn.execute("DELETE FROM host_resource_pools WHERE resource_key = 'host:heavy'")
+
+    conductorctl.main(["doctor", "--json"])
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["doctor_status"] == "BLOCKED"
+    assert doc["resource"]["pool_exists"] is False
+

@@ -21,6 +21,7 @@ from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
+    read_host_resource_status,
     read_storage_status,
     read_store_diagnostics,
     read_store_status,
@@ -128,8 +129,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         info = read_store_diagnostics()
         truthctl = check_truthctl_version()
-        info.update({"storage": read_storage_status(), "truthctl": truthctl})
-        info["doctor_status"] = "PASS" if truthctl["ok"] else "BLOCKED"
+        storage = read_storage_status()
+        resource = read_host_resource_status()
+        info.update({"storage": storage, "truthctl": truthctl, "resource": resource})
+        gate_blocked = (
+            not resource.get("pool_exists")
+            or not resource.get("enabled")
+            or resource.get("recovery_required", 0) > 0
+        )
+        if not truthctl.get("ok"):
+            info["doctor_status"] = "BLOCKED"
+        elif gate_blocked:
+            info["doctor_status"] = "BLOCKED"
+        elif storage.get("status") == "BLOCKED":
+            info["doctor_status"] = "BLOCKED"
+        else:
+            info["doctor_status"] = "PASS"
         if args.json:
             print(json.dumps(info, indent=2))
         else:

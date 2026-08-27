@@ -16,6 +16,7 @@ from scripts.conductor_model import (
 from scripts.conductor_store import (
     ConductorStore,
     STORAGE_QUOTAS_BYTES,
+    read_host_resource_status,
     read_storage_status,
     read_store_diagnostics,
     read_store_status,
@@ -228,3 +229,70 @@ def test_export_jsonl(store: ConductorStore, tmp_path: pathlib.Path):
     assert out_path.exists()
     content = out_path.read_text(encoding="utf-8")
     assert "wi_export" in content
+
+
+def test_read_host_resource_status_absent(tmp_path: pathlib.Path):
+    absent_root = tmp_path / "absent-conductor"
+    status = read_host_resource_status(absent_root)
+    assert status["resource_key"] == "host:heavy"
+    assert status["pool_exists"] is False
+    assert status["capacity"] == 0
+    assert status["enabled"] is False
+    assert status["active_units"] == 0
+    assert status["recovery_required"] == 0
+    assert status["total_live_requests"] == 0
+    assert not absent_root.exists()
+
+
+def test_read_host_resource_status_live_states_and_no_released(store: ConductorStore):
+    # Create requests across all states including RELEASED
+    states = [
+        HostResourceRequestState.ACTIVE,
+        HostResourceRequestState.INHERITED,
+        HostResourceRequestState.QUEUED,
+        HostResourceRequestState.RECOVERY_REQUIRED,
+        HostResourceRequestState.QUARANTINED,
+        HostResourceRequestState.RELEASED,
+    ]
+    for idx, st in enumerate(states):
+        req = HostResourceRequest(
+            request_id=f"rr_state_{idx}",
+            idempotency_key=f"idemp_state_{idx}",
+            resource_key="host:heavy",
+            purpose="pytest_full",
+            attempt_id=f"att_{idx}",
+            agent_instance="inst",
+            state=st,
+        )
+        store.save_resource_request(req)
+
+    status = read_host_resource_status(store.root_dir)
+    assert status["pool_exists"] is True
+    assert status["capacity"] == 1
+    assert status["enabled"] is True
+    assert status["active_units"] == 1
+    assert status["active"] == 1
+    assert status["inherited"] == 1
+    assert status["queued"] == 1
+    assert status["recovery_required"] == 1
+    assert status["quarantined"] == 1
+    assert status["total_live_requests"] == 5
+    # Helper must NOT return RELEASED rows in counts/state_counts
+    assert "RELEASED" not in status["counts"]
+    assert "RELEASED" not in status["state_counts"]
+
+
+def test_read_host_resource_status_disabled_and_absent_pool(store: ConductorStore):
+    with store._connection() as conn:
+        conn.execute("UPDATE host_resource_pools SET enabled = 0 WHERE resource_key = 'host:heavy'")
+    disabled = read_host_resource_status(store.root_dir)
+    assert disabled["pool_exists"] is True
+    assert disabled["enabled"] is False
+
+    with store._connection() as conn:
+        conn.execute("DELETE FROM host_resource_pools WHERE resource_key = 'host:heavy'")
+    absent_pool = read_host_resource_status(store.root_dir)
+    assert absent_pool["pool_exists"] is False
+    assert absent_pool["enabled"] is False
+    assert absent_pool["capacity"] == 0
+
