@@ -1,6 +1,6 @@
 ---
 name: run-model-team
-description: "Orchestrate parallel repository work from a GPT-5.6 Sol supervisor using ChatGPT CLI/CDP, Ox Alpha through OpenCode, Antigravity, Codex Luna max, local Qwen3.8, task-routed Perplexity CDP models, and critical-only Claude Fable 5 advice. Use for /model-team and parallel model delegation. Kimi is retired; Cursor is disabled through 2026-09-08."
+description: "Orchestrate parallel repository work from a GPT-5.6 Sol supervisor using ChatGPT CLI/CDP, Ox Alpha through OpenCode, Antigravity, Codex Luna max, local Qwen3.8, task-routed Perplexity CDP models, and critical-only Claude Fable 5 advice. Use for /model-team and parallel model delegation. Kimi CLI is retired (the Kimi 3 Perplexity picker route stays live); Cursor is disabled through 2026-09-08."
 ---
 
 # Run Model Team
@@ -26,6 +26,10 @@ status.
 ### Retired and paused lanes
 
 - **Kimi CLI is retired.** Do not probe, dispatch, list, or silently substitute it.
+  This retirement is scoped to the standalone **CLI lane** only. The **Kimi 3
+  route through the Perplexity picker is live** (`chrome_ppl` 9224, see
+  `D:/APPS/_shared/PORTS.md`) and is a valid strong model for plans and reviews
+  via CoderPX. Do not read "Kimi is retired" as covering it.
 - **Cursor is OFF through 2026-09-08.** Do not probe or dispatch it before that
   date. On or after 2026-09-08 it remains disabled until the operator explicitly
   re-enables it and a fresh exact-model/auth/workspace preflight passes.
