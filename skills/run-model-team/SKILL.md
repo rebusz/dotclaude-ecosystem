@@ -155,7 +155,14 @@ default model-team boundary.
 ### Perplexity CoderPX CDP
 
 Use `D:/APPS/WatchF/scripts/coderpx.py --probe-models` for the current
-picker, then dispatch a fully rendered `coderpx.packet.v2` packet through
+picker. **Visible is not selectable.** Entries above the subscription tier
+render greyed out with a padlock but still appear in a scraped listing — as of
+2026-08-27 that is `GPT-5.6 Sol Max` and `Claude Opus 5 Max`. Never dispatch to
+either; the usable GPT variant here is `GPT-5.6 Terra`, and `Sol` is the
+ChatGPT lane (`chrome_x`), not Perplexity. Selectable on 2026-08-27: `Sonar 2`,
+`GPT-5.6 Terra`, `Gemini 3.7 Flash`, `Claude Sonnet 5`, `Kimi K3`, `GLM 5.2`,
+`Grok 4.6`, `Nemotron 3 Ultra`. Then dispatch a fully rendered
+`coderpx.packet.v2` packet through
 `D:/APPS/WatchF/scripts/coderpx.py --model <visible-model-fragment>`. CoderPX
 owns the Conductor + on-demand `chrome_ppl` lifecycle and writes response plus
 manifest artifacts. A failed picker, nonzero exit, missing/partial manifest,
