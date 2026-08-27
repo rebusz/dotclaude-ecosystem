@@ -20,3 +20,5 @@
   not hooks are wired - but only when someone thinks to ask. The underlying cause is untouched.
   Land after `2026-07-25_session_lifecycle_and_hook_hardening_r1.md` so the hook set being wired
   is stable. Full reasoning: that plan's CEO Finding 9, Stage 2b K3, and Eng Review issue 2.
+- [P2][M] **Conductor operator GUI** — bramki `host:heavy`, procesy, kolejka, recovery. Trigger: 2026-08-27 CoderPX `HOST_RESOURCE_BUSY` przy `active_units=0` (CCTV `LEASE_EXPIRED`).
+- Plan-writing handoff (nie plan): `design/handoffs/2026-08-27_conductor_operator_gui_plan_handoff.md`. Read-only first; bez drugiej władzy admission. Nie implementować przed GO planu.
