@@ -1857,6 +1857,11 @@ gate exists, operators run heavy jobs serially.
 - MCP resource mutation;
 - WatchF/Fleet Manager implementation changes;
 - UI/dashboard beyond existing status output.
+  **Picked up 2026-08-27** by `design/plans/2026-08-27_conductor_operator_gui_r1.md`
+  (Conductor Gate Panel, R2, draft-awaiting-go): a read-only, port-free Tk projection of this
+  pool. It adds no admission authority and no second lease store. Trigger was a
+  `RECOVERY_REQUIRED` fence holding `host:heavy` for over four hours at `active_units=0`,
+  invisible to `doctor`, with six requests queued behind it.
 
 #### Adjacent host-pressure evidence (not added to HRL-R2 scope)
 
