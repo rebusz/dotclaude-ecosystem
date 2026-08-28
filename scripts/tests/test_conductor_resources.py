@@ -21,8 +21,18 @@ from scripts.conductor_resources import (
     ResourceBusyError,
     classify_pytest_invocation,
 )
-from scripts.conductor_store import ConductorStore
-from scripts.conductor_model import HostResourceRequestState
+from scripts.conductor_store import (
+    ConductorStore,
+    evaluate_gate_verdict,
+    read_resource_live_snapshot,
+    GateVerdict,
+)
+from scripts.conductor_model import (
+    HostResourceLease,
+    HostResourcePool,
+    HostResourceRequest,
+    HostResourceRequestState,
+)
 
 
 @pytest.fixture
@@ -443,3 +453,273 @@ def test_recover_refuses_while_an_inherited_child_still_holds_the_lease(manager:
     with pytest.raises(ResourceBusyError, match="INHERITED_CHILD_ACTIVE"):
         manager.recover(parent["request_id"], operator_attestation=True, reason="parent host died")
     assert manager.status()["recovery_required"] == 1
+
+
+def test_verdict_differential_against_admission(tmp_path: pathlib.Path):
+    """Differential test: verify evaluate_gate_verdict matches HostResourceManager.request() behavior in every state."""
+    # 1. Pool row absent
+    store_absent = ConductorStore(root_dir=tmp_path / "absent_pool")
+    with store_absent._connection() as conn:
+        conn.execute("DELETE FROM host_resource_pools WHERE resource_key = 'host:heavy'")
+    snapshot_absent = read_resource_live_snapshot(root_dir=tmp_path / "absent_pool")
+    verdict_absent = evaluate_gate_verdict(snapshot_absent)
+    assert verdict_absent.verdict == GateVerdict.DISABLED.value
+
+    manager_absent = HostResourceManager.__new__(HostResourceManager)
+    manager_absent.store = store_absent
+    manager_absent.resource_key = "host:heavy"
+    with pytest.raises(ResourceAdmissionError, match="HOST_RESOURCE_DISABLED"):
+        manager_absent.request(purpose="pytest_full", attempt_id="at-d1", agent_instance="ag-1")
+
+    # 2. Pool disabled (enabled=False)
+    store_dis = ConductorStore(root_dir=tmp_path / "dis_pool")
+    store_dis.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=False))
+    snapshot_dis = read_resource_live_snapshot(root_dir=tmp_path / "dis_pool")
+    verdict_dis = evaluate_gate_verdict(snapshot_dis)
+    assert verdict_dis.verdict == GateVerdict.DISABLED.value
+
+    manager_dis = HostResourceManager.__new__(HostResourceManager)
+    manager_dis.store = store_dis
+    manager_dis.resource_key = "host:heavy"
+    with pytest.raises(ResourceAdmissionError, match="HOST_RESOURCE_DISABLED"):
+        manager_dis.request(purpose="pytest_full", attempt_id="at-d2", agent_instance="ag-2")
+
+    # 3. Pool disabled with ACTIVE request
+    store_dis_act = ConductorStore(root_dir=tmp_path / "dis_act_pool")
+    store_dis_act.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=False))
+    store_dis_act.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_act_dis001",
+            idempotency_key="idemp_act_dis",
+            resource_key="host:heavy",
+            purpose="pytest_full",
+            attempt_id="at-act-dis",
+            agent_instance="ag-act-dis",
+            state=HostResourceRequestState.ACTIVE,
+        )
+    )
+    snapshot_dis_act = read_resource_live_snapshot(root_dir=tmp_path / "dis_act_pool")
+    verdict_dis_act = evaluate_gate_verdict(snapshot_dis_act)
+    assert verdict_dis_act.verdict == GateVerdict.DISABLED.value
+
+    manager_dis_act = HostResourceManager.__new__(HostResourceManager)
+    manager_dis_act.store = store_dis_act
+    manager_dis_act.resource_key = "host:heavy"
+    with pytest.raises(ResourceAdmissionError, match="HOST_RESOURCE_DISABLED"):
+        manager_dis_act.request(purpose="pytest_full", attempt_id="at-d3", agent_instance="ag-3")
+
+    # 4. FENCED (RECOVERY_REQUIRED >= 1)
+    store_fenced = ConductorStore(root_dir=tmp_path / "fenced_pool")
+    manager_fenced = HostResourceManager(store_fenced)
+    req_fenced = manager_fenced.request(purpose="cdp_provider", attempt_id="at-f1", agent_instance="tsignal-cctv:79584")
+    manager_fenced.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    snapshot_fenced = read_resource_live_snapshot(root_dir=tmp_path / "fenced_pool")
+    verdict_fenced = evaluate_gate_verdict(snapshot_fenced)
+    assert verdict_fenced.verdict == GateVerdict.FENCED.value
+
+    # Admission must be queued (not admitted)
+    req_after_fence = manager_fenced.request(purpose="pytest_full", attempt_id="at-f2", agent_instance="ag-f2")
+    assert req_after_fence["state"] == HostResourceRequestState.QUEUED.value
+    assert req_after_fence["reason_code"] == "HOST_RESOURCE_BUSY"
+
+    # 5. OCCUPIED (ACTIVE == 1)
+    store_occ = ConductorStore(root_dir=tmp_path / "occ_pool")
+    manager_occ = HostResourceManager(store_occ)
+    req_active = manager_occ.request(purpose="pytest_full", attempt_id="at-o1", agent_instance="ag-o1")
+    assert req_active["state"] == HostResourceRequestState.ACTIVE.value
+
+    snapshot_occ = read_resource_live_snapshot(root_dir=tmp_path / "occ_pool")
+    verdict_occ = evaluate_gate_verdict(snapshot_occ)
+    assert verdict_occ.verdict == GateVerdict.OCCUPIED.value
+
+    req_after_occ = manager_occ.request(purpose="pytest_heavy", attempt_id="at-o2", agent_instance="ag-o2")
+    assert req_after_occ["state"] == HostResourceRequestState.QUEUED.value
+    assert req_after_occ["reason_code"] == "HOST_RESOURCE_BUSY"
+
+    # 6. CLEAR (no active, no fenced, queue empty)
+    store_clear = ConductorStore(root_dir=tmp_path / "clear_pool")
+    manager_clear = HostResourceManager(store_clear)
+    snapshot_clear = read_resource_live_snapshot(root_dir=tmp_path / "clear_pool")
+    verdict_clear = evaluate_gate_verdict(snapshot_clear)
+    assert verdict_clear.verdict == GateVerdict.CLEAR.value
+
+    req_admitted = manager_clear.request(purpose="pytest_full", attempt_id="at-c1", agent_instance="ag-c1")
+    assert req_admitted["state"] == HostResourceRequestState.ACTIVE.value
+    assert req_admitted["reason_code"] == "HOST_RESOURCE_ADMITTED"
+    assert req_admitted["lease_id"] is not None
+
+    # 7. ANOMALY (QUEUED with nothing holding the gate)
+    store_anom = ConductorStore(root_dir=tmp_path / "anom_pool")
+    store_anom.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
+    store_anom.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_anom000001",
+            idempotency_key="idemp_anom",
+            resource_key="host:heavy",
+            purpose="pytest_full",
+            attempt_id="at-anom",
+            agent_instance="ag-anom",
+            state=HostResourceRequestState.QUEUED,
+        )
+    )
+    snapshot_anom = read_resource_live_snapshot(root_dir=tmp_path / "anom_pool")
+    verdict_anom = evaluate_gate_verdict(snapshot_anom)
+    assert verdict_anom.verdict == GateVerdict.ANOMALY.value
+
+    manager_anom = HostResourceManager(store_anom)
+    req_anom_admit = manager_anom.request(purpose="pytest_full", attempt_id="at-anom2", agent_instance="ag-anom2")
+    # Admission admits because no ACTIVE or RECOVERY_REQUIRED blocker exists
+    assert req_anom_admit["state"] == HostResourceRequestState.ACTIVE.value
+
+    # 8. INHERITED alone (never holds gate)
+    store_inh = ConductorStore(root_dir=tmp_path / "inh_pool")
+    store_inh.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
+    store_inh.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_inh0000001",
+            idempotency_key="idemp_inh",
+            resource_key="host:heavy",
+            purpose="pytest_focused",
+            attempt_id="at-inh",
+            agent_instance="ag-inh",
+            state=HostResourceRequestState.INHERITED,
+        )
+    )
+    snapshot_inh = read_resource_live_snapshot(root_dir=tmp_path / "inh_pool")
+    verdict_inh = evaluate_gate_verdict(snapshot_inh)
+    assert verdict_inh.verdict == GateVerdict.CLEAR.value
+
+    # 9. QUARANTINED alone (never holds gate)
+    store_quar = ConductorStore(root_dir=tmp_path / "quar_pool")
+    store_quar.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
+    store_quar.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_quar000001",
+            idempotency_key="idemp_quar",
+            resource_key="host:heavy",
+            purpose="cdp_provider",
+            attempt_id="at-quar",
+            agent_instance="ag-quar",
+            state=HostResourceRequestState.QUARANTINED,
+            reason_code="INHERITED_CHILD_BUSY",
+        )
+    )
+    snapshot_quar = read_resource_live_snapshot(root_dir=tmp_path / "quar_pool")
+    verdict_quar = evaluate_gate_verdict(snapshot_quar)
+    assert verdict_quar.verdict == GateVerdict.CLEAR.value
+
+
+def test_fenced_regression_from_real_readback(tmp_path: pathlib.Path):
+    """Captured 2026-08-27 readback: 0 active, 1 RECOVERY_REQUIRED (tsignal-cctv:79584), 6 QUEUED."""
+    store = ConductorStore(root_dir=tmp_path)
+    store.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
+
+    store.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_55a2d45ff178",
+            idempotency_key="idemp_incident_fenced",
+            resource_key="host:heavy",
+            purpose="cdp_provider",
+            attempt_id="cctv-provider-79584-938a899a374f-15",
+            agent_instance="tsignal-cctv:79584",
+            state=HostResourceRequestState.RECOVERY_REQUIRED,
+            priority=50,
+            created_at_utc="2026-08-27T14:12:17Z",
+            reason_code="LEASE_EXPIRED",
+        )
+    )
+    store.save_resource_lease(
+        HostResourceLease(
+            lease_id="hrl_806dfd65ef7a",
+            request_id="rr_55a2d45ff178",
+            resource_key="host:heavy",
+            attempt_id="cctv-provider-79584-938a899a374f-15",
+            agent_instance="tsignal-cctv:79584",
+            heartbeat_sequence=1,
+            expires_at_utc="2026-08-27T14:17:17Z",
+            last_heartbeat_utc="2026-08-27T14:12:17Z",
+            process_pid=None,
+            process_start_time=None,
+        )
+    )
+
+    queued_specs = [
+        ("rr_1d256a6f0a42", "tsignal-cctv:35968", "2026-08-27T16:59:17Z"),
+        ("rr_233acfa15e3a", "t4-ops-unblock", "2026-08-27T17:22:34Z"),
+        ("rr_a6b580201f52", "tsignal-cctv:90488", "2026-08-27T17:36:32Z"),
+        ("rr_6772821c81c5", "tsignal-cctv:94488", "2026-08-27T17:39:12Z"),
+        ("rr_9aa91b671651", "tsignal-cctv:128584", "2026-08-27T17:46:54Z"),
+        ("rr_f4aae8962cd9", "tsignal-cctv:9076", "2026-08-27T18:39:51Z"),
+    ]
+    for req_id, agent, created in queued_specs:
+        store.save_resource_request(
+            HostResourceRequest(
+                request_id=req_id,
+                idempotency_key=f"idemp_{req_id}",
+                resource_key="host:heavy",
+                purpose="cdp_provider",
+                attempt_id=f"att_{req_id}",
+                agent_instance=agent,
+                state=HostResourceRequestState.QUEUED,
+                priority=50,
+                created_at_utc=created,
+                reason_code="HOST_RESOURCE_BUSY",
+            )
+        )
+
+    snapshot = read_resource_live_snapshot(resource_key="host:heavy", root_dir=tmp_path)
+    now_dt = datetime(2026, 8, 27, 18, 54, 17, tzinfo=timezone.utc)
+    verdict = evaluate_gate_verdict(snapshot, now=now_dt)
+
+    assert verdict.verdict == GateVerdict.FENCED.value
+    assert verdict.fenced_count == 1
+    assert verdict.queue_count == 6
+    assert verdict.blocker is not None
+    assert verdict.blocker["request_id"] == "rr_55a2d45ff178"
+    assert verdict.blocker["agent_instance"] == "tsignal-cctv:79584"
+    assert "tsignal-cctv:79584" in verdict.subtext
+    assert "6 requests waiting" in verdict.subtext
+    assert len(verdict.commands) == 1
+    assert "--attest-owner-gone --reason '<why>'" in verdict.commands[0]
+
+
+def test_two_concurrent_recovery_required_requests(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    store.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
+
+    store.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_000000000001",
+            idempotency_key="idemp_old",
+            resource_key="host:heavy",
+            purpose="cdp_provider",
+            attempt_id="att-old",
+            agent_instance="agent-oldest",
+            state=HostResourceRequestState.RECOVERY_REQUIRED,
+            created_at_utc="2026-08-28T09:00:00Z",
+        )
+    )
+    store.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_000000000002",
+            idempotency_key="idemp_new",
+            resource_key="host:heavy",
+            purpose="pytest_full",
+            attempt_id="att-new",
+            agent_instance="agent-newest",
+            state=HostResourceRequestState.RECOVERY_REQUIRED,
+            created_at_utc="2026-08-28T10:00:00Z",
+        )
+    )
+
+    snapshot = read_resource_live_snapshot(resource_key="host:heavy", root_dir=tmp_path)
+    verdict = evaluate_gate_verdict(snapshot)
+
+    assert verdict.verdict == GateVerdict.FENCED.value
+    assert verdict.fenced_count == 2
+    assert verdict.blocker is not None
+    assert verdict.blocker["request_id"] == "rr_000000000001"
+    assert "agent-oldest" in verdict.subtext
+    assert len(verdict.commands) == 2
+    assert "Clearing one fence may not open the gate" in verdict.headline

@@ -22,6 +22,7 @@ from scripts.conductor_model import CommandEnvelope  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
     read_host_resource_status,
+    read_resource_live_snapshot,
     read_storage_status,
     read_store_diagnostics,
     read_store_status,
@@ -40,6 +41,17 @@ def main(argv: list[str] | None = None) -> int:
     # doctor
     p_doctor = subparsers.add_parser("doctor", help="Run Conductor system diagnostics")
     p_doctor.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    p_resource_live = subparsers.add_parser(
+        "resource-live",
+        help="Show live host resource admission status without writing receipts",
+    )
+    p_resource_live.add_argument(
+        "--resource-key",
+        default="host:heavy",
+        help="Resource key (default: host:heavy)",
+    )
+    p_resource_live.add_argument("--json", action="store_true", help="Output raw JSON")
 
     p_resource_status = subparsers.add_parser("resource-status", help="Show host resource admission status")
     p_resource_status.add_argument("--json", action="store_true", help="Output raw JSON")
@@ -161,6 +173,25 @@ def main(argv: list[str] | None = None) -> int:
         # Before 2026-08-27 this returned 0 for everything except truthctl, which
         # is why a five-hour RECOVERY_REQUIRED fence went unnoticed.
         return 0 if info["doctor_status"] in {"PASS", "ABSENT"} else 1
+
+    if args.command == "resource-live":
+        result = read_resource_live_snapshot(resource_key=args.resource_key)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Conductor Host Resource Live Status ({result.get('resource_key')}):")
+            print(f"  Pool Present: {result.get('pool_present')}")
+            print(f"  Capacity: {result.get('capacity')}")
+            print(f"  Enabled: {result.get('enabled')}")
+            print(f"  Live Counts: {json.dumps(result.get('live_counts'))}")
+            print(f"  Terminal Count: {result.get('terminal_count')}")
+            holder = result.get("holder")
+            holder_id = holder.get("request_id") if holder else "None"
+            print(f"  Holder: {holder_id}")
+            print(f"  Queue Depth: {len(result.get('queue', []))}")
+            print(f"  Fenced Count: {len(result.get('fenced', []))}")
+            print(f"  Quarantined Count: {len(result.get('quarantined', []))}")
+        return 0
 
     if args.command == "authorize":
         if not (sys.stdin.isatty() and sys.stdout.isatty()):

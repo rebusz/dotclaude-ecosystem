@@ -17,7 +17,11 @@ from scripts import conductorctl
 from scripts.conductor_mcp import handle_mcp_tool_call
 from scripts.conductor_model import CommandEnvelope, WorkItemState
 from scripts.conductor_commands import ConductorCommandProcessor
-from scripts.conductor_store import ConductorStore, read_store_status
+from scripts.conductor_store import (
+    ConductorStore,
+    read_resource_live_snapshot,
+    read_store_status,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -64,7 +68,7 @@ def _enqueue_r2(root: pathlib.Path) -> tuple[ConductorStore, str]:
     return store, receipt.result["work_item_id"]
 
 
-@pytest.mark.parametrize("command", ["status", "doctor"])
+@pytest.mark.parametrize("command", ["status", "doctor", "resource-live"])
 def test_cli_read_only_commands_do_not_create_home(tmp_path: pathlib.Path, command: str):
     conductor_home = tmp_path / f"{command}-absent"
     env = os.environ.copy()
@@ -103,7 +107,7 @@ def test_status_and_doctor_do_not_write_existing_store(tmp_path: pathlib.Path):
     env = os.environ.copy()
     env["TDCONDUCTOR_DIR"] = str(conductor_home)
 
-    for command in ("status", "doctor"):
+    for command in ("status", "doctor", "resource-live"):
         completed = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "conductorctl.py"), command, "--json"],
             cwd=tmp_path,
@@ -139,6 +143,88 @@ def test_read_only_status_sees_uncheckpointed_wal_without_touching_source(tmp_pa
         assert status["store_state"] == "AVAILABLE"
         assert status["total_work_items"] == 1
         assert status["state_summary"] == {"QUEUED": 1}
+        assert _tree_snapshot(conductor_home) == before_tree
+    finally:
+        writer.close()
+
+
+def test_read_only_resource_live_sees_uncheckpointed_wal_without_touching_source(tmp_path: pathlib.Path):
+    conductor_home = tmp_path / "wal-resource-live"
+    conductor_home.mkdir()
+    db_path = conductor_home / "conductor.db"
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute(
+            """
+            CREATE TABLE host_resource_pools (
+                resource_key TEXT PRIMARY KEY,
+                capacity INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                schema_version TEXT NOT NULL
+            )
+            """
+        )
+        writer.execute(
+            """
+            CREATE TABLE host_resource_requests (
+                request_id TEXT PRIMARY KEY,
+                idempotency_key TEXT UNIQUE NOT NULL,
+                resource_key TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                agent_instance TEXT NOT NULL,
+                state TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 50,
+                parent_lease_id TEXT,
+                command_sha256 TEXT NOT NULL DEFAULT '',
+                created_at_utc TEXT NOT NULL,
+                released_at_utc TEXT,
+                reason_code TEXT,
+                schema_version TEXT NOT NULL
+            )
+            """
+        )
+        writer.execute(
+            """
+            CREATE TABLE host_resource_leases (
+                lease_id TEXT PRIMARY KEY,
+                request_id TEXT UNIQUE NOT NULL,
+                resource_key TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                agent_instance TEXT NOT NULL,
+                heartbeat_sequence INTEGER NOT NULL,
+                expires_at_utc TEXT NOT NULL,
+                last_heartbeat_utc TEXT NOT NULL,
+                process_pid INTEGER,
+                process_start_time REAL,
+                schema_version TEXT NOT NULL
+            )
+            """
+        )
+        writer.execute(
+            "INSERT INTO host_resource_pools VALUES ('host:heavy', 1, 1, 'conductor.resource-pool.v1')"
+        )
+        writer.execute(
+            """
+            INSERT INTO host_resource_requests VALUES (
+                'rr_wal01', 'idemp_wal01', 'host:heavy', 'pytest_full', 'at-wal',
+                'agent-wal', 'QUEUED', 50, NULL, '', '2026-08-28T10:00:00Z', NULL,
+                'HOST_RESOURCE_BUSY', 'conductor.resource-request.v1'
+            )
+            """
+        )
+        writer.commit()
+        before_tree = _tree_snapshot(conductor_home)
+
+        live = read_resource_live_snapshot(resource_key="host:heavy", root_dir=conductor_home)
+
+        assert live["pool_present"] is True
+        assert live["capacity"] == 1
+        assert live["enabled"] is True
+        assert live["live_counts"]["QUEUED"] == 1
+        assert len(live["queue"]) == 1
+        assert live["queue"][0]["request_id"] == "rr_wal01"
         assert _tree_snapshot(conductor_home) == before_tree
     finally:
         writer.close()
