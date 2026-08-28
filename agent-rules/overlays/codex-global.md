@@ -24,6 +24,6 @@
 
 - Follow the authoritative **Review Workflow Routing** table in `skills/master-agent/SKILL.md`. `/fwf` and `/fwp` are the only public full-workflow commands and own R1/R2/R3 plan review, implementation, exact-head review, and landing.
 - Internal runners live in `D:/APPS/_shared/audit/`: R1 uses `auditf.py`; R2/R3 use `fuse.py`. `/fwf` passes `--mode free`; `/fwp` passes `--mode paid`. Do not expose runner presets or lane-bypass flags as operator workflows.
-- Codex always passes `--synthesizer gpt`. This excludes the GPT frontier lane and includes the isolated Claude Opus CLI lane, preventing self-grading. Claude Code uses `--synthesizer claude` and receives the GPT CDP frontier lane.
+- Codex always passes `--synthesizer gpt`. This excludes the GPT frontier lane and includes the isolated Claude Opus CLI lane, preventing self-grading. Claude Code uses `--synthesizer claude` and receives the `chrome_gpt` ChatGPT CDP frontier lane. Coding, audit, and review never fall back to Codex CLI; the only GPT CLI exception is a resolver-owned `latency_critical_runtime` context such as the registered OpusF scenario producer.
 - Perplexity and Gemini CDP lanes remain in both modes. They need operator-started signed-in Chrome (`chrome_te`/`chrome_ppl`); the Claude CLI lane needs `claude` on PATH. Down lanes remain visible in fail-soft evidence and lower confidence.
 - Read the generated synthesis prompt and apply consensus P1 plus unique valid P1/P2 inside frozen boundaries. Discard noise and boundary violations. Never touch Tsignal execution path without R3.

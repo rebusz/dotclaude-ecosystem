@@ -23,12 +23,6 @@ ROLE_CONFIG = {
         "service_tier": "default",
         "sandbox": "read-only",
     },
-    "luna": {
-        "model": "gpt-5.6-luna",
-        "reasoning": "max",
-        "service_tier": "priority",
-        "sandbox": "workspace-write",
-    },
 }
 
 CURSOR_DISABLED_UNTIL = "2026-09-08"
@@ -78,7 +72,7 @@ PERPLEXITY_PROBE_DRIVER = Path(
     )
 )
 
-DIRECT_WRITE_ROLES = ("chatgpt", "ox", "antigravity", "luna")
+DIRECT_WRITE_ROLES = ("chatgpt", "ox", "antigravity")
 ADVISORY_ROLES = ("qwen", "perplexity", "fable")
 DISPATCH_ROLES = DIRECT_WRITE_ROLES + ADVISORY_ROLES
 READY_STATUSES = {"READY", "READY_CDP", "READY_CLI"}
@@ -467,7 +461,6 @@ def doctor(*, deep: bool = False) -> int:
     git = _version_probe("git")
     lanes = {
         "sol": dict(codex, model=ROLE_CONFIG["sol"]["model"]),
-        "luna": dict(codex, model=ROLE_CONFIG["luna"]["model"]),
         "chatgpt": _chatgpt_probe(deep=deep),
         "ox": _ox_probe(deep=deep),
         "antigravity": _antigravity_probe(deep=deep),
@@ -493,7 +486,7 @@ def doctor(*, deep: bool = False) -> int:
     ]
     all_primary_ready = all(
         lanes[role]["status"] in READY_STATUSES
-        for role in ("chatgpt", "ox", "antigravity", "luna")
+        for role in ("chatgpt", "ox", "antigravity")
     )
     if core_ready and all_primary_ready:
         overall = "READY"
@@ -519,36 +512,6 @@ def doctor(*, deep: bool = False) -> int:
         )
     )
     return 0 if overall != "BLOCKED" else 1
-
-
-def _codex_command(role: str, repo: Path, out: Path) -> list[str]:
-    executable = _executable("codex")
-    if not executable:
-        raise DispatchError("Codex CLI not found")
-    config = ROLE_CONFIG[role]
-    return [
-        executable,
-        "-a",
-        "never",
-        "exec",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--color",
-        "never",
-        "-s",
-        config["sandbox"],
-        "-m",
-        config["model"],
-        "-c",
-        f'model_reasoning_effort="{config["reasoning"]}"',
-        "-c",
-        f'service_tier="{config["service_tier"]}"',
-        "-C",
-        str(repo),
-        "-o",
-        str(out),
-        "-",
-    ]
 
 
 def _antigravity_command(prompt: str, timeout_s: int) -> list[str]:
@@ -839,10 +802,7 @@ def run_role(args: argparse.Namespace) -> int:
         model, result = _qwen_ask(prompt, timeout_s=args.timeout_s)
         out.write_text(f"model: {model}\n\n{result}\n", encoding="utf-8")
         return 0
-    if args.role == "luna":
-        command = _codex_command("luna", repo, out)
-        stdin = prompt
-    elif args.role == "antigravity":
+    if args.role == "antigravity":
         command = _antigravity_command(prompt, args.timeout_s)
     elif args.role == "ox":
         command = _ox_command(repo, prompt_file)
@@ -919,9 +879,6 @@ def run_role(args: argparse.Namespace) -> int:
     if args.role == "chatgpt":
         if not out.is_file():
             raise DispatchError("ChatGPT CDP driver returned success without result JSON")
-    elif args.role == "luna":
-        if not out.is_file():
-            raise DispatchError("Luna returned success without output-last-message")
     elif args.role == "perplexity":
         if not out.is_file() or artifact_dir is None or not artifact_dir.is_file():
             raise DispatchError("CoderPX returned success without response and metadata")
