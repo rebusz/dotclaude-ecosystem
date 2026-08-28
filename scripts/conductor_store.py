@@ -233,6 +233,108 @@ def read_storage_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> 
     return {"status": overall, "retention_mode": "REPORT_ONLY", "directories": usage}
 
 
+# Convergence point: design/plans/2026-08-27_conductor_operator_gui_r1.md (GP-1)
+def read_host_resource_status(
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+    resource_key: str = "host:heavy",
+) -> Dict[str, Any]:
+    """Read host resource pool and live request counts without creating or mutating paths."""
+    if isinstance(root_dir, str) and root_dir.startswith("host:"):
+        resource_key = root_dir
+        root_dir = None
+
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+
+    live_states = (
+        HostResourceRequestState.ACTIVE.value,
+        HostResourceRequestState.INHERITED.value,
+        HostResourceRequestState.QUEUED.value,
+        HostResourceRequestState.RECOVERY_REQUIRED.value,
+        HostResourceRequestState.QUARANTINED.value,
+    )
+    counts = {s: 0 for s in live_states}
+
+    result: Dict[str, Any] = {
+        "resource_key": resource_key,
+        "pool_exists": False,
+        "capacity": 0,
+        "enabled": False,
+        "active": 0,
+        "active_units": 0,
+        "queued": 0,
+        "recovery_required": 0,
+        "inherited": 0,
+        "quarantined": 0,
+        "state_counts": dict(counts),
+        "counts": dict(counts),
+        "total_live_requests": 0,
+    }
+
+    if not db_path.is_file():
+        return result
+
+    try:
+        with _read_only_snapshot_connection(db_path) as conn:
+            try:
+                pool_row = conn.execute(
+                    "SELECT resource_key, capacity, enabled, schema_version FROM host_resource_pools WHERE resource_key = ?",
+                    (resource_key,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                pool_row = None
+
+            if pool_row:
+                result["pool_exists"] = True
+                result["capacity"] = int(pool_row["capacity"])
+                result["enabled"] = bool(pool_row["enabled"])
+
+            try:
+                state_rows = conn.execute(
+                    """
+                    SELECT state, COUNT(*) AS count
+                    FROM host_resource_requests
+                    WHERE resource_key = ? AND state IN (?, ?, ?, ?, ?)
+                    GROUP BY state
+                    """,
+                    (
+                        resource_key,
+                        HostResourceRequestState.ACTIVE.value,
+                        HostResourceRequestState.INHERITED.value,
+                        HostResourceRequestState.QUEUED.value,
+                        HostResourceRequestState.RECOVERY_REQUIRED.value,
+                        HostResourceRequestState.QUARANTINED.value,
+                    ),
+                ).fetchall()
+                for row in state_rows:
+                    st = str(row["state"])
+                    if st in counts:
+                        counts[st] = int(row["count"])
+            except sqlite3.OperationalError:
+                pass
+
+        result.update(
+            {
+                "active": counts[HostResourceRequestState.ACTIVE.value],
+                "active_units": counts[HostResourceRequestState.ACTIVE.value],
+                "queued": counts[HostResourceRequestState.QUEUED.value],
+                "recovery_required": counts[HostResourceRequestState.RECOVERY_REQUIRED.value],
+                "inherited": counts[HostResourceRequestState.INHERITED.value],
+                "quarantined": counts[HostResourceRequestState.QUARANTINED.value],
+                "state_counts": dict(counts),
+                "counts": dict(counts),
+                "total_live_requests": sum(counts.values()),
+            }
+        )
+    except (OSError, sqlite3.Error) as exc:
+        result.update({"error": str(exc)[:500]})
+
+    return result
+
+
+read_resource_pool_status = read_host_resource_status
+
+
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
 

@@ -21,6 +21,7 @@ from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
+    read_host_resource_status,
     read_storage_status,
     read_store_diagnostics,
     read_store_status,
@@ -128,15 +129,38 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         info = read_store_diagnostics()
         truthctl = check_truthctl_version()
-        info.update({"storage": read_storage_status(), "truthctl": truthctl})
-        info["doctor_status"] = "PASS" if truthctl["ok"] else "BLOCKED"
+        storage = read_storage_status()
+        resource = read_host_resource_status()
+        info.update({"storage": storage, "truthctl": truthctl, "resource": resource})
+        gate_blocked = (
+            not resource.get("pool_exists")
+            or not resource.get("enabled")
+            or resource.get("recovery_required", 0) > 0
+        )
+        if not truthctl.get("ok"):
+            info["doctor_status"] = "BLOCKED"
+        elif info.get("store_state") == "ABSENT":
+            # Conductor is not initialised on this host. `doctor` is the command
+            # an operator runs to discover exactly that, so it reports the fact
+            # and exits 0. Nothing can be wedged in a store that does not exist.
+            info["doctor_status"] = "ABSENT"
+        elif gate_blocked:
+            info["doctor_status"] = "BLOCKED"
+        elif storage.get("status") == "BLOCKED":
+            info["doctor_status"] = "BLOCKED"
+        else:
+            info["doctor_status"] = "PASS"
         if args.json:
             print(json.dumps(info, indent=2))
         else:
             print("Conductor Doctor Diagnostics:")
             for k, v in info.items():
                 print(f"  {k}: {v}")
-        return 0 if truthctl["ok"] else 1
+        # A wedged gate, a disabled pool, exhausted storage, or a bad truthctl
+        # version all exit non-zero so a script gating on `doctor` fails closed.
+        # Before 2026-08-27 this returned 0 for everything except truthctl, which
+        # is why a five-hour RECOVERY_REQUIRED fence went unnoticed.
+        return 0 if info["doctor_status"] in {"PASS", "ABSENT"} else 1
 
     if args.command == "authorize":
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
