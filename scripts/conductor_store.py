@@ -119,6 +119,7 @@ def _row_to_request_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "created_at_utc": str(row["created_at_utc"]),
         "released_at_utc": str(row["released_at_utc"]) if row["released_at_utc"] is not None else None,
         "reason_code": str(row["reason_code"]) if row["reason_code"] is not None else None,
+        "slot_key": str(row["slot_key"]) if "slot_key" in row.keys() and row["slot_key"] is not None else "",
         "schema_version": str(row["schema_version"]),
     }
 
@@ -255,10 +256,10 @@ def _read_resource_live_snapshot_from_conn(
         elif st == HostResourceRequestState.QUARANTINED.value:
             quarantined_reqs.append(req)
 
-    holder = None
-    if active_reqs:
-        holder_req = active_reqs[0]
-        holder = _join_request_lease(holder_req, leases_by_request_id.get(holder_req["request_id"]))
+    holders: List[Dict[str, Any]] = []
+    for hreq in active_reqs:
+        holders.append(_join_request_lease(hreq, leases_by_request_id.get(hreq["request_id"])))
+    holder = holders[0] if holders else None
 
     fenced: List[Dict[str, Any]] = []
     for freq in fenced_reqs:
@@ -272,6 +273,7 @@ def _read_resource_live_snapshot_from_conn(
         "live_counts": live_counts,
         "terminal_count": terminal_count,
         "holder": holder,
+        "holders": holders,
         "inherited": inherited_reqs,
         "queue": queued_reqs,
         "fenced": fenced,
@@ -342,23 +344,77 @@ def read_resource_live_snapshot(
         return _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
 
 
-def read_gate_frame(
-    resource_key: str = "host:heavy",
+DEFAULT_RESOURCE_POOLS = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini")
+
+
+def read_all_pools_live(
     root_dir: Optional[Union[str, pathlib.Path]] = None,
-) -> Dict[str, Any]:
-    """Read both store status and live gate frame from exactly one snapshot."""
+) -> Dict[str, Dict[str, Any]]:
+    """Read live projection for all host resource pools from exactly one snapshot."""
     root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
     db_path = root / "conductor.db"
     if not db_path.is_file():
         return {
+            p: read_resource_live_snapshot(resource_key=p, root_dir=root)
+            for p in DEFAULT_RESOURCE_POOLS
+        }
+
+    with _read_only_snapshot_connection(db_path) as conn:
+        try:
+            pool_rows = conn.execute("SELECT resource_key FROM host_resource_pools").fetchall()
+            db_pools = [str(r["resource_key"]) for r in pool_rows]
+        except sqlite3.OperationalError:
+            db_pools = []
+
+        seen = set()
+        ordered_pools = []
+        for p in list(DEFAULT_RESOURCE_POOLS) + db_pools:
+            if p not in seen:
+                seen.add(p)
+                ordered_pools.append(p)
+
+        return {
+            p: _read_resource_live_snapshot_from_conn(conn, resource_key=p)
+            for p in ordered_pools
+        }
+
+
+def read_gate_frame(
+    resource_key: str = "host:heavy",
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Dict[str, Any]:
+    """Read both store status and live gate frames for all pools from exactly one snapshot."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        default_gates = {
+            p: read_resource_live_snapshot(resource_key=p, root_dir=root)
+            for p in DEFAULT_RESOURCE_POOLS
+        }
+        return {
             "store": read_store_status(root),
-            "gate": read_resource_live_snapshot(resource_key=resource_key, root_dir=root),
+            "gate": default_gates.get(resource_key, read_resource_live_snapshot(resource_key=resource_key, root_dir=root)),
+            "gates": default_gates,
         }
 
     with _read_only_snapshot_connection(db_path) as conn:
         store = _read_store_status_from_conn(conn, db_path)
-        gate = _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
-    return {"store": store, "gate": gate}
+        try:
+            pool_rows = conn.execute("SELECT resource_key FROM host_resource_pools").fetchall()
+            db_pools = [str(r["resource_key"]) for r in pool_rows]
+        except sqlite3.OperationalError:
+            db_pools = []
+
+        seen = set()
+        ordered_pools = []
+        for p in list(DEFAULT_RESOURCE_POOLS) + db_pools:
+            if p not in seen:
+                seen.add(p)
+                ordered_pools.append(p)
+
+        gates = {p: _read_resource_live_snapshot_from_conn(conn, resource_key=p) for p in ordered_pools}
+        gate = gates.get(resource_key) or _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
+    return {"store": store, "gate": gate, "gates": gates}
 
 
 def read_resource_history_page(
@@ -1294,6 +1350,61 @@ class ConductorStore:
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (4, datetime('now'))"
                 )
 
+            if current_version < 5:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS host_resource_pools (
+                        resource_key TEXT PRIMARY KEY,
+                        capacity INTEGER NOT NULL DEFAULT 1,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        schema_version TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('host:heavy', 1, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+                }
+                if "slot_key" not in columns:
+                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_slot_key_{int(time.time())}.db"
+                        shutil.copy2(self.db_path, backup_file)
+                    conn.execute(
+                        "ALTER TABLE host_resource_requests ADD COLUMN slot_key TEXT NOT NULL DEFAULT ''"
+                    )
+
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('cdp:perplexity', 3, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('cdp:chatgpt', 3, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('cdp:gemini', 1, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (5, datetime('now'))"
+                )
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
@@ -1671,14 +1782,15 @@ class ConductorStore:
                 INSERT INTO host_resource_requests (
                     request_id, idempotency_key, resource_key, purpose, attempt_id,
                     agent_instance, state, priority, parent_lease_id, command_sha256,
-                    created_at_utc, released_at_utc, reason_code, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at_utc, released_at_utc, reason_code, slot_key, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET
                     state = excluded.state,
                     priority = excluded.priority,
                     parent_lease_id = excluded.parent_lease_id,
                     released_at_utc = excluded.released_at_utc,
-                    reason_code = excluded.reason_code
+                    reason_code = excluded.reason_code,
+                    slot_key = excluded.slot_key
                 """,
                 (
                     request.request_id,
@@ -1694,6 +1806,7 @@ class ConductorStore:
                     request.created_at_utc,
                     request.released_at_utc,
                     request.reason_code,
+                    request.slot_key,
                     request.schema_version,
                 ),
             )
@@ -1796,6 +1909,7 @@ class ConductorStore:
             created_at_utc=row["created_at_utc"],
             released_at_utc=row["released_at_utc"],
             reason_code=row["reason_code"],
+            slot_key=str(row["slot_key"]) if "slot_key" in row.keys() and row["slot_key"] is not None else "",
             schema_version=row["schema_version"],
         )
 

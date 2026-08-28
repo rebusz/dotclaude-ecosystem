@@ -427,3 +427,111 @@ def test_read_resource_history_page_terminal_only_limit_cursor(tmp_path: pathlib
     assert len(all_returned_ids) == 5
     assert len(set(all_returned_ids)) == 5
     assert req_act["request_id"] not in all_returned_ids
+
+
+def test_four_pools_render_four_sections_with_isolated_verdicts(tmp_path: pathlib.Path, tk_root: tk.Tk):
+    """PANEL test:
+    Four pools render four distinct sections; a fence in cdp:perplexity renders FENCED only
+    in that section, and the other three pools keep their own CLEAR verdicts.
+    """
+    panel = ConductorGatePanel(master=tk_root, root_dir=tmp_path, enable_worker=False)
+
+    fenced_ppl = [
+        {
+            "request_id": "rr_cctv_fenced",
+            "agent_instance": "tsignal-cctv:79584",
+            "purpose": "cdp_perplexity",
+            "attempt_id": "cctv-provider-79584",
+            "created_at_utc": "2026-08-28T08:00:00Z",
+            "reason_code": "LEASE_EXPIRED",
+            "priority": 40,
+            "process_pid": None,
+            "lease": {"lease_id": "hrl_cctv_01", "process_pid": None, "heartbeat_sequence": 1, "last_heartbeat_utc": "2026-08-28T08:00:00Z", "expires_at_utc": "2026-08-28T08:05:00Z"},
+        }
+    ]
+
+    frame = {
+        "store": {"store_state": "AVAILABLE", "total_work_items": 0},
+        "gates": {
+            "host:heavy": {
+                "resource_key": "host:heavy",
+                "capacity": 1,
+                "enabled": True,
+                "pool_present": True,
+                "schema_version": "1.0.0",
+                "live_counts": {"ACTIVE": 0, "INHERITED": 0, "QUEUED": 0, "RECOVERY_REQUIRED": 0, "QUARANTINED": 0},
+                "holder": None,
+                "holders": [],
+                "queue": [],
+                "fenced": [],
+                "quarantined": [],
+            },
+            "cdp:perplexity": {
+                "resource_key": "cdp:perplexity",
+                "capacity": 3,
+                "enabled": True,
+                "pool_present": True,
+                "schema_version": "1.0.0",
+                "live_counts": {"ACTIVE": 0, "INHERITED": 0, "QUEUED": 0, "RECOVERY_REQUIRED": 1, "QUARANTINED": 0},
+                "holder": None,
+                "holders": [],
+                "queue": [],
+                "fenced": fenced_ppl,
+                "quarantined": [],
+            },
+            "cdp:chatgpt": {
+                "resource_key": "cdp:chatgpt",
+                "capacity": 3,
+                "enabled": True,
+                "pool_present": True,
+                "schema_version": "1.0.0",
+                "live_counts": {"ACTIVE": 0, "INHERITED": 0, "QUEUED": 0, "RECOVERY_REQUIRED": 0, "QUARANTINED": 0},
+                "holder": None,
+                "holders": [],
+                "queue": [],
+                "fenced": [],
+                "quarantined": [],
+            },
+            "cdp:gemini": {
+                "resource_key": "cdp:gemini",
+                "capacity": 1,
+                "enabled": True,
+                "pool_present": True,
+                "schema_version": "1.0.0",
+                "live_counts": {"ACTIVE": 0, "INHERITED": 0, "QUEUED": 0, "RECOVERY_REQUIRED": 0, "QUARANTINED": 0},
+                "holder": None,
+                "holders": [],
+                "queue": [],
+                "fenced": [],
+                "quarantined": [],
+            },
+        },
+    }
+
+    panel.apply_frame(frame=frame)
+
+    # 4 sections present
+    assert "host:heavy" in panel.pool_sections
+    assert "cdp:perplexity" in panel.pool_sections
+    assert "cdp:chatgpt" in panel.pool_sections
+    assert "cdp:gemini" in panel.pool_sections
+
+    sec_heavy = panel.pool_sections["host:heavy"]
+    sec_ppl = panel.pool_sections["cdp:perplexity"]
+    sec_gpt = panel.pool_sections["cdp:chatgpt"]
+    sec_gem = panel.pool_sections["cdp:gemini"]
+
+    # cdp:perplexity is FENCED and has 1 blocker card
+    assert "FENCED" in sec_ppl.verdict_headline.cget("text")
+    assert "tsignal-cctv:79584" in sec_ppl.verdict_subtext.cget("text")
+    assert len(sec_ppl.cards_container.winfo_children()) == 1
+
+    # host:heavy, cdp:chatgpt, cdp:gemini are CLEAR with 0 blocker cards
+    assert "CLEAR" in sec_heavy.verdict_headline.cget("text")
+    assert len(sec_heavy.cards_container.winfo_children()) == 0
+
+    assert "CLEAR" in sec_gpt.verdict_headline.cget("text")
+    assert len(sec_gpt.cards_container.winfo_children()) == 0
+
+    assert "CLEAR" in sec_gem.verdict_headline.cget("text")
+    assert len(sec_gem.cards_container.winfo_children()) == 0

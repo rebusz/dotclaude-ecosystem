@@ -91,7 +91,7 @@ def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: py
 
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store)
-    wedged = manager.request(purpose="cdp_provider", attempt_id="at-cli", agent_instance="inst-cli")
+    wedged = manager.request(purpose="pytest_heavy", attempt_id="at-cli", agent_instance="inst-cli")
     manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
     queued = manager.request(purpose="pytest_full", attempt_id="at-cli-queued", agent_instance="inst-cli")
 
@@ -210,4 +210,64 @@ def test_conductor_doctor_fails_when_pool_row_absent(tmp_path: pathlib.Path, mon
     assert doc["doctor_status"] == "BLOCKED"
     assert doc["resource"]["pool_exists"] is False
     assert code == 1
+
+
+def test_conductorctl_resource_request_routing_and_slot_key(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+
+    # 1. Request via --purpose cdp_perplexity and --slot-key kimi-3
+    code1 = conductorctl.main(
+        [
+            "resource-request",
+            "--purpose",
+            "cdp_perplexity",
+            "--attempt-id",
+            "at-cli-1",
+            "--agent-instance",
+            "ag-cli-1",
+            "--slot-key",
+            "kimi-3",
+            "--priority",
+            "80",
+        ]
+    )
+    assert code1 == 0
+    out1 = json.loads(capsys.readouterr().out)
+    assert out1["status"] == "SUCCESS"
+    assert out1["result"]["resource_key"] == "cdp:perplexity"
+    assert out1["result"]["slot_key"] == "kimi-3"
+    assert out1["result"]["priority"] == 80
+
+    # 2. Request via --role chatgpt
+    code2 = conductorctl.main(
+        [
+            "resource-request",
+            "--purpose",
+            "cdp_chatgpt",
+            "--role",
+            "chatgpt",
+            "--attempt-id",
+            "at-cli-2",
+            "--agent-instance",
+            "ag-cli-2",
+        ]
+    )
+    assert code2 == 0
+    out2 = json.loads(capsys.readouterr().out)
+    assert out2["status"] == "SUCCESS"
+    assert out2["result"]["resource_key"] == "cdp:chatgpt"
+
+    # 3. resource-live --all
+    code3 = conductorctl.main(["resource-live", "--all", "--json"])
+    assert code3 == 0
+    out3 = json.loads(capsys.readouterr().out)
+    assert "host:heavy" in out3
+    assert "cdp:perplexity" in out3
+    assert "cdp:chatgpt" in out3
+    assert "cdp:gemini" in out3
+    assert out3["cdp:perplexity"]["live_counts"]["ACTIVE"] == 1
+    assert out3["cdp:chatgpt"]["live_counts"]["ACTIVE"] == 1
 

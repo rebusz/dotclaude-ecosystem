@@ -193,113 +193,31 @@ class GatePanelWorker:
         })
 
 
-class ConductorGatePanel(tk.Frame):
-    """Main Conductor Gate Panel widget container."""
+class PoolSectionView:
+    """View component for a single resource pool section in ConductorGatePanel."""
 
-    def __init__(
-        self,
-        master: tk.Tk,
-        root_dir: Optional[Union[str, pathlib.Path]] = None,
-        resource_key: str = "host:heavy",
-        interval_sec: float = 2.0,
-        enable_worker: bool = True,
-    ):
-        super().__init__(master, bg=COLOR_NEUTRAL_BG)
-        self.master = master
-        self.root_dir = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    def __init__(self, parent: tk.Widget, resource_key: str, panel: ConductorGatePanel):
+        self.parent = parent
         self.resource_key = resource_key
-        self.interval_sec = interval_sec
-        self.enable_worker = enable_worker
+        self.panel = panel
 
-        self.queue_data: queue.Queue = queue.Queue()
-        self.worker: Optional[GatePanelWorker] = None
-
-        self._last_verdict_result: Optional[GateVerdictResult] = None
-        self._last_frame_data: Optional[Dict[str, Any]] = None
-        self._last_storage_data: Optional[Dict[str, Any]] = None
-        self._history_open = False
-        self._history_cursor: Optional[str] = None
-        self._history_items: List[Dict[str, Any]] = []
-        self._history_total: int = 0
-        self._history_has_more: bool = False
-
-        self._build_ui()
-
-        if self.enable_worker:
-            self.worker = GatePanelWorker(
-                out_queue=self.queue_data,
-                root_dir=self.root_dir,
-                resource_key=self.resource_key,
-                interval_sec=self.interval_sec,
-            )
-            self.worker.start()
-            self.master.bind("<Unmap>", self._on_unmap)
-            self.master.bind("<Map>", self._on_map)
-            self._schedule_poll()
-
-    def _on_unmap(self, event: tk.Event) -> None:
-        if event.widget == self.master and self.worker:
-            self.worker.pause()
-
-    def _on_map(self, event: tk.Event) -> None:
-        if event.widget == self.master and self.worker:
-            self.worker.resume()
-
-    def _schedule_poll(self) -> None:
-        self.master.after(100, self._poll_queue)
-
-    def _poll_queue(self) -> None:
-        updated = False
-        latest_msg = None
-        while not self.queue_data.empty():
-            try:
-                latest_msg = self.queue_data.get_nowait()
-                updated = True
-            except queue.Empty:
-                break
-
-        if updated and latest_msg:
-            if latest_msg["type"] == "FRAME" and latest_msg.get("frame"):
-                self.apply_frame(
-                    frame=latest_msg["frame"],
-                    storage=latest_msg.get("storage"),
-                    read_ms=latest_msg.get("read_ms", 0.0),
-                    is_stale=latest_msg.get("stale", False),
-                )
-            elif latest_msg["type"] == "ERROR":
-                self.apply_degraded(
-                    headline="ERROR READING STORE",
-                    subtext=latest_msg.get("error", "Unknown error"),
-                )
-
-        self._schedule_poll()
-
-    def _build_ui(self) -> None:
-        self.pack(fill=tk.BOTH, expand=True)
-
-        # Style configuration
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
+        self.section_frame = tk.Frame(parent, bg=COLOR_NEUTRAL_BG)
+        self.section_frame.pack(fill=tk.X, padx=12, pady=(6, 4))
 
         # 1. VERDICT BANNER
-        self.banner_frame = tk.Frame(self, bg="#ffffff", bd=1, relief=tk.SOLID)
-        self.banner_frame.pack(fill=tk.X, padx=12, pady=(12, 6))
+        self.banner_frame = tk.Frame(self.section_frame, bg="#ffffff", bd=1, relief=tk.SOLID)
+        self.banner_frame.pack(fill=tk.X, pady=(0, 4))
 
-        # Aspect bar (colored frame on left)
         self.aspect_bar = tk.Frame(self.banner_frame, bg=COLOR_CLEAR, width=10)
         self.aspect_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-        # Content frame inside banner
-        self.banner_content = tk.Frame(self.banner_frame, bg="#ffffff", padx=12, pady=10)
+        self.banner_content = tk.Frame(self.banner_frame, bg="#ffffff", padx=12, pady=8)
         self.banner_content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.verdict_headline = tk.Label(
             self.banner_content,
-            text="CHECKING GATE STATUS...",
-            font=(FONT_FAMILY_UI, 12, "bold"),
+            text=f"[{self.resource_key.upper()}] CHECKING GATE STATUS...",
+            font=(FONT_FAMILY_UI, 11, "bold"),
             bg="#ffffff",
             fg=COLOR_TEXT,
             anchor="w",
@@ -326,20 +244,20 @@ class ConductorGatePanel(tk.Frame):
         )
 
         # 2. CARDS CONTAINER (Holder / Blockers)
-        self.cards_container = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
-        self.cards_container.pack(fill=tk.X, padx=12, pady=4)
+        self.cards_container = tk.Frame(self.section_frame, bg=COLOR_NEUTRAL_BG)
+        self.cards_container.pack(fill=tk.X, pady=2)
 
         # 3. QUEUE CONTAINER
-        self.queue_container = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
-        self.queue_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        self.queue_container = tk.Frame(self.section_frame, bg=COLOR_NEUTRAL_BG)
+        self.queue_container.pack(fill=tk.BOTH, expand=True, pady=2)
 
         self.queue_header_frame = tk.Frame(self.queue_container, bg=COLOR_NEUTRAL_BG)
-        self.queue_header_frame.pack(fill=tk.X, pady=(0, 4))
+        self.queue_header_frame.pack(fill=tk.X, pady=(0, 2))
 
         self.queue_title = tk.Label(
             self.queue_header_frame,
-            text="RESOURCE QUEUE",
-            font=(FONT_FAMILY_UI, 10, "bold"),
+            text=f"RESOURCE QUEUE ({self.resource_key})",
+            font=(FONT_FAMILY_UI, 9, "bold"),
             bg=COLOR_NEUTRAL_BG,
             fg=COLOR_TEXT,
         )
@@ -354,232 +272,45 @@ class ConductorGatePanel(tk.Frame):
         )
         self.queue_subtitle.pack(side=tk.LEFT, padx=8)
 
-        # Queue Treeview
-        tree_frame = tk.Frame(self.queue_container, bg="#ffffff", bd=1, relief=tk.SOLID)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        columns = ("pos", "request", "agent", "purpose", "reason", "waiting")
+        cols = ("pos", "request_id", "agent", "purpose", "reason", "wait")
         self.queue_tree = ttk.Treeview(
-            tree_frame,
-            columns=columns,
+            self.queue_container,
+            columns=cols,
             show="headings",
-            height=6,
+            height=3,
             selectmode="none",
         )
         self.queue_tree.heading("pos", text="#")
-        self.queue_tree.heading("request", text="request")
-        self.queue_tree.heading("agent", text="agent")
-        self.queue_tree.heading("purpose", text="purpose")
-        self.queue_tree.heading("reason", text="reason")
-        self.queue_tree.heading("waiting", text="waiting")
+        self.queue_tree.heading("request_id", text="Request ID")
+        self.queue_tree.heading("agent", text="Agent Instance")
+        self.queue_tree.heading("purpose", text="Purpose")
+        self.queue_tree.heading("reason", text="Reason Code")
+        self.queue_tree.heading("wait", text="Waiting")
 
-        self.queue_tree.column("pos", width=40, minwidth=40, stretch=False, anchor="center")
-        self.queue_tree.column("request", width=150, minwidth=150, stretch=False, anchor="w")
-        self.queue_tree.column("agent", width=180, minwidth=180, stretch=False, anchor="w")
-        self.queue_tree.column("purpose", width=140, minwidth=140, stretch=False, anchor="w")
-        self.queue_tree.column("reason", width=90, minwidth=90, stretch=False, anchor="center")
-        self.queue_tree.column("waiting", width=90, minwidth=90, stretch=False, anchor="e")
+        self.queue_tree.column("pos", width=30, stretch=False, anchor="center")
+        self.queue_tree.column("request_id", width=140, stretch=False)
+        self.queue_tree.column("agent", width=160, stretch=True)
+        self.queue_tree.column("purpose", width=110, stretch=False)
+        self.queue_tree.column("reason", width=130, stretch=False)
+        self.queue_tree.column("wait", width=80, stretch=False, anchor="e")
+        self.queue_tree.pack(fill=tk.X, expand=True)
 
-        self.queue_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        q_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.queue_tree.yview)
-        self.queue_tree.configure(yscrollcommand=q_scroll.set)
-        q_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Quarantined attention frame
-        self.quarantine_frame = tk.Frame(self.queue_container, bg="#fff8e1", bd=1, relief=tk.SOLID)
+        self.quarantine_frame = tk.Frame(self.queue_container, bg="#fff3e0", bd=1, relief=tk.SOLID, padx=8, pady=4)
         self.quarantine_label = tk.Label(
             self.quarantine_frame,
             text="",
-            font=(FONT_FAMILY_UI, 9, "bold"),
-            bg="#fff8e1",
-            fg="#b78103",
-            padx=8,
-            pady=4,
+            font=(FONT_FAMILY_UI, 8, "bold"),
+            bg="#fff3e0",
+            fg="#e65100",
             anchor="w",
         )
         self.quarantine_label.pack(fill=tk.X)
 
-        # 4. HISTORY DRAWER (GP-4)
-        self.history_container = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
-        self.history_container.pack(fill=tk.X, padx=12, pady=4)
-
-        self.history_toggle_btn = tk.Button(
-            self.history_container,
-            text="▶ Terminal History (closed)",
-            font=(FONT_FAMILY_UI, 9),
-            bg="#e0e0e0",
-            fg=COLOR_TEXT,
-            relief=tk.FLAT,
-            padx=8,
-            pady=2,
-            command=self.toggle_history,
-        )
-        self.history_toggle_btn.pack(anchor="w")
-
-        self.history_drawer = tk.Frame(self.history_container, bg="#ffffff", bd=1, relief=tk.SOLID)
-        # Treeview for history
-        hist_cols = ("request", "agent", "purpose", "reason", "released", "held")
-        self.history_tree = ttk.Treeview(
-            self.history_drawer,
-            columns=hist_cols,
-            show="headings",
-            height=5,
-            selectmode="none",
-        )
-        self.history_tree.heading("request", text="request")
-        self.history_tree.heading("agent", text="agent")
-        self.history_tree.heading("purpose", text="purpose")
-        self.history_tree.heading("reason", text="reason")
-        self.history_tree.heading("released", text="released")
-        self.history_tree.heading("held", text="held")
-
-        self.history_tree.column("request", width=150, minwidth=150, stretch=False, anchor="w")
-        self.history_tree.column("agent", width=180, minwidth=180, stretch=False, anchor="w")
-        self.history_tree.column("purpose", width=130, minwidth=130, stretch=False, anchor="w")
-        self.history_tree.column("reason", width=120, minwidth=120, stretch=False, anchor="center")
-        self.history_tree.column("released", width=150, minwidth=150, stretch=False, anchor="w")
-        self.history_tree.column("held", width=80, minwidth=80, stretch=False, anchor="e")
-
-        self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
-        h_scroll = ttk.Scrollbar(self.history_drawer, orient=tk.VERTICAL, command=self.history_tree.yview)
-        self.history_tree.configure(yscrollcommand=h_scroll.set)
-        h_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.history_controls = tk.Frame(self.history_drawer, bg="#ffffff")
-        self.history_controls.pack(fill=tk.X, padx=8, pady=4)
-
-        self.history_load_more_btn = tk.Button(
-            self.history_controls,
-            text="Load More",
-            font=(FONT_FAMILY_UI, 8),
-            command=self.load_more_history,
-            state=tk.DISABLED,
-        )
-        self.history_load_more_btn.pack(side=tk.LEFT)
-
-        self.history_status_lbl = tk.Label(
-            self.history_controls,
-            text="",
-            font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
-            fg=COLOR_MUTED,
-        )
-        self.history_status_lbl.pack(side=tk.LEFT, padx=8)
-
-        # 5. FOOTER STRIP
-        self.footer_frame = tk.Frame(self, bg="#ebebeb", bd=1, relief=tk.SOLID, height=28)
-        self.footer_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(4, 10))
-
-        self.footer_leader_lamp = tk.Label(
-            self.footer_frame,
-            text="●",
-            font=(FONT_FAMILY_UI, 9),
-            bg="#ebebeb",
-            fg="#2e7d32",
-        )
-        self.footer_leader_lamp.pack(side=tk.LEFT, padx=(8, 2))
-
-        self.footer_leader_text = tk.Label(
-            self.footer_frame,
-            text="leader: checking...",
-            font=(FONT_FAMILY_MONO, 8),
-            bg="#ebebeb",
-            fg=COLOR_TEXT,
-        )
-        self.footer_leader_text.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.footer_sep1 = tk.Label(self.footer_frame, text="|", bg="#ebebeb", fg=COLOR_MUTED)
-        self.footer_sep1.pack(side=tk.LEFT, padx=4)
-
-        self.footer_store_text = tk.Label(
-            self.footer_frame,
-            text="store: AVAILABLE",
-            font=(FONT_FAMILY_MONO, 8),
-            bg="#ebebeb",
-            fg=COLOR_TEXT,
-        )
-        self.footer_store_text.pack(side=tk.LEFT, padx=4)
-
-        self.footer_sep2 = tk.Label(self.footer_frame, text="|", bg="#ebebeb", fg=COLOR_MUTED)
-        self.footer_sep2.pack(side=tk.LEFT, padx=4)
-
-        self.footer_workitems_text = tk.Label(
-            self.footer_frame,
-            text="work items: 0",
-            font=(FONT_FAMILY_MONO, 8),
-            bg="#ebebeb",
-            fg=COLOR_TEXT,
-        )
-        self.footer_workitems_text.pack(side=tk.LEFT, padx=4)
-
-        self.footer_sep3 = tk.Label(self.footer_frame, text="|", bg="#ebebeb", fg=COLOR_MUTED)
-        self.footer_sep3.pack(side=tk.LEFT, padx=4)
-
-        self.footer_receipts_text = tk.Label(
-            self.footer_frame,
-            text="receipts: - / 256 MB",
-            font=(FONT_FAMILY_MONO, 8),
-            bg="#ebebeb",
-            fg=COLOR_TEXT,
-        )
-        self.footer_receipts_text.pack(side=tk.LEFT, padx=4)
-
-        self.footer_timing_text = tk.Label(
-            self.footer_frame,
-            text="read - ms, no receipt written",
-            font=(FONT_FAMILY_MONO, 8),
-            bg="#ebebeb",
-            fg=COLOR_MUTED,
-        )
-        self.footer_timing_text.pack(side=tk.RIGHT, padx=8)
-
-    def apply_degraded(self, headline: str, subtext: str) -> None:
-        """Render explicit degraded banner."""
-        self.aspect_bar.configure(bg=COLOR_DEGRADED)
-        self.verdict_headline.configure(text=headline, fg=COLOR_DEGRADED_FG)
-        self.verdict_subtext.configure(text=subtext, fg=COLOR_TEXT)
-        self._clear_cards()
-        self.queue_container.pack_forget()
-
-    def apply_frame(
-        self,
-        frame: Dict[str, Any],
-        storage: Optional[Dict[str, Any]] = None,
-        read_ms: float = 0.0,
-        is_stale: bool = False,
-    ) -> None:
-        """Apply a fresh gate frame and storage status to the UI."""
-        self._last_frame_data = frame
-        self._last_storage_data = storage
-
-        store_status = frame.get("store", {})
-        gate_snapshot = frame.get("gate", {})
-
-        # Schema version check
-        schema_ver = gate_snapshot.get("schema_version")
-        if schema_ver is not None and schema_ver != "1.0.0":
-            self.apply_degraded(
-                headline="DEGRADED: UNRECOGNIZED SCHEMA VERSION",
-                subtext=f"Database schema version '{schema_ver}' is not supported by this panel.",
-            )
-            return
-
-        store_state = store_status.get("store_state", "AVAILABLE")
-        if store_state == "CORRUPT_OR_UNREADABLE":
-            self.apply_degraded(
-                headline="DEGRADED: STORE UNREADABLE OR CORRUPT",
-                subtext=f"Cannot read conductor.db: {store_status.get('error', 'unreadable')}",
-            )
-            return
-
-        # Evaluate verdict
+    def apply_snapshot(self, gate_snapshot: Dict[str, Any], is_stale: bool = False) -> None:
         verdict_res = evaluate_gate_verdict(
             gate_snapshot,
-            repo_path=self.root_dir.parent if self.root_dir else None,
+            repo_path=self.panel.root_dir.parent if self.panel.root_dir else None,
         )
-        self._last_verdict_result = verdict_res
-
-        # 1. Update Verdict Banner
         verdict = verdict_res.verdict
         if verdict == GateVerdict.CLEAR.value:
             bar_color = COLOR_CLEAR
@@ -591,7 +322,8 @@ class ConductorGatePanel(tk.Frame):
             bar_color = COLOR_ANOMALY
 
         self.aspect_bar.configure(bg=bar_color)
-        self.verdict_headline.configure(text=verdict_res.headline.upper(), fg=COLOR_TEXT)
+        headline_text = f"[{self.resource_key.upper()}] {verdict_res.headline.upper()}"
+        self.verdict_headline.configure(text=headline_text, fg=COLOR_TEXT)
         self.verdict_subtext.configure(text=verdict_res.subtext, fg=COLOR_MUTED)
 
         if is_stale:
@@ -600,21 +332,15 @@ class ConductorGatePanel(tk.Frame):
         else:
             self.stale_marker_label.pack_forget()
 
-        # 2. Update Cards (Holder / Blockers)
         self._render_cards(verdict_res, gate_snapshot)
 
-        # 3. Update Queue
         queue_items = gate_snapshot.get("queue", [])
         quarantined_items = gate_snapshot.get("quarantined", [])
-
         if not queue_items and not quarantined_items:
             self.queue_container.pack_forget()
         else:
-            self.queue_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+            self.queue_container.pack(fill=tk.BOTH, expand=True, pady=2)
             self._render_queue(queue_items, quarantined_items)
-
-        # 4. Update Footer Strip
-        self._render_footer(store_status, storage, read_ms, is_stale)
 
     def _clear_cards(self) -> None:
         for child in self.cards_container.winfo_children():
@@ -622,27 +348,25 @@ class ConductorGatePanel(tk.Frame):
 
     def _render_cards(self, verdict_res: GateVerdictResult, gate_snapshot: Dict[str, Any]) -> None:
         self._clear_cards()
-
         verdict = verdict_res.verdict
         holder = gate_snapshot.get("holder")
+        holders = gate_snapshot.get("holders", ([holder] if holder else []))
         fenced_list = gate_snapshot.get("fenced", [])
         inherited_list = gate_snapshot.get("inherited", [])
 
-        if verdict == GateVerdict.OCCUPIED.value and holder:
-            self._render_holder_card(holder, inherited_list)
+        if verdict == GateVerdict.OCCUPIED.value and holders:
+            for h in holders:
+                self._render_holder_card(h, inherited_list, capacity=gate_snapshot.get("capacity", 1))
         elif verdict == GateVerdict.FENCED.value and fenced_list:
             for idx, fenced_item in enumerate(fenced_list):
-                self._render_blocker_card(fenced_item, inherited_list, idx, len(fenced_list))
-        elif verdict == GateVerdict.CLEAR.value:
-            # Empty sections are removed
-            pass
+                self._render_blocker_card(fenced_item, inherited_list, idx, len(fenced_list), capacity=gate_snapshot.get("capacity", 1))
 
-    def _render_holder_card(self, holder: Dict[str, Any], inherited: List[Dict[str, Any]]) -> None:
-        card = tk.Frame(self.cards_container, bg=COLOR_CARD_BG, bd=1, relief=tk.SOLID, padx=12, pady=10)
+    def _render_holder_card(self, holder: Dict[str, Any], inherited: List[Dict[str, Any]], capacity: int = 1) -> None:
+        card = tk.Frame(self.cards_container, bg=COLOR_CARD_BG, bd=1, relief=tk.SOLID, padx=12, pady=8)
         card.pack(fill=tk.X, pady=2)
 
         header_row = tk.Frame(card, bg=COLOR_CARD_BG)
-        header_row.pack(fill=tk.X, pady=(0, 6))
+        header_row.pack(fill=tk.X, pady=(0, 4))
 
         tk.Label(
             header_row,
@@ -661,7 +385,6 @@ class ConductorGatePanel(tk.Frame):
             fg=COLOR_TEXT,
         ).pack(side=tk.LEFT, padx=(12, 6))
 
-        # Pill ACTIVE
         pill_frame = tk.Frame(header_row, bg=COLOR_OCCUPIED_BG, bd=1, relief=tk.SOLID)
         pill_frame.pack(side=tk.LEFT, padx=4)
         tk.Label(
@@ -674,12 +397,11 @@ class ConductorGatePanel(tk.Frame):
             pady=1,
         ).pack()
 
-        # Pill 1 of 1 units
         pill_u = tk.Frame(header_row, bg="#eeeeee", bd=1, relief=tk.SOLID)
         pill_u.pack(side=tk.LEFT, padx=4)
         tk.Label(
             pill_u,
-            text="1 of 1 units",
+            text=f"1 of {capacity} units",
             font=(FONT_FAMILY_UI, 8),
             bg="#eeeeee",
             fg=COLOR_TEXT,
@@ -687,9 +409,22 @@ class ConductorGatePanel(tk.Frame):
             pady=1,
         ).pack()
 
-        # Grid of attributes
+        slot_key = holder.get("slot_key")
+        if slot_key:
+            pill_sk = tk.Frame(header_row, bg="#e8eaf6", bd=1, relief=tk.SOLID)
+            pill_sk.pack(side=tk.LEFT, padx=4)
+            tk.Label(
+                pill_sk,
+                text=f"slot: {slot_key}",
+                font=(FONT_FAMILY_MONO, 8),
+                bg="#e8eaf6",
+                fg="#1a237e",
+                padx=4,
+                pady=1,
+            ).pack()
+
         grid = tk.Frame(card, bg=COLOR_CARD_BG)
-        grid.pack(fill=tk.X, pady=(0, 6))
+        grid.pack(fill=tk.X, pady=(0, 4))
 
         agent = holder.get("agent_instance", "unknown")
         purpose = holder.get("purpose", "")
@@ -700,12 +435,10 @@ class ConductorGatePanel(tk.Frame):
         created = holder.get("created_at_utc", "") or ""
         expires = holder.get("expires_at_utc", "") or ""
 
-        # Process liveness observation
         pid = holder.get("process_pid")
         proc_start = holder.get("process_start_time")
         proc_obs = observe_process_liveness(pid, proc_start)
 
-        # Elapsed
         now_dt = datetime.datetime.now(datetime.timezone.utc)
         elapsed_str = ""
         if created:
@@ -715,7 +448,6 @@ class ConductorGatePanel(tk.Frame):
             except Exception:
                 pass
 
-        # Inherited count
         inh_str = "none" if not inherited else f"{len(inherited)} active ({', '.join(c.get('request_id','') for c in inherited)})"
 
         rows = [
@@ -755,7 +487,7 @@ class ConductorGatePanel(tk.Frame):
             bg=COLOR_CARD_BG,
             fg=COLOR_MUTED,
             anchor="w",
-        ).pack(fill=tk.X, pady=(4, 0))
+        ).pack(fill=tk.X, pady=(2, 0))
 
     def _render_blocker_card(
         self,
@@ -763,12 +495,13 @@ class ConductorGatePanel(tk.Frame):
         inherited: List[Dict[str, Any]],
         index: int,
         total_fences: int,
+        capacity: int = 1,
     ) -> None:
-        card = tk.Frame(self.cards_container, bg=COLOR_CARD_BG, bd=1, relief=tk.SOLID, padx=12, pady=10)
+        card = tk.Frame(self.cards_container, bg=COLOR_CARD_BG, bd=1, relief=tk.SOLID, padx=12, pady=8)
         card.pack(fill=tk.X, pady=4)
 
         header_row = tk.Frame(card, bg=COLOR_CARD_BG)
-        header_row.pack(fill=tk.X, pady=(0, 6))
+        header_row.pack(fill=tk.X, pady=(0, 4))
 
         title_text = "BLOCKER" if total_fences == 1 else f"BLOCKER ({index + 1} of {total_fences})"
         tk.Label(
@@ -788,7 +521,6 @@ class ConductorGatePanel(tk.Frame):
             fg=COLOR_TEXT,
         ).pack(side=tk.LEFT, padx=(12, 6))
 
-        # Pill RECOVERY_REQUIRED
         pill_rr = tk.Frame(header_row, bg=COLOR_FENCED_BG, bd=1, relief=tk.SOLID)
         pill_rr.pack(side=tk.LEFT, padx=4)
         tk.Label(
@@ -801,7 +533,6 @@ class ConductorGatePanel(tk.Frame):
             pady=1,
         ).pack()
 
-        # Reason code pill
         rc = fenced_item.get("reason_code") or "FENCED"
         pill_rc = tk.Frame(header_row, bg="#eeeeee", bd=1, relief=tk.SOLID)
         pill_rc.pack(side=tk.LEFT, padx=4)
@@ -815,9 +546,8 @@ class ConductorGatePanel(tk.Frame):
             pady=1,
         ).pack()
 
-        # Grid of attributes
         grid = tk.Frame(card, bg=COLOR_CARD_BG)
-        grid.pack(fill=tk.X, pady=(0, 6))
+        grid.pack(fill=tk.X, pady=(0, 4))
 
         agent = fenced_item.get("agent_instance", "unknown")
         purpose = fenced_item.get("purpose", "")
@@ -829,12 +559,10 @@ class ConductorGatePanel(tk.Frame):
         created = fenced_item.get("created_at_utc", "") or ""
         expires = fenced_item.get("expires_at_utc", "") or ""
 
-        # Process liveness observation
         pid = fenced_item.get("process_pid")
         proc_start = fenced_item.get("process_start_time")
         proc_obs = observe_process_liveness(pid, proc_start)
 
-        # Elapsed
         now_dt = datetime.datetime.now(datetime.timezone.utc)
         elapsed_str = ""
         if created:
@@ -846,7 +574,7 @@ class ConductorGatePanel(tk.Frame):
 
         rows = [
             [("agent", agent), ("priority", priority)],
-            [("purpose", purpose), ("units", "1 of 1")],
+            [("purpose", purpose), ("units", f"1 of {capacity}")],
             [("attempt", attempt), ("lease", lease_id)],
             [("held since", f"{created} {elapsed_str}".strip()), ("heartbeat", f"seq {heartbeat_seq}, last {hb_last}")],
             [("expired", expires), ("process", proc_obs)],
@@ -872,11 +600,10 @@ class ConductorGatePanel(tk.Frame):
                     anchor="w",
                 ).grid(row=r_idx, column=col_offset + 1, sticky="w", padx=(0, 20), pady=1)
 
-        # Adjudication & Refusal Explainer
         adjudication = adjudicate_recovery(
             fenced_request=fenced_item,
             inherited_children=inherited,
-            repo_path=self.root_dir.parent if self.root_dir else None,
+            repo_path=self.panel.root_dir.parent if self.panel.root_dir else None,
         )
 
         explainer_frame = tk.Frame(card, bg="#fafafa", bd=1, relief=tk.SOLID, padx=8, pady=6)
@@ -954,23 +681,13 @@ class ConductorGatePanel(tk.Frame):
                 padx=10,
                 pady=2,
             )
-            copy_btn.configure(command=lambda b=copy_btn, c=cmd: self.copy_to_clipboard(c, b))
+            copy_btn.configure(command=lambda b=copy_btn, c=cmd: self.panel.copy_to_clipboard(c, b))
             copy_btn.pack(side=tk.RIGHT)
-
-    def copy_to_clipboard(self, text: str, button: Optional[tk.Button] = None) -> None:
-        """Copy command string to clipboard (local UI action only, no store access)."""
-        self.master.clipboard_clear()
-        self.master.clipboard_append(text)
-        if button:
-            orig_text = button.cget("text")
-            button.configure(text="COPIED!", bg="#c8e6c9")
-            self.master.after(1500, lambda: button.configure(text=orig_text, bg="#e0e0e0"))
 
     def _render_queue(self, queue_items: List[Dict[str, Any]], quarantined_items: List[Dict[str, Any]]) -> None:
         q_count = len(queue_items)
         self.queue_subtitle.configure(text=f"{q_count} waiting, admission order")
 
-        # Clear existing rows
         for item in self.queue_tree.get_children():
             self.queue_tree.delete(item)
 
@@ -1002,26 +719,327 @@ class ConductorGatePanel(tk.Frame):
             )
 
         if q_count > cap:
-            self.queue_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    "",
-                    f"+{q_count - cap} more",
-                    "...",
-                    "...",
-                    "...",
-                    "...",
-                ),
-            )
+            self.queue_tree.insert("", tk.END, values=("", f"+{q_count - cap} more", "...", "...", "...", "..."))
 
         if quarantined_items:
             self.quarantine_label.configure(
-                text=f"⚠ {len(quarantined_items)} QUARANTINED request(s) present (attention required, non-blocking): {', '.join(q.get('request_id','') for q in quarantined_items)}"
+                text=f"⚠ {len(quarantined_items)} QUARANTINED request(s) present: {', '.join(q.get('request_id','') for q in quarantined_items)}"
             )
             self.quarantine_frame.pack(fill=tk.X, pady=(4, 0))
         else:
             self.quarantine_frame.pack_forget()
+
+
+class ConductorGatePanel(tk.Frame):
+    """Main Conductor Gate Panel widget container."""
+
+    def __init__(
+        self,
+        master: tk.Tk,
+        root_dir: Optional[Union[str, pathlib.Path]] = None,
+        resource_key: str = "host:heavy",
+        interval_sec: float = 2.0,
+        enable_worker: bool = True,
+    ):
+        super().__init__(master, bg=COLOR_NEUTRAL_BG)
+        self.master = master
+        self.root_dir = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+        self.resource_key = resource_key
+        self.interval_sec = interval_sec
+        self.enable_worker = enable_worker
+
+        self.queue_data: queue.Queue = queue.Queue()
+        self.worker: Optional[GatePanelWorker] = None
+
+        self._last_verdict_result: Optional[GateVerdictResult] = None
+        self._last_frame_data: Optional[Dict[str, Any]] = None
+        self._last_storage_data: Optional[Dict[str, Any]] = None
+        self._history_open = False
+        self._history_cursor: Optional[str] = None
+        self._history_items: List[Dict[str, Any]] = []
+        self._history_total: int = 0
+        self._history_has_more: bool = False
+
+        self.pool_sections: Dict[str, PoolSectionView] = {}
+
+        self._build_ui()
+
+        if self.enable_worker:
+            self.worker = GatePanelWorker(
+                out_queue=self.queue_data,
+                root_dir=self.root_dir,
+                resource_key=self.resource_key,
+                interval_sec=self.interval_sec,
+            )
+            self.worker.start()
+            self.master.bind("<Unmap>", self._on_unmap)
+            self.master.bind("<Map>", self._on_map)
+            self._schedule_poll()
+
+    def _on_unmap(self, event: tk.Event) -> None:
+        if event.widget == self.master and self.worker:
+            self.worker.pause()
+
+    def _on_map(self, event: tk.Event) -> None:
+        if event.widget == self.master and self.worker:
+            self.worker.resume()
+
+    def _schedule_poll(self) -> None:
+        self.master.after(100, self._poll_queue)
+
+    def _poll_queue(self) -> None:
+        updated = False
+        latest_msg = None
+        while not self.queue_data.empty():
+            try:
+                latest_msg = self.queue_data.get_nowait()
+                updated = True
+            except queue.Empty:
+                break
+
+        if updated and latest_msg:
+            if latest_msg["type"] == "FRAME" and latest_msg.get("frame"):
+                self.apply_frame(
+                    frame=latest_msg["frame"],
+                    storage=latest_msg.get("storage"),
+                    read_ms=latest_msg.get("read_ms", 0.0),
+                    is_stale=latest_msg.get("stale", False),
+                )
+            elif latest_msg["type"] == "ERROR":
+                self.apply_degraded(
+                    headline="ERROR READING STORE",
+                    subtext=latest_msg.get("error", "Unknown error"),
+                )
+
+        self._schedule_poll()
+
+    def _build_ui(self) -> None:
+        self.pack(fill=tk.BOTH, expand=True)
+
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        # Top scrollable / vertical container for pool sections
+        self.pools_container = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
+        self.pools_container.pack(fill=tk.BOTH, expand=True)
+
+        # Default 4 pools
+        default_pools = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini")
+        for p in default_pools:
+            self.pool_sections[p] = PoolSectionView(self.pools_container, resource_key=p, panel=self)
+
+        # Primary section aliases for backward compatibility with single-pool introspection
+        primary = self.pool_sections.get(self.resource_key) or self.pool_sections["host:heavy"]
+        self.banner_frame = primary.banner_frame
+        self.aspect_bar = primary.aspect_bar
+        self.banner_content = primary.banner_content
+        self.verdict_headline = primary.verdict_headline
+        self.verdict_subtext = primary.verdict_subtext
+        self.stale_marker_label = primary.stale_marker_label
+        self.cards_container = primary.cards_container
+        self.queue_container = primary.queue_container
+        self.queue_header_frame = primary.queue_header_frame
+        self.queue_title = primary.queue_title
+        self.queue_subtitle = primary.queue_subtitle
+        self.queue_tree = primary.queue_tree
+        self.quarantine_frame = primary.quarantine_frame
+        self.quarantine_label = primary.quarantine_label
+
+        # 4. HISTORY DRAWER (Collapsible)
+        self.history_outer = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
+        self.history_outer.pack(fill=tk.X, padx=12, pady=4)
+
+        self.history_toggle_btn = tk.Button(
+            self.history_outer,
+            text="▶ Terminal History (closed)",
+            font=(FONT_FAMILY_UI, 9, "bold"),
+            bg="#f0f0f0",
+            fg=COLOR_TEXT,
+            relief=tk.FLAT,
+            anchor="w",
+            padx=8,
+            pady=4,
+            command=self.toggle_history,
+        )
+        self.history_toggle_btn.pack(fill=tk.X)
+
+        self.history_drawer = tk.Frame(self.history_outer, bg="#ffffff", bd=1, relief=tk.SOLID)
+
+        self.history_header_frame = tk.Frame(self.history_drawer, bg="#ffffff", padx=8, pady=4)
+        self.history_header_frame.pack(fill=tk.X)
+
+        self.history_subtitle = tk.Label(
+            self.history_header_frame,
+            text="",
+            font=(FONT_FAMILY_UI, 9),
+            bg="#ffffff",
+            fg=COLOR_MUTED,
+        )
+        self.history_subtitle.pack(side=tk.LEFT)
+
+        h_cols = ("req_id", "agent", "purpose", "reason", "held", "released")
+        self.history_tree = ttk.Treeview(
+            self.history_drawer,
+            columns=h_cols,
+            show="headings",
+            height=4,
+            selectmode="none",
+        )
+        self.history_tree.heading("req_id", text="Request ID")
+        self.history_tree.heading("agent", text="Agent Instance")
+        self.history_tree.heading("purpose", text="Purpose")
+        self.history_tree.heading("reason", text="Terminal Reason")
+        self.history_tree.heading("held", text="Held Duration")
+        self.history_tree.heading("released", text="Released (UTC)")
+
+        self.history_tree.column("req_id", width=140, stretch=False)
+        self.history_tree.column("agent", width=160, stretch=True)
+        self.history_tree.column("purpose", width=110, stretch=False)
+        self.history_tree.column("reason", width=150, stretch=False)
+        self.history_tree.column("held", width=90, stretch=False, anchor="e")
+        self.history_tree.column("released", width=150, stretch=False)
+        self.history_tree.pack(fill=tk.X, expand=True, padx=8, pady=(0, 4))
+
+        self.history_load_more_btn = tk.Button(
+            self.history_drawer,
+            text="Load 50 more...",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#eeeeee",
+            fg=COLOR_TEXT,
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            command=lambda: self.load_history_page(reset=False),
+        )
+
+        # 5. FOOTER STRIP
+        self.footer_frame = tk.Frame(self, bg="#ffffff", bd=1, relief=tk.SOLID, padx=8, pady=4)
+        self.footer_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(4, 8))
+
+        self.footer_leader_lamp = tk.Label(
+            self.footer_frame,
+            text="●",
+            font=(FONT_FAMILY_UI, 10, "bold"),
+            bg="#ffffff",
+            fg="#2e7d32",
+        )
+        self.footer_leader_lamp.pack(side=tk.LEFT, padx=(2, 4))
+
+        self.footer_leader_text = tk.Label(
+            self.footer_frame,
+            text="leader active",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#ffffff",
+            fg=COLOR_TEXT,
+        )
+        self.footer_leader_text.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.footer_store_text = tk.Label(
+            self.footer_frame,
+            text="store AVAILABLE",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#ffffff",
+            fg=COLOR_TEXT,
+        )
+        self.footer_store_text.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.footer_workitems_text = tk.Label(
+            self.footer_frame,
+            text="work items 0",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#ffffff",
+            fg=COLOR_TEXT,
+        )
+        self.footer_workitems_text.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.footer_receipts_text = tk.Label(
+            self.footer_frame,
+            text="receipts - / 256 MB",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#ffffff",
+            fg=COLOR_TEXT,
+        )
+        self.footer_receipts_text.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.footer_timing_text = tk.Label(
+            self.footer_frame,
+            text="read 0 ms, no receipt written",
+            font=(FONT_FAMILY_UI, 8),
+            bg="#ffffff",
+            fg=COLOR_MUTED,
+        )
+        self.footer_timing_text.pack(side=tk.RIGHT, padx=4)
+
+    def apply_degraded(self, headline: str, subtext: str) -> None:
+        """Render degraded banner across sections on fatal read error or schema mismatch."""
+        for section in self.pool_sections.values():
+            section.aspect_bar.configure(bg=COLOR_ANOMALY)
+            section.verdict_headline.configure(text=headline.upper(), fg=COLOR_TEXT)
+            section.verdict_subtext.configure(text=subtext, fg=COLOR_TEXT)
+            section._clear_cards()
+            section.queue_container.pack_forget()
+
+    def apply_frame(
+        self,
+        frame: Dict[str, Any],
+        storage: Optional[Dict[str, Any]] = None,
+        read_ms: float = 0.0,
+        is_stale: bool = False,
+    ) -> None:
+        """Apply a fresh gate frame and storage status to the UI."""
+        self._last_frame_data = frame
+        self._last_storage_data = storage
+
+        store_status = frame.get("store", {})
+        gate_snapshot = frame.get("gate", {})
+        gates_dict = frame.get("gates")
+
+        # Schema version check
+        schema_ver = gate_snapshot.get("schema_version")
+        if schema_ver is not None and schema_ver != "1.0.0":
+            self.apply_degraded(
+                headline="DEGRADED: UNRECOGNIZED SCHEMA VERSION",
+                subtext=f"Database schema version '{schema_ver}' is not supported by this panel.",
+            )
+            return
+
+        store_state = store_status.get("store_state", "AVAILABLE")
+        if store_state == "CORRUPT_OR_UNREADABLE":
+            self.apply_degraded(
+                headline="DEGRADED: STORE UNREADABLE OR CORRUPT",
+                subtext=f"Cannot read conductor.db: {store_status.get('error', 'unreadable')}",
+            )
+            return
+
+        # Multi-pool update
+        if not gates_dict:
+            target_key = gate_snapshot.get("resource_key", self.resource_key)
+            gates_dict = {target_key: gate_snapshot}
+
+        for p_key, p_snap in gates_dict.items():
+            if p_key not in self.pool_sections:
+                self.pool_sections[p_key] = PoolSectionView(self.pools_container, resource_key=p_key, panel=self)
+            self.pool_sections[p_key].apply_snapshot(p_snap, is_stale=is_stale)
+
+        primary_snap = gates_dict.get(self.resource_key) or gate_snapshot
+        self._last_verdict_result = evaluate_gate_verdict(
+            primary_snap,
+            repo_path=self.root_dir.parent if self.root_dir else None,
+        )
+
+        self._render_footer(store_status, storage, read_ms, is_stale)
+
+    def copy_to_clipboard(self, text: str, button: Optional[tk.Button] = None) -> None:
+        """Copy command string to clipboard (local UI action only, no store access)."""
+        self.master.clipboard_clear()
+        self.master.clipboard_append(text)
+        if button:
+            orig_text = button.cget("text")
+            button.configure(text="COPIED!", bg="#c8e6c9")
+            self.master.after(1500, lambda: button.configure(text=orig_text, bg="#e0e0e0"))
 
     def _render_footer(
         self,

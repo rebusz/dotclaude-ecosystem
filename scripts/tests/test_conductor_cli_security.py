@@ -289,3 +289,60 @@ def test_attached_tty_wrong_confirmation_does_not_grant(
     assert exit_code == 1
     assert store.get_authorization(work_item_id) is None
     assert store.get_work_item(work_item_id).state == WorkItemState.QUEUED
+
+
+def test_resource_live_all_and_doctor_leave_tree_byte_identical_with_four_pools(
+    tmp_path: pathlib.Path,
+):
+    """READ-ONLY test:
+    resource-live --all and doctor leave tree byte-identical with four pools,
+    and create no home when run against absent dir.
+    """
+    conductor_home = tmp_path / "four-pools-read-only"
+    store = ConductorStore(root_dir=conductor_home)
+
+    env = os.environ.copy()
+    env["TDCONDUCTOR_DIR"] = str(conductor_home)
+
+    snapshot_before = _tree_snapshot(conductor_home)
+
+    # 1. resource-live --all
+    completed1 = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "conductorctl.py"), "resource-live", "--all", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed1.returncode == 0, completed1.stderr
+    res1 = json.loads(completed1.stdout)
+    assert len(res1) >= 4
+    assert _tree_snapshot(conductor_home) == snapshot_before
+
+    # 2. doctor
+    completed2 = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "conductorctl.py"), "doctor", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed2.returncode == 0, completed2.stderr
+    assert _tree_snapshot(conductor_home) == snapshot_before
+
+    # 3. Absent home check
+    absent_home = tmp_path / "resource-live-all-absent"
+    env_absent = os.environ.copy()
+    env_absent["TDCONDUCTOR_DIR"] = str(absent_home)
+    completed_absent = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "conductorctl.py"), "resource-live", "--all", "--json"],
+        cwd=tmp_path,
+        env=env_absent,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed_absent.returncode == 0, completed_absent.stderr
+    assert not absent_home.exists()

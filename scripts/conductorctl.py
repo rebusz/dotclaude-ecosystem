@@ -19,8 +19,10 @@ if str(_repo_root) not in sys.path:
 
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
+from scripts.conductor_resources import resolve_resource_key  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
+    read_all_pools_live,
     read_host_resource_status,
     read_resource_live_snapshot,
     read_storage_status,
@@ -51,18 +53,51 @@ def main(argv: list[str] | None = None) -> int:
         default="host:heavy",
         help="Resource key (default: host:heavy)",
     )
+    p_resource_live.add_argument(
+        "--all",
+        action="store_true",
+        help="Show live status for all resource pools",
+    )
     p_resource_live.add_argument("--json", action="store_true", help="Output raw JSON")
 
     p_resource_status = subparsers.add_parser("resource-status", help="Show host resource admission status")
     p_resource_status.add_argument("--json", action="store_true", help="Output raw JSON")
 
     p_resource_request = subparsers.add_parser("resource-request", help="Request host resource capacity")
-    p_resource_request.add_argument("--purpose", choices=["pytest_full", "pytest_heavy", "playwright", "cdp_provider"], required=True)
+    p_resource_request.add_argument(
+        "--purpose",
+        choices=[
+            "pytest_full",
+            "pytest_heavy",
+            "pytest_focused",
+            "playwright",
+            "cdp_provider",
+            "cdp_perplexity",
+            "cdp_chatgpt",
+            "cdp_gemini",
+        ],
+        required=True,
+    )
     p_resource_request.add_argument("--attempt-id", required=True)
     p_resource_request.add_argument("--agent-instance", required=True)
     p_resource_request.add_argument("--priority", type=int, default=50)
     p_resource_request.add_argument("--idempotency-key")
     p_resource_request.add_argument("--parent-lease-id")
+    p_resource_request.add_argument(
+        "--resource-key",
+        default=None,
+        help="Resource pool key (default: host:heavy or derived from role/purpose)",
+    )
+    p_resource_request.add_argument(
+        "--slot-key",
+        default="",
+        help="Optional slot key (e.g. model name for per-model exclusivity)",
+    )
+    p_resource_request.add_argument(
+        "--role",
+        default=None,
+        help="CDP role (chrome_ppl, chrome_gpt, chrome_gemini)",
+    )
 
     p_resource_heartbeat = subparsers.add_parser("resource-heartbeat", help="Heartbeat a host resource lease")
     p_resource_heartbeat.add_argument("--lease-id", required=True)
@@ -143,11 +178,16 @@ def main(argv: list[str] | None = None) -> int:
         truthctl = check_truthctl_version()
         storage = read_storage_status()
         resource = read_host_resource_status()
-        info.update({"storage": storage, "truthctl": truthctl, "resource": resource})
+        all_pools = read_all_pools_live()
+        info.update({"storage": storage, "truthctl": truthctl, "resource": resource, "resources": all_pools})
         gate_blocked = (
             not resource.get("pool_exists")
             or not resource.get("enabled")
             or resource.get("recovery_required", 0) > 0
+            or any(
+                (not p.get("pool_present") or not p.get("enabled") or len(p.get("fenced", [])) > 0)
+                for p in all_pools.values()
+            )
         )
         if not truthctl.get("ok"):
             info["doctor_status"] = "BLOCKED"
@@ -175,6 +215,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if info["doctor_status"] in {"PASS", "ABSENT"} else 1
 
     if args.command == "resource-live":
+        if args.all:
+            results = read_all_pools_live()
+            if args.json:
+                print(json.dumps(results, indent=2))
+            else:
+                for key, res in results.items():
+                    print(f"Conductor Host Resource Live Status ({key}):")
+                    print(f"  Pool Present: {res.get('pool_present')}")
+                    print(f"  Capacity: {res.get('capacity')}")
+                    print(f"  Enabled: {res.get('enabled')}")
+                    print(f"  Live Counts: {json.dumps(res.get('live_counts'))}")
+                    print(f"  Terminal Count: {res.get('terminal_count')}")
+                    holder = res.get("holder")
+                    holder_id = holder.get("request_id") if holder else "None"
+                    print(f"  Holder: {holder_id}")
+                    print(f"  Queue Depth: {len(res.get('queue', []))}")
+                    print(f"  Fenced Count: {len(res.get('fenced', []))}")
+                    print(f"  Quarantined Count: {len(res.get('quarantined', []))}")
+                    print()
+            return 0
         result = read_resource_live_snapshot(resource_key=args.resource_key)
         if args.json:
             print(json.dumps(result, indent=2))
@@ -227,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     elif args.command == "resource-request":
+        target_resource_key = resolve_resource_key(
+            purpose=args.purpose,
+            role=args.role,
+            resource_key=args.resource_key,
+        )
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="resource_request",
@@ -237,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
                 "priority": args.priority,
                 "idempotency_key": args.idempotency_key,
                 "parent_lease_id": args.parent_lease_id,
+                "resource_key": target_resource_key,
+                "slot_key": args.slot_key or "",
+                "role": args.role,
             },
             idempotency_key=f"idemp_resource_request_{uuid.uuid4().hex[:8]}",
         )

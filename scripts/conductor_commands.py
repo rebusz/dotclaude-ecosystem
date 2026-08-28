@@ -23,7 +23,7 @@ from scripts.conductor_model import (
     WorkItemState,
 )
 from scripts.conductor_store import ConductorStore
-from scripts.conductor_resources import HostResourceManager
+from scripts.conductor_resources import HostResourceManager, resolve_resource_key
 
 
 class ConductorCommandProcessor:
@@ -268,10 +268,17 @@ class ConductorCommandProcessor:
 
     def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Admit or queue one named host resource consumer."""
-        return self.resources.request(
+        target_resource_key = resolve_resource_key(
+            purpose=payload.get("purpose"),
+            role=payload.get("role"),
+            resource_key=payload.get("resource_key"),
+        )
+        manager = HostResourceManager(self.store, resource_key=target_resource_key)
+        return manager.request(
             purpose=payload["purpose"],
             attempt_id=payload["attempt_id"],
             agent_instance=payload["agent_instance"],
+            slot_key=payload.get("slot_key", ""),
             idempotency_key=payload.get("idempotency_key"),
             command_sha256=payload.get("command_sha256", ""),
             priority=int(payload.get("priority", 50)),
