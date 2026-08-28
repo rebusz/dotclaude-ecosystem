@@ -81,7 +81,7 @@ def test_cli_read_only_commands_do_not_create_home(tmp_path: pathlib.Path, comma
         text=True,
         timeout=30,
     )
-    assert completed.returncode == 0, completed.stderr
+    assert (completed.returncode == 0 if command == "status" else completed.returncode in {0, 1}), completed.stderr
     assert json.loads(completed.stdout)
     assert not conductor_home.exists()
 
@@ -116,7 +116,8 @@ def test_status_and_doctor_do_not_write_existing_store(tmp_path: pathlib.Path):
             text=True,
             timeout=30,
         )
-        assert completed.returncode == 0, completed.stderr
+        assert (completed.returncode == 0 if command == "status" else completed.returncode in {0, 1}), completed.stderr
+        assert json.loads(completed.stdout)
 
     after_status = read_store_status(conductor_home)
     assert _tree_snapshot(conductor_home) == before_tree

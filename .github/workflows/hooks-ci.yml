@@ -8,11 +8,18 @@ on:
       - "scripts/git_hygiene.py"
       - "scripts/codex_hooks_doctor.py"
       - "scripts/cursor_hooks_doctor.py"
+      - "scripts/conductor*.py"
       - "scripts/tests/test_hooks_install.py"
       - "scripts/tests/test_hooks_janitor.py"
       - "scripts/tests/test_codex_hooks_doctor.py"
       - "scripts/tests/test_cursor_hooks_doctor.py"
+      - "scripts/tests/test_conductor*.py"
       - "templates/hooks.manifest.json"
+      - "skills/conductor/**"
+      - "install/install.ps1"
+      - "install/install.sh"
+      - "docs/INSTALL.md"
+      - "requirements-conductor-mcp.txt"
       - ".github/workflows/hooks-ci.yml"
 
 jobs:
@@ -49,3 +56,40 @@ jobs:
           scripts/cursor_hooks_doctor.py
       # validate the shipped manifest loads under the code-owned schema/allowlist
       - run: python scripts/hooks_install.py version
+
+  # Conductor install/admission validation gate
+  conductor:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: >-
+          python -m pip install pytest "ruff==0.15.20" psutil
+          -r requirements-conductor-mcp.txt
+      - shell: pwsh
+        run: |
+          $tests = @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m pytest -q @tests
+      - shell: pwsh
+        run: |
+          $files = @(Get-ChildItem scripts/conductor*.py) + @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m ruff check @files
+      - shell: pwsh
+        run: |
+          $files = @(Get-ChildItem scripts/conductor*.py) + @(Get-ChildItem scripts/tests/test_conductor*.py)
+          python -m py_compile @files
+      - shell: pwsh
+        run: |
+          $null = [scriptblock]::Create((Get-Content install/install.ps1 -Raw))
+      - shell: pwsh
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+
+  conductor-posix-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n install/install.sh
