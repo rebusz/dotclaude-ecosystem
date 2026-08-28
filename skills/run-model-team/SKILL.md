@@ -1,6 +1,6 @@
 ---
 name: run-model-team
-description: "Orchestrate parallel repository work from a GPT-5.6 Sol supervisor using ChatGPT CLI/CDP, Ox Alpha through OpenCode, Antigravity, Codex Luna max, local Qwen3.8, task-routed Perplexity CDP models, and critical-only Claude Fable 5 advice. Use for /model-team and parallel model delegation. Kimi CLI is retired (the Kimi 3 Perplexity picker route stays live); Cursor is disabled through 2026-09-08."
+description: "Orchestrate parallel repository work from a GPT-5.6 Sol supervisor using ChatGPT CDP, Ox Alpha through OpenCode, Antigravity, local Qwen3.8, task-routed Perplexity CDP models, and critical-only Claude Fable 5 advice. Use for /model-team and parallel model delegation. Kimi CLI is retired (the Kimi 3 Perplexity picker route stays live); Cursor is disabled through 2026-09-08."
 ---
 
 # Run Model Team
@@ -15,10 +15,9 @@ status.
 | Lane | Normal role | Boundary |
 |---|---|---|
 | Sol (`gpt-5.6-sol`, high) | Supervisor, task carving, synthesis, conflict resolution, final acceptance | Read-only over worker code |
-| ChatGPT CLI or `chrome_gpt` CDP | Primary coding lane, especially one-file and bounded semantic changes | Prefer a proven CLI adapter; otherwise use `cdp_chatgpt_code.py`, one target file per run |
+| ChatGPT `chrome_gpt` CDP | Primary GPT coding lane, especially one-file and bounded semantic changes | Required for coding/review/audit; use `cdp_chatgpt_code.py`, one target file per run; no Codex CLI fallback |
 | Ox Alpha via OpenCode | Co-primary worker for fresh modules, bounded edits, test scaffolds, and architecture experiments | Exact model `opencode/x-preview-f-free`; R2/R3 output is a draft until independently re-derived and tested |
 | Antigravity CLI | High-throughput bounded implementation, repetitive changes, and test expansion | Exact model `gemini-3.7-flash-high`; isolated worktree; authenticated model proof required |
-| Luna (`gpt-5.6-luna`, max) | Difficult logic, integration seams, safety-critical fixes, and review repairs | Fewer, deeper slices; isolated worktree |
 | Local Qwen3.8-27B | Offline long-context code generation, test ideas, mechanical draft patches, and overnight assistance | `127.0.0.1:8080`; default model-team use is no-tools/codegen only, never direct GitHub mutation |
 | Perplexity CDP models | Current research, adversarial questions, independent design/quant viewpoints, and exact-head review support | Supervisor owns `chrome_ppl`; probe the live picker and assign different bounded questions to suitable visible models |
 | Claude Fable 5 CLI | Additional judgment for genuinely important architecture, quant, or design decisions | Critical-only advisory lane; never routine coding or default review |
@@ -43,9 +42,9 @@ blocked.
 
 Use dependencies and file ownership before provider preference.
 
-- Broad or difficult implementation: ChatGPT, Ox, or Antigravity carry most of
-  the aggregate work; Luna takes fewer critical seams.
-- Existing-file semantic changes: prefer ChatGPT or Luna. Ox may take one
+- Broad or difficult implementation: ChatGPT, Ox, or Antigravity carry the
+  aggregate work.
+- Existing-file semantic changes: prefer ChatGPT. Ox may take one
   precisely specified semantic change when the supervisor already knows the
   target structure.
 - Fresh modules, bounded experiments, mechanical tests: prefer Ox or
@@ -62,7 +61,7 @@ Use dependencies and file ownership before provider preference.
 Starting load weights, adjusted for readiness and dependencies:
 
 ```text
-chatgpt=4, ox=4, antigravity=4, luna=2, qwen=2-codegen
+chatgpt=5, ox=4, antigravity=4, qwen=2-codegen
 perplexity=task-routed-advisory, fable=critical-only
 ```
 
@@ -109,8 +108,8 @@ worker pool inside that lifecycle, not an alternate review or landing route.
 
 ### ChatGPT
 
-Prefer a supported ChatGPT CLI adapter when one is installed and proves model
-identity in machine-readable output. Otherwise use the existing CDP driver:
+Use the existing ChatGPT CDP driver. Coding, audit, and review must fail closed
+when `chrome_gpt` is unavailable; Codex CLI is not a fallback:
 
 ```powershell
 python D:/APPS/WatchF/scripts/cdp_chatgpt_code.py `
@@ -137,12 +136,6 @@ Require host-context `agy models` to contain `gemini-3.7-flash-high`. Dispatch
 with high effort, `accept-edits`, sandbox, stream JSON, and a dedicated
 worktree. Never use `--dangerously-skip-permissions`. Preserve raw
 `RESOURCE_EXHAUSTED` evidence without guessing its cause.
-
-### Luna
-
-Dispatch through Codex CLI with `gpt-5.6-luna`, reasoning `max`, priority tier,
-workspace-write, approvals never, and an isolated worktree. Use it for the
-hardest bounded implementation rather than routine fan-out.
 
 ### Local Qwen3.8
 
@@ -193,7 +186,6 @@ resource.
 Examples:
 
 ```powershell
-python <dispatcher> run --role luna --repo <worktree> --prompt-file <packet> --out <result>
 python <dispatcher> run --role antigravity --repo <worktree> --prompt-file <packet> --out <result>
 python <dispatcher> run --role ox --repo <worktree> --prompt-file <packet> --out <result>
 python <dispatcher> run --role chatgpt --repo <worktree> --prompt-file <packet> --target-file <relative-file> --out <result.json>

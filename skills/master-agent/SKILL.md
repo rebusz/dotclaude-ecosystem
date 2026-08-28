@@ -83,7 +83,10 @@ skills and global rules must reference it instead of restating their own routing
 
 `/fwf` uses the OpenRouter-free basket; `/fwp` uses the paid OpenRouter
 complement basket. Both retain Perplexity CDP, Gemini CDP, and the
-synthesizer-aware opposite frontier lane. The selected command owns the entire
+synthesizer-aware opposite frontier lane. When Claude synthesizes, that GPT
+frontier lane is `chrome_gpt` ChatGPT CDP; coding, audit, and review never fall
+back to Codex CLI. When GPT synthesizes, the GPT lane is excluded to prevent
+self-grading. The selected command owns the entire
 lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
 checkout synchronization. There is no separate closeout command.
 
