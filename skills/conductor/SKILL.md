@@ -11,6 +11,8 @@ TruthDeck Conductor is a port-free, single-writer local work queue coordinator f
 
 - `python scripts/conductorctl.py status`: View current queue status and active leader PID.
 - `python scripts/conductorctl.py doctor`: Run system diagnostics and host doctor probe.
+- `python scripts/conductorctl.py resource-live`: Read the live `host:heavy` gate projection (pool, live state counts, holder, queue, recovery fences) in ~10 ms without writing a receipt or creating directories.
+- `python scripts/conductor_gui.py`: Open the read-only Conductor Gate Panel (local Tk window, port-free, signature-gated live view of the `host:heavy` gate).
 - `python scripts/conductorctl.py resource-status --json`: Read the durable `host:heavy` pool, queue, recovery state, and storage growth.
 - `python scripts/conductorctl.py resource-request --purpose pytest_full --attempt-id <id> --agent-instance <id>`: Request the capacity-one heavy lease.
 - `python scripts/conductorctl.py pytest --repo <repo> --python <python> --attempt-id <id> --agent-instance <id> -- <pytest args>`: Run only the bounded `<python> -m pytest` adapter (`--heavy` promotes a focused invocation).

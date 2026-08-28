@@ -7,12 +7,17 @@ All environment variables use TDCONDUCTOR_* to avoid collision with 3rd-party ho
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
 import json
 import os
 import pathlib
 import psutil
+import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
@@ -99,6 +104,181 @@ def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Co
             conn.close()
 
 
+def _row_to_request_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "request_id": str(row["request_id"]),
+        "idempotency_key": str(row["idempotency_key"]),
+        "resource_key": str(row["resource_key"]),
+        "purpose": str(row["purpose"]),
+        "attempt_id": str(row["attempt_id"]),
+        "agent_instance": str(row["agent_instance"]),
+        "state": str(row["state"]),
+        "priority": int(row["priority"]),
+        "parent_lease_id": str(row["parent_lease_id"]) if row["parent_lease_id"] is not None else None,
+        "command_sha256": str(row["command_sha256"]) if row["command_sha256"] is not None else "",
+        "created_at_utc": str(row["created_at_utc"]),
+        "released_at_utc": str(row["released_at_utc"]) if row["released_at_utc"] is not None else None,
+        "reason_code": str(row["reason_code"]) if row["reason_code"] is not None else None,
+        "schema_version": str(row["schema_version"]),
+    }
+
+
+def _row_to_lease_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "lease_id": str(row["lease_id"]),
+        "request_id": str(row["request_id"]),
+        "resource_key": str(row["resource_key"]),
+        "attempt_id": str(row["attempt_id"]),
+        "agent_instance": str(row["agent_instance"]),
+        "heartbeat_sequence": int(row["heartbeat_sequence"]),
+        "expires_at_utc": str(row["expires_at_utc"]),
+        "last_heartbeat_utc": str(row["last_heartbeat_utc"]),
+        "process_pid": int(row["process_pid"]) if row["process_pid"] is not None else None,
+        "process_start_time": float(row["process_start_time"]) if row["process_start_time"] is not None else None,
+        "schema_version": str(row["schema_version"]),
+    }
+
+
+def _join_request_lease(req_dict: Dict[str, Any], lease_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    joined = dict(req_dict)
+    joined["lease"] = lease_dict
+    if lease_dict:
+        joined["lease_id"] = lease_dict["lease_id"]
+        joined["expires_at_utc"] = lease_dict["expires_at_utc"]
+        joined["last_heartbeat_utc"] = lease_dict["last_heartbeat_utc"]
+        joined["heartbeat_sequence"] = lease_dict["heartbeat_sequence"]
+        joined["process_pid"] = lease_dict["process_pid"]
+        joined["process_start_time"] = lease_dict["process_start_time"]
+    else:
+        joined["lease_id"] = None
+        joined["expires_at_utc"] = None
+        joined["last_heartbeat_utc"] = None
+        joined["heartbeat_sequence"] = None
+        joined["process_pid"] = None
+        joined["process_start_time"] = None
+    return joined
+
+
+def _read_store_status_from_conn(conn: sqlite3.Connection, db_path: pathlib.Path) -> Dict[str, Any]:
+    state_rows = conn.execute(
+        "SELECT state, COUNT(*) AS count FROM work_items GROUP BY state ORDER BY state"
+    ).fetchall()
+    leader_row = conn.execute(
+        "SELECT leader_id, pid, process_start_time FROM leader_locks WHERE lock_name = ?",
+        ("primary_coordinator",),
+    ).fetchone()
+    leader_active = False
+    if leader_row:
+        try:
+            process = psutil.Process(int(leader_row["pid"]))
+            leader_active = process.is_running() and abs(
+                process.create_time() - float(leader_row["process_start_time"])
+            ) < 1.0
+        except (psutil.Error, OSError, TypeError, ValueError):
+            leader_active = False
+    return {
+        "store_state": "AVAILABLE",
+        "leader_id": leader_row["leader_id"] if leader_row else None,
+        "leader_pid": int(leader_row["pid"]) if leader_row else None,
+        "leader_process_start_time": float(leader_row["process_start_time"]) if leader_row else None,
+        "leader_active": leader_active,
+        "db_path": str(db_path),
+        "total_work_items": sum(int(row["count"]) for row in state_rows),
+        "state_summary": {str(row["state"]): int(row["count"]) for row in state_rows},
+    }
+
+
+def _read_resource_live_snapshot_from_conn(
+    conn: sqlite3.Connection,
+    resource_key: str = "host:heavy",
+) -> Dict[str, Any]:
+    pool_row = conn.execute(
+        "SELECT * FROM host_resource_pools WHERE resource_key = ?",
+        (resource_key,),
+    ).fetchone()
+    if pool_row:
+        pool_present = True
+        capacity = int(pool_row["capacity"])
+        enabled = bool(pool_row["enabled"])
+    else:
+        pool_present = False
+        capacity = 0
+        enabled = False
+
+    term_row = conn.execute(
+        "SELECT COUNT(*) AS count FROM host_resource_requests WHERE resource_key = ? AND state = 'RELEASED'",
+        (resource_key,),
+    ).fetchone()
+    terminal_count = int(term_row["count"]) if term_row else 0
+
+    req_rows = conn.execute(
+        """
+        SELECT * FROM host_resource_requests
+        WHERE resource_key = ? AND state != 'RELEASED'
+        ORDER BY priority DESC, created_at_utc, request_id
+        """,
+        (resource_key,),
+    ).fetchall()
+
+    lease_rows = conn.execute(
+        "SELECT * FROM host_resource_leases WHERE resource_key = ?",
+        (resource_key,),
+    ).fetchall()
+    leases_by_request_id = {str(row["request_id"]): _row_to_lease_dict(row) for row in lease_rows}
+
+    live_counts = {
+        "ACTIVE": 0,
+        "INHERITED": 0,
+        "QUEUED": 0,
+        "RECOVERY_REQUIRED": 0,
+        "QUARANTINED": 0,
+    }
+    active_reqs: List[Dict[str, Any]] = []
+    inherited_reqs: List[Dict[str, Any]] = []
+    queued_reqs: List[Dict[str, Any]] = []
+    fenced_reqs: List[Dict[str, Any]] = []
+    quarantined_reqs: List[Dict[str, Any]] = []
+
+    for row in req_rows:
+        req = _row_to_request_dict(row)
+        st = req["state"]
+        if st in live_counts:
+            live_counts[st] += 1
+        if st == HostResourceRequestState.ACTIVE.value:
+            active_reqs.append(req)
+        elif st == HostResourceRequestState.INHERITED.value:
+            inherited_reqs.append(req)
+        elif st == HostResourceRequestState.QUEUED.value:
+            queued_reqs.append(req)
+        elif st == HostResourceRequestState.RECOVERY_REQUIRED.value:
+            fenced_reqs.append(req)
+        elif st == HostResourceRequestState.QUARANTINED.value:
+            quarantined_reqs.append(req)
+
+    holder = None
+    if active_reqs:
+        holder_req = active_reqs[0]
+        holder = _join_request_lease(holder_req, leases_by_request_id.get(holder_req["request_id"]))
+
+    fenced: List[Dict[str, Any]] = []
+    for freq in fenced_reqs:
+        fenced.append(_join_request_lease(freq, leases_by_request_id.get(freq["request_id"])))
+
+    return {
+        "resource_key": resource_key,
+        "capacity": capacity,
+        "enabled": enabled,
+        "pool_present": pool_present,
+        "live_counts": live_counts,
+        "terminal_count": terminal_count,
+        "holder": holder,
+        "inherited": inherited_reqs,
+        "queue": queued_reqs,
+        "fenced": fenced,
+        "quarantined": quarantined_reqs,
+    }
+
+
 def read_store_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
     """Read queue status without creating directories, a database, locks, or receipts."""
     root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
@@ -118,36 +298,469 @@ def read_store_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Di
 
     try:
         with _read_only_snapshot_connection(db_path) as conn:
-            state_rows = conn.execute(
-                "SELECT state, COUNT(*) AS count FROM work_items GROUP BY state ORDER BY state"
-            ).fetchall()
-            leader_row = conn.execute(
-                "SELECT leader_id, pid, process_start_time FROM leader_locks WHERE lock_name = ?",
-                ("primary_coordinator",),
-            ).fetchone()
-        leader_active = False
-        if leader_row:
-            try:
-                process = psutil.Process(int(leader_row["pid"]))
-                leader_active = process.is_running() and abs(
-                    process.create_time() - float(leader_row["process_start_time"])
-                ) < 1.0
-            except (psutil.Error, OSError, TypeError, ValueError):
-                leader_active = False
-        result.update(
-            {
-                "store_state": "AVAILABLE",
-                "leader_id": leader_row["leader_id"] if leader_row else None,
-                "leader_pid": int(leader_row["pid"]) if leader_row else None,
-                "leader_process_start_time": float(leader_row["process_start_time"]) if leader_row else None,
-                "leader_active": leader_active,
-                "total_work_items": sum(int(row["count"]) for row in state_rows),
-                "state_summary": {str(row["state"]): int(row["count"]) for row in state_rows},
-            }
-        )
+            return _read_store_status_from_conn(conn, db_path)
     except (OSError, sqlite3.Error) as exc:
         result.update({"store_state": "CORRUPT_OR_UNREADABLE", "error": str(exc)[:500]})
     return result
+
+
+def read_resource_live_snapshot(
+    resource_key: str = "host:heavy",
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Dict[str, Any]:
+    """Read live host resource state without creating directories, DB, locks, or receipts.
+
+    Note for PR #85 (branch agy/conductor-doctor-resource-pool):
+    read_resource_live_snapshot is a strict superset of read_host_resource_status.
+    Once PR #85 lands, read_host_resource_status can become a thin wrapper over
+    read_resource_live_snapshot.
+    """
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        return {
+            "resource_key": resource_key,
+            "capacity": 0,
+            "enabled": False,
+            "pool_present": False,
+            "live_counts": {
+                "ACTIVE": 0,
+                "INHERITED": 0,
+                "QUEUED": 0,
+                "RECOVERY_REQUIRED": 0,
+                "QUARANTINED": 0,
+            },
+            "terminal_count": 0,
+            "holder": None,
+            "inherited": [],
+            "queue": [],
+            "fenced": [],
+            "quarantined": [],
+        }
+
+    with _read_only_snapshot_connection(db_path) as conn:
+        return _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
+
+
+def read_gate_frame(
+    resource_key: str = "host:heavy",
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Dict[str, Any]:
+    """Read both store status and live gate frame from exactly one snapshot."""
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        return {
+            "store": read_store_status(root),
+            "gate": read_resource_live_snapshot(resource_key=resource_key, root_dir=root),
+        }
+
+    with _read_only_snapshot_connection(db_path) as conn:
+        store = _read_store_status_from_conn(conn, db_path)
+        gate = _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
+    return {"store": store, "gate": gate}
+
+
+def read_resource_history_page(
+    resource_key: str = "host:heavy",
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Dict[str, Any]:
+    """Read a page of terminal (RELEASED) resource requests using read-only snapshot.
+
+    Returns newest terminal requests, paged by cursor.
+    Does NOT construct ConductorStore or HostResourceManager.
+    """
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        return {
+            "resource_key": resource_key,
+            "items": [],
+            "next_cursor": None,
+            "has_more": False,
+            "total_terminal": 0,
+        }
+
+    page_limit = max(1, min(int(limit), 500))
+
+    with _read_only_snapshot_connection(db_path) as conn:
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM host_resource_requests WHERE resource_key = ? AND state = 'RELEASED'",
+            (resource_key,),
+        ).fetchone()
+        total_terminal = int(count_row["c"]) if count_row else 0
+
+        query = """
+            SELECT * FROM host_resource_requests
+            WHERE resource_key = ? AND state = 'RELEASED'
+        """
+        params: List[Any] = [resource_key]
+
+        if cursor:
+            if "|" in cursor:
+                ts_part, id_part = cursor.split("|", 1)
+                query += " AND (COALESCE(released_at_utc, created_at_utc) < ? OR (COALESCE(released_at_utc, created_at_utc) = ? AND request_id < ?))"
+                params.extend([ts_part, ts_part, id_part])
+            elif cursor.isdigit():
+                offset = int(cursor)
+                query += " ORDER BY COALESCE(released_at_utc, created_at_utc) DESC, request_id DESC LIMIT ? OFFSET ?"
+                params.extend([page_limit + 1, offset])
+                rows = conn.execute(query, params).fetchall()
+                has_more = len(rows) > page_limit
+                page_rows = rows[:page_limit]
+                items = [_row_to_request_dict(r) for r in page_rows]
+                next_cursor = str(offset + len(items)) if has_more else None
+                return {
+                    "resource_key": resource_key,
+                    "items": items,
+                    "next_cursor": next_cursor,
+                    "has_more": has_more,
+                    "total_terminal": total_terminal,
+                }
+            else:
+                cursor_row = conn.execute(
+                    "SELECT COALESCE(released_at_utc, created_at_utc) AS sort_ts, request_id FROM host_resource_requests WHERE request_id = ?",
+                    (cursor,),
+                ).fetchone()
+                if cursor_row:
+                    ts_part = str(cursor_row["sort_ts"])
+                    id_part = str(cursor_row["request_id"])
+                    query += " AND (COALESCE(released_at_utc, created_at_utc) < ? OR (COALESCE(released_at_utc, created_at_utc) = ? AND request_id < ?))"
+                    params.extend([ts_part, ts_part, id_part])
+
+        query += " ORDER BY COALESCE(released_at_utc, created_at_utc) DESC, request_id DESC LIMIT ?"
+        params.append(page_limit + 1)
+        rows = conn.execute(query, params).fetchall()
+        has_more = len(rows) > page_limit
+        page_rows = rows[:page_limit]
+        items = [_row_to_request_dict(r) for r in page_rows]
+        next_cursor = None
+        if has_more and items:
+            last_item = items[-1]
+            ts = last_item.get("released_at_utc") or last_item.get("created_at_utc") or ""
+            next_cursor = f"{ts}|{last_item['request_id']}"
+
+        return {
+            "resource_key": resource_key,
+            "items": items,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "total_terminal": total_terminal,
+        }
+
+
+
+def format_duration(seconds: float) -> str:
+    """Format elapsed seconds, clamped at 0. Returns '<1m' below 60 seconds."""
+    sec = max(0.0, float(seconds))
+    if sec < 60.0:
+        return "<1m"
+    if sec < 3600.0:
+        mins = int(sec // 60)
+        return f"{mins}m"
+    hours = int(sec // 3600)
+    mins = int((sec % 3600) // 60)
+    return f"{hours}h {mins:02d}m"
+
+
+class GateVerdict(str, Enum):
+    DISABLED = "DISABLED"
+    FENCED = "FENCED"
+    OCCUPIED = "OCCUPIED"
+    ANOMALY = "ANOMALY"
+    CLEAR = "CLEAR"
+
+
+@dataclass
+class GateVerdictResult:
+    verdict: str
+    headline: str
+    subtext: str
+    resource_key: str
+    blocker: Optional[Dict[str, Any]] = None
+    fenced_count: int = 0
+    queue_count: int = 0
+    commands: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+
+@dataclass
+class RecoveryAdjudication:
+    request_id: str
+    command: Optional[str]
+    release_refusal_code: str  # Always "RECOVERY_REQUIRED_RELEASE_REFUSED"
+    recover_code: str          # "OWNER_LIVENESS_UNPROVEN" | "RECOVERY_OWNER_GONE" | "OWNER_PROCESS_ALIVE" | "INHERITED_CHILD_ACTIVE" | "INVALID_REQUEST_ID"
+    liveness_status: str       # "OWNER_UNRECORDED" | "OWNER_PROCESS_GONE" | "OWNER_PID_REUSED" | "OWNER_PROCESS_ALIVE" | "INHERITED_CHILD_ACTIVE" | "INVALID_REQUEST_ID"
+    pid: Optional[int] = None
+    inherited_child_id: Optional[str] = None
+    reason_placeholder: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+
+_REQUEST_ID_REGEX = re.compile(r"^rr_[0-9a-f]{12}$")
+
+
+def _powershell_quote(val: str) -> str:
+    return "'" + str(val).replace("'", "''") + "'"
+
+
+def adjudicate_recovery(
+    fenced_request: Dict[str, Any],
+    inherited_children: Optional[List[Dict[str, Any]]] = None,
+    repo_path: Optional[Union[str, pathlib.Path]] = None,
+    python_executable: Optional[str] = None,
+) -> RecoveryAdjudication:
+    """Adjudicate recovery path for a fenced request and build recovery command if applicable."""
+    request_id = str(fenced_request.get("request_id", ""))
+    if not _REQUEST_ID_REGEX.match(request_id):
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=None,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="INVALID_REQUEST_ID",
+            liveness_status="INVALID_REQUEST_ID",
+        )
+
+    # Check for active inherited children
+    lease_id = fenced_request.get("lease_id")
+    if lease_id is None and "lease" in fenced_request and isinstance(fenced_request["lease"], dict):
+        lease_id = fenced_request["lease"].get("lease_id")
+
+    if inherited_children and lease_id:
+        active_children = [
+            child for child in inherited_children
+            if child.get("parent_lease_id") == lease_id and child.get("state") == HostResourceRequestState.INHERITED.value
+        ]
+        if active_children:
+            child_id = active_children[0].get("request_id")
+            return RecoveryAdjudication(
+                request_id=request_id,
+                command=None,
+                release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+                recover_code="INHERITED_CHILD_ACTIVE",
+                liveness_status="INHERITED_CHILD_ACTIVE",
+                inherited_child_id=child_id,
+            )
+
+    # Check process liveness
+    pid = fenced_request.get("process_pid")
+    start_time = fenced_request.get("process_start_time")
+    if pid is None and "lease" in fenced_request and isinstance(fenced_request["lease"], dict):
+        pid = fenced_request["lease"].get("process_pid")
+        start_time = fenced_request["lease"].get("process_start_time")
+
+    repo = pathlib.Path(repo_path).resolve() if repo_path else pathlib.Path(__file__).resolve().parents[1]
+    ctl_script = (repo / "scripts" / "conductorctl.py").resolve()
+    py_exe = python_executable or sys.executable
+
+    if pid is None:
+        cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id} --attest-owner-gone --reason '<why>'"
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="OWNER_LIVENESS_UNPROVEN",
+            liveness_status="OWNER_UNRECORDED",
+            pid=None,
+            reason_placeholder="<why>",
+        )
+
+    try:
+        proc = psutil.Process(int(pid))
+        observed_start = proc.create_time()
+        if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
+            cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
+            return RecoveryAdjudication(
+                request_id=request_id,
+                command=cmd,
+                release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+                recover_code="RECOVERY_OWNER_GONE",
+                liveness_status="OWNER_PID_REUSED",
+                pid=int(pid),
+            )
+        else:
+            return RecoveryAdjudication(
+                request_id=request_id,
+                command=None,
+                release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+                recover_code="OWNER_PROCESS_ALIVE",
+                liveness_status="OWNER_PROCESS_ALIVE",
+                pid=int(pid),
+            )
+    except (OSError, ValueError, psutil.Error):
+        cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="RECOVERY_OWNER_GONE",
+            liveness_status="OWNER_PROCESS_GONE",
+            pid=int(pid),
+        )
+
+
+def build_recovery_command(
+    fenced_request: Dict[str, Any],
+    inherited_children: Optional[List[Dict[str, Any]]] = None,
+    repo_path: Optional[Union[str, pathlib.Path]] = None,
+    python_executable: Optional[str] = None,
+) -> Optional[str]:
+    """Emit a single-line PowerShell command to recover a fenced request, or None if not recoverable."""
+    adjudication = adjudicate_recovery(
+        fenced_request=fenced_request,
+        inherited_children=inherited_children,
+        repo_path=repo_path,
+        python_executable=python_executable,
+    )
+    return adjudication.command
+
+
+def evaluate_gate_verdict(
+    snapshot: Dict[str, Any],
+    now: Optional[datetime] = None,
+    repo_path: Optional[Union[str, pathlib.Path]] = None,
+    python_executable: Optional[str] = None,
+) -> GateVerdictResult:
+    """Evaluate host resource gate verdict in strict admission order."""
+    now_dt = now or datetime.now(timezone.utc)
+    resource_key = snapshot.get("resource_key", "host:heavy")
+    pool_present = bool(snapshot.get("pool_present", False))
+    enabled = bool(snapshot.get("enabled", False))
+    live_counts = snapshot.get("live_counts", {})
+    holder = snapshot.get("holder")
+    fenced = list(snapshot.get("fenced", []))
+    queue = list(snapshot.get("queue", []))
+    inherited = list(snapshot.get("inherited", []))
+
+    # 1. pool row absent OR enabled is false -> DISABLED
+    if not pool_present or not enabled:
+        return GateVerdictResult(
+            verdict=GateVerdict.DISABLED.value,
+            headline="Gate disabled. Admission is refused with HOST_RESOURCE_DISABLED.",
+            subtext=f"Resource pool {resource_key} is disabled or absent.",
+            resource_key=resource_key,
+            blocker=None,
+            fenced_count=len(fenced),
+            queue_count=len(queue),
+            commands=[],
+        )
+
+    # 2. any RECOVERY_REQUIRED -> FENCED
+    if fenced or live_counts.get("RECOVERY_REQUIRED", 0) > 0:
+        oldest_fenced = fenced[0] if fenced else None
+        fenced_count = max(len(fenced), live_counts.get("RECOVERY_REQUIRED", 0))
+        commands: List[str] = []
+        for f in fenced:
+            cmd = build_recovery_command(
+                f,
+                inherited_children=inherited,
+                repo_path=repo_path,
+                python_executable=python_executable,
+            )
+            if cmd is not None:
+                commands.append(cmd)
+
+        if oldest_fenced:
+            agent = oldest_fenced.get("agent_instance", "unknown")
+            created_str = oldest_fenced.get("created_at_utc")
+            elapsed_sec = 0.0
+            if created_str:
+                try:
+                    c_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    elapsed_sec = max(0.0, (now_dt - c_dt).total_seconds())
+                except (ValueError, TypeError):
+                    pass
+            dur_str = format_duration(elapsed_sec)
+            subtext = f"Blocked {dur_str} by {agent}. {len(queue)} requests waiting."
+        else:
+            subtext = f"{fenced_count} recovery required requests. {len(queue)} requests waiting."
+
+        headline = (
+            "Gate fenced. Nothing is running."
+            if fenced_count == 1
+            else f"Gate fenced ({fenced_count} recovery required). Clearing one fence may not open the gate."
+        )
+
+        return GateVerdictResult(
+            verdict=GateVerdict.FENCED.value,
+            headline=headline,
+            subtext=subtext,
+            resource_key=resource_key,
+            blocker=oldest_fenced,
+            fenced_count=fenced_count,
+            queue_count=len(queue),
+            commands=commands,
+        )
+
+    # 3. any ACTIVE -> OCCUPIED
+    if holder is not None or live_counts.get("ACTIVE", 0) > 0:
+        agent = holder.get("agent_instance", "unknown") if holder else "unknown"
+        purpose = holder.get("purpose", "") if holder else ""
+        elapsed_sec = 0.0
+        if holder and holder.get("created_at_utc"):
+            try:
+                c_dt = datetime.fromisoformat(holder["created_at_utc"].replace("Z", "+00:00"))
+                elapsed_sec = max(0.0, (now_dt - c_dt).total_seconds())
+            except (ValueError, TypeError):
+                pass
+        dur_str = format_duration(elapsed_sec)
+        purpose_str = f" running {purpose}" if purpose else ""
+        subtext = f"Held {dur_str} by {agent}{purpose_str}. {len(queue)} requests waiting."
+
+        return GateVerdictResult(
+            verdict=GateVerdict.OCCUPIED.value,
+            headline="Gate held. A job is running.",
+            subtext=subtext,
+            resource_key=resource_key,
+            blocker=holder,
+            fenced_count=0,
+            queue_count=len(queue),
+            commands=[],
+        )
+
+    # 4. queue non-empty and none of the above -> ANOMALY
+    if queue or live_counts.get("QUEUED", 0) > 0:
+        q_count = max(len(queue), live_counts.get("QUEUED", 0))
+        return GateVerdictResult(
+            verdict=GateVerdict.ANOMALY.value,
+            headline="Queue is waiting with nothing holding the gate.",
+            subtext=f"{q_count} requests queued but gate is neither occupied nor fenced.",
+            resource_key=resource_key,
+            blocker=None,
+            fenced_count=0,
+            queue_count=q_count,
+            commands=[],
+        )
+
+    # 5. otherwise -> CLEAR
+    return GateVerdictResult(
+        verdict=GateVerdict.CLEAR.value,
+        headline="Gate clear.",
+        subtext=f"Nothing holds {resource_key} and nothing is waiting.",
+        resource_key=resource_key,
+        blocker=None,
+        fenced_count=0,
+        queue_count=0,
+        commands=[],
+    )
 
 
 def read_store_diagnostics(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
