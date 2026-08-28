@@ -32,7 +32,54 @@ from scripts.conductor_store import ConductorStore
 RESOURCE_KEY = "host:heavy"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
-VALID_PURPOSES = frozenset({"pytest_full", "pytest_heavy", "pytest_focused", "playwright", "cdp_provider"})
+CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini"})
+DEFAULT_POOL_CAPACITIES = {
+    "host:heavy": 1,
+    "cdp:perplexity": 3,
+    "cdp:chatgpt": 3,
+    "cdp:gemini": 1,
+}
+ROLE_TO_RESOURCE_KEY = {
+    "chrome_ppl": "cdp:perplexity",
+    "chrome_gpt": "cdp:chatgpt",
+    "chrome_gemini": "cdp:gemini",
+}
+PURPOSE_TO_RESOURCE_KEY = {
+    "pytest_full": "host:heavy",
+    "pytest_heavy": "host:heavy",
+    "pytest_focused": "host:heavy",
+    "playwright": "host:heavy",
+    "cdp_perplexity": "cdp:perplexity",
+    "cdp_chatgpt": "cdp:chatgpt",
+    "cdp_gemini": "cdp:gemini",
+}
+VALID_PURPOSES = frozenset(
+    {
+        "pytest_full",
+        "pytest_heavy",
+        "pytest_focused",
+        "playwright",
+        "cdp_provider",
+        "cdp_perplexity",
+        "cdp_chatgpt",
+        "cdp_gemini",
+    }
+)
+
+
+def resolve_resource_key(
+    purpose: Optional[str] = None,
+    role: Optional[str] = None,
+    resource_key: Optional[str] = None,
+) -> str:
+    """Resolve target resource pool from explicit key, CDP role, or purpose."""
+    if resource_key:
+        return resource_key
+    if role and role in ROLE_TO_RESOURCE_KEY:
+        return ROLE_TO_RESOURCE_KEY[role]
+    if purpose and purpose in PURPOSE_TO_RESOURCE_KEY:
+        return PURPOSE_TO_RESOURCE_KEY[purpose]
+    return RESOURCE_KEY
 _PYTHON_EXECUTABLE_RE = re.compile(r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?$", re.IGNORECASE)
 _PYTEST_OPTION_VALUES = frozenset(
     {
@@ -193,8 +240,11 @@ class HostResourceManager:
         self.resource_key = resource_key
         pool = self.store.get_resource_pool(resource_key)
         if pool is None:
+            default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
             # HRL-R2 intentionally has no environment-configurable capacity.
-            self.store.save_resource_pool(HostResourcePool(resource_key=resource_key, capacity=1, enabled=True))
+            self.store.save_resource_pool(
+                HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
+            )
 
     def request(
         self,
@@ -202,6 +252,7 @@ class HostResourceManager:
         purpose: str,
         attempt_id: str,
         agent_instance: str,
+        slot_key: str = "",
         idempotency_key: Optional[str] = None,
         command_sha256: str = "",
         priority: int = 50,
@@ -215,8 +266,9 @@ class HostResourceManager:
         The entire decision and lease creation occurs under ``BEGIN IMMEDIATE``
         so two independent callers cannot both observe capacity as available.
         """
-        self._validate_request(purpose, attempt_id, agent_instance, lease_ttl_seconds, priority)
+        self._validate_request(purpose, attempt_id, agent_instance, lease_ttl_seconds, priority, self.resource_key)
         idempotency_key = idempotency_key or f"resource_{uuid.uuid4().hex}"
+        slot_key = str(slot_key or "").strip()
         inherited_id = parent_lease_id or (environment or {}).get(LEASE_ENV)
         inherited_rejection: Optional[str] = None
         now = _now()
@@ -238,7 +290,7 @@ class HostResourceManager:
             if not pool or not bool(pool["enabled"]):
                 raise ResourceAdmissionError("HOST_RESOURCE_DISABLED")
             capacity = int(pool["capacity"])
-            if capacity != 1:
+            if capacity < 1 or (self.resource_key == "host:heavy" and capacity != 1):
                 raise ResourceAdmissionError("HOST_RESOURCE_CAPACITY_INVALID")
 
             request_id = f"rr_{uuid.uuid4().hex[:12]}"
@@ -282,6 +334,7 @@ class HostResourceManager:
                                 parent_lease_id=inherited_id,
                                 command_sha256=command_sha256,
                                 reason_code="INHERITED_CHILD_BUSY",
+                                slot_key=slot_key,
                             ),
                         )
                         self._event(conn, request_id, None, None, HostResourceRequestState.QUARANTINED.value, actor, "INHERITED_CHILD_BUSY")
@@ -302,14 +355,15 @@ class HostResourceManager:
                         priority=priority,
                         parent_lease_id=inherited_id,
                         command_sha256=command_sha256,
+                        slot_key=slot_key,
                     )
                     self._insert_request(conn, request)
                     self._event(conn, request_id, inherited_id, None, request.state.value, actor, "LEASE_INHERITED")
                     return self._request_result(conn, request, lease_id=inherited_id)
 
-            blockers = conn.execute(
+            active_or_fenced = conn.execute(
                 """
-                SELECT r.state FROM host_resource_requests r
+                SELECT r.state, r.slot_key FROM host_resource_requests r
                 WHERE r.resource_key = ? AND r.state IN (?, ?)
                 """,
                 (
@@ -318,9 +372,22 @@ class HostResourceManager:
                     HostResourceRequestState.RECOVERY_REQUIRED.value,
                 ),
             ).fetchall()
-            if blockers:
+
+            active_or_fenced_count = len(active_or_fenced)
+            active_slot_keys = {
+                row["slot_key"] for row in active_or_fenced
+                if row["slot_key"]
+            }
+
+            capacity_full = (active_or_fenced_count >= capacity)
+            slot_busy = bool(slot_key and slot_key in active_slot_keys)
+
+            if capacity_full:
                 state = HostResourceRequestState.QUEUED
                 reason = inherited_rejection or "HOST_RESOURCE_BUSY"
+            elif slot_busy:
+                state = HostResourceRequestState.QUEUED
+                reason = inherited_rejection or "SLOT_KEY_BUSY"
             else:
                 state = HostResourceRequestState.ACTIVE
                 reason = inherited_rejection or "HOST_RESOURCE_ADMITTED"
@@ -336,6 +403,7 @@ class HostResourceManager:
                 priority=priority,
                 command_sha256=command_sha256,
                 reason_code=reason,
+                slot_key=slot_key,
             )
             self._insert_request(conn, request)
             lease_id: Optional[str] = None
@@ -425,7 +493,7 @@ class HostResourceManager:
             ).fetchone()
             lease_id = lease_row["lease_id"] if lease_row else row["parent_lease_id"]
             self._event(conn, request_id, lease_id, old_state, HostResourceRequestState.RELEASED.value, actor, reason)
-            promoted = self._promote_locked(conn, actor=actor)
+            promoted = self._promote_locked(conn, resource_key=row["resource_key"], actor=actor)
             return {"request_id": request_id, "status": "RELEASED", "promoted": promoted}
 
     def reconcile(self, *, dry_run: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -545,7 +613,7 @@ class HostResourceManager:
                     "recovered_lease_id": lease_id,
                 },
             )
-            promoted = self._promote_locked(conn, actor=actor)
+            promoted = self._promote_locked(conn, resource_key=row["resource_key"], actor=actor)
             return {
                 "request_id": request_id,
                 "status": "RECOVERED",
@@ -795,7 +863,9 @@ class HostResourceManager:
             return self._request_result(conn, request)
 
     @staticmethod
-    def _validate_request(purpose: str, attempt_id: str, agent_instance: str, ttl: int, priority: int) -> None:
+    def _validate_request(
+        purpose: str, attempt_id: str, agent_instance: str, ttl: int, priority: int, resource_key: str = RESOURCE_KEY
+    ) -> None:
         if purpose not in VALID_PURPOSES:
             raise ValueError(f"unsupported resource purpose: {purpose}")
         if not attempt_id or not agent_instance:
@@ -804,6 +874,23 @@ class HostResourceManager:
             raise ValueError("lease TTL must be positive")
         if not 0 <= priority <= 1000:
             raise ValueError("priority must be between 0 and 1000")
+
+        # Cross-contamination invariants
+        # A pytest or playwright purpose must NEVER admit into a cdp:* pool
+        if (purpose.startswith("pytest_") or purpose == "playwright") and resource_key.startswith("cdp:"):
+            raise ValueError(f"pytest purpose '{purpose}' cannot consume CDP pool '{resource_key}'")
+
+        # A cdp_provider or cdp_* purpose must NEVER consume host:heavy
+        if (purpose == "cdp_provider" or purpose.startswith("cdp_")) and resource_key == "host:heavy":
+            raise ValueError(f"CDP purpose '{purpose}' cannot consume '{resource_key}'")
+
+        # Specific purpose to pool alignment
+        if purpose == "cdp_perplexity" and resource_key != "cdp:perplexity":
+            raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
+        if purpose == "cdp_chatgpt" and resource_key != "cdp:chatgpt":
+            raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
+        if purpose == "cdp_gemini" and resource_key != "cdp:gemini":
+            raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
 
     def _mark_recovery(self, request_id: str, *, reason: str) -> None:
         """Persist an ambiguous child outcome without releasing capacity."""
@@ -844,8 +931,8 @@ class HostResourceManager:
             INSERT INTO host_resource_requests (
                 request_id, idempotency_key, resource_key, purpose, attempt_id,
                 agent_instance, state, priority, parent_lease_id, command_sha256,
-                created_at_utc, released_at_utc, reason_code, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at_utc, released_at_utc, reason_code, slot_key, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request.request_id,
@@ -861,6 +948,7 @@ class HostResourceManager:
                 request.created_at_utc,
                 request.released_at_utc,
                 request.reason_code,
+                request.slot_key,
                 request.schema_version,
             ),
         )
@@ -892,27 +980,57 @@ class HostResourceManager:
         )
         return lease_id
 
-    def _promote_locked(self, conn: Any, *, actor: str) -> Optional[Dict[str, Any]]:
-        blocker = conn.execute(
+    def _promote_locked(
+        self, conn: Any, *, resource_key: Optional[str] = None, actor: str
+    ) -> Optional[Dict[str, Any]]:
+        target_resource_key = resource_key or self.resource_key
+        pool = conn.execute(
+            "SELECT * FROM host_resource_pools WHERE resource_key = ?", (target_resource_key,)
+        ).fetchone()
+        if not pool or not bool(pool["enabled"]):
+            return None
+        capacity = int(pool["capacity"])
+        if capacity < 1:
+            return None
+
+        active_rows = conn.execute(
             """
-            SELECT COUNT(*) FROM host_resource_requests
+            SELECT state, slot_key FROM host_resource_requests
             WHERE resource_key = ? AND state IN (?, ?)
             """,
-            (self.resource_key, HostResourceRequestState.ACTIVE.value, HostResourceRequestState.RECOVERY_REQUIRED.value),
-        ).fetchone()[0]
-        if blocker:
+            (target_resource_key, HostResourceRequestState.ACTIVE.value, HostResourceRequestState.RECOVERY_REQUIRED.value),
+        ).fetchall()
+        if len(active_rows) >= capacity:
             return None
-        row = conn.execute(
+
+        active_slot_keys = {
+            row["slot_key"] for row in active_rows
+            if row["slot_key"]
+        }
+
+        queued_rows = conn.execute(
             """
             SELECT * FROM host_resource_requests
             WHERE resource_key = ? AND state = ?
-            ORDER BY priority DESC, created_at_utc, request_id LIMIT 1
+            ORDER BY priority DESC, created_at_utc, request_id
             """,
-            (self.resource_key, HostResourceRequestState.QUEUED.value),
-        ).fetchone()
-        if not row:
+            (target_resource_key, HostResourceRequestState.QUEUED.value),
+        ).fetchall()
+
+        eligible_row = None
+        for qrow in queued_rows:
+            req_slot = qrow["slot_key"] if "slot_key" in qrow.keys() and qrow["slot_key"] else ""
+            if req_slot and req_slot in active_slot_keys:
+                # Documented choice: When the head of the queue is blocked only by slot exclusivity,
+                # promotion skips it and takes the next eligible request (non-strict FIFO for slot exclusivity).
+                continue
+            eligible_row = qrow
+            break
+
+        if eligible_row is None:
             return None
-        request = self.store._row_to_resource_request(row)
+
+        request = self.store._row_to_resource_request(eligible_row)
         now = _now()
         conn.execute(
             "UPDATE host_resource_requests SET state = ?, reason_code = ? WHERE request_id = ?",
@@ -974,5 +1092,7 @@ class HostResourceManager:
             "lease_id": lease_id,
             "parent_lease_id": request.parent_lease_id,
             "reason_code": request.reason_code,
+            "slot_key": request.slot_key,
+            "priority": request.priority,
             "idempotent_replay": replayed,
         }

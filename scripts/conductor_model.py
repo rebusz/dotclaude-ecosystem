@@ -88,6 +88,7 @@ class ReasonCode(str, Enum):
     OPERATOR_PAUSED = "OPERATOR_PAUSED"
     CORRUPT_STATE_QUARANTINED = "CORRUPT_STATE_QUARANTINED"
     STORAGE_EXHAUSTED = "STORAGE_EXHAUSTED"
+    SLOT_KEY_BUSY = "SLOT_KEY_BUSY"
 
 
 def current_utc_iso() -> str:
@@ -255,6 +256,7 @@ class HostResourceRequest:
     created_at_utc: str = field(default_factory=current_utc_iso)
     released_at_utc: Optional[str] = None
     reason_code: Optional[str] = None
+    slot_key: str = ""
     schema_version: str = SCHEMA_RESOURCE_REQUEST
 
     def to_dict(self) -> Dict[str, Any]:

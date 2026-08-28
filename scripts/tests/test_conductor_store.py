@@ -3,6 +3,7 @@
 import os
 import pathlib
 import psutil
+import shutil
 import sqlite3
 import pytest
 
@@ -652,7 +653,7 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
 
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store)
-    wedged = manager.request(purpose="cdp_provider", attempt_id="at-ps", agent_instance="tsignal-cctv:79584")
+    wedged = manager.request(purpose="pytest_heavy", attempt_id="at-ps", agent_instance="tsignal-cctv:79584")
     manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
 
     fenced_req = store.get_resource_request(wedged["request_id"]).to_dict()
@@ -687,3 +688,89 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     updated = store.get_resource_request(wedged["request_id"])
     assert updated.state == HostResourceRequestState.RELEASED
     assert updated.reason_code == "RECOVERY_ATTESTED"
+
+
+def test_schema_migration_v5_adds_slot_key_and_seeds_cdp_pools(tmp_path: pathlib.Path):
+    """A v4 database gains slot_key and gets the three cdp:* pools seeded at migration v5."""
+    db_path = tmp_path / "conductor.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_utc TEXT NOT NULL);
+        INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00Z');
+        INSERT INTO schema_migrations VALUES (2, '2026-01-01T00:00:01Z');
+        INSERT INTO schema_migrations VALUES (3, '2026-01-01T00:00:02Z');
+        INSERT INTO schema_migrations VALUES (4, '2026-01-01T00:00:03Z');
+        CREATE TABLE host_resource_pools (
+            resource_key TEXT PRIMARY KEY,
+            capacity INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            schema_version TEXT NOT NULL
+        );
+        INSERT INTO host_resource_pools VALUES ('host:heavy', 1, 1, 'conductor.resource-pool.v1');
+        CREATE TABLE host_resource_requests (
+            request_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE NOT NULL,
+            resource_key TEXT NOT NULL, purpose TEXT NOT NULL, attempt_id TEXT NOT NULL,
+            agent_instance TEXT NOT NULL, state TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 50,
+            parent_lease_id TEXT, command_sha256 TEXT NOT NULL DEFAULT '', created_at_utc TEXT NOT NULL,
+            released_at_utc TEXT, reason_code TEXT, schema_version TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = ConductorStore(root_dir=tmp_path)
+    # Check pools
+    p_ppl = store.get_resource_pool("cdp:perplexity")
+    assert p_ppl is not None
+    assert p_ppl.capacity == 3
+    assert p_ppl.enabled is True
+
+    p_gpt = store.get_resource_pool("cdp:chatgpt")
+    assert p_gpt is not None
+    assert p_gpt.capacity == 3
+    assert p_gpt.enabled is True
+
+    p_gem = store.get_resource_pool("cdp:gemini")
+    assert p_gem is not None
+    assert p_gem.capacity == 1
+    assert p_gem.enabled is True
+
+    # Save request with slot_key
+    store.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_v5_test",
+            idempotency_key="idemp_v5",
+            resource_key="cdp:perplexity",
+            purpose="cdp_perplexity",
+            attempt_id="at-v5",
+            agent_instance="ag-v5",
+            slot_key="kimi-3",
+        )
+    )
+    req = store.get_resource_request("rr_v5_test")
+    assert req is not None
+    assert req.slot_key == "kimi-3"
+
+
+def test_read_all_pools_live_single_snapshot_read(tmp_path: pathlib.Path):
+    """ONE SNAPSHOT property: reading all pools takes exactly one DB snapshot via shutil.copy2."""
+    store = ConductorStore(root_dir=tmp_path)
+    from scripts.conductor_store import read_all_pools_live, read_gate_frame
+    from unittest.mock import patch
+
+    real_copy = shutil.copy2
+    with patch("shutil.copy2", side_effect=real_copy) as mock_copy:
+        all_pools = read_all_pools_live(root_dir=tmp_path)
+        assert mock_copy.call_count == 1
+        assert "host:heavy" in all_pools
+        assert "cdp:perplexity" in all_pools
+        assert "cdp:chatgpt" in all_pools
+        assert "cdp:gemini" in all_pools
+
+    with patch("shutil.copy2", side_effect=real_copy) as mock_copy2:
+        frame = read_gate_frame(root_dir=tmp_path)
+        assert mock_copy2.call_count == 1
+        assert "gates" in frame
+        assert len(frame["gates"]) >= 4
