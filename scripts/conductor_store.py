@@ -361,6 +361,97 @@ def read_gate_frame(
     return {"store": store, "gate": gate}
 
 
+def read_resource_history_page(
+    resource_key: str = "host:heavy",
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+) -> Dict[str, Any]:
+    """Read a page of terminal (RELEASED) resource requests using read-only snapshot.
+
+    Returns newest terminal requests, paged by cursor.
+    Does NOT construct ConductorStore or HostResourceManager.
+    """
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    db_path = root / "conductor.db"
+    if not db_path.is_file():
+        return {
+            "resource_key": resource_key,
+            "items": [],
+            "next_cursor": None,
+            "has_more": False,
+            "total_terminal": 0,
+        }
+
+    page_limit = max(1, min(int(limit), 500))
+
+    with _read_only_snapshot_connection(db_path) as conn:
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM host_resource_requests WHERE resource_key = ? AND state = 'RELEASED'",
+            (resource_key,),
+        ).fetchone()
+        total_terminal = int(count_row["c"]) if count_row else 0
+
+        query = """
+            SELECT * FROM host_resource_requests
+            WHERE resource_key = ? AND state = 'RELEASED'
+        """
+        params: List[Any] = [resource_key]
+
+        if cursor:
+            if "|" in cursor:
+                ts_part, id_part = cursor.split("|", 1)
+                query += " AND (COALESCE(released_at_utc, created_at_utc) < ? OR (COALESCE(released_at_utc, created_at_utc) = ? AND request_id < ?))"
+                params.extend([ts_part, ts_part, id_part])
+            elif cursor.isdigit():
+                offset = int(cursor)
+                query += " ORDER BY COALESCE(released_at_utc, created_at_utc) DESC, request_id DESC LIMIT ? OFFSET ?"
+                params.extend([page_limit + 1, offset])
+                rows = conn.execute(query, params).fetchall()
+                has_more = len(rows) > page_limit
+                page_rows = rows[:page_limit]
+                items = [_row_to_request_dict(r) for r in page_rows]
+                next_cursor = str(offset + len(items)) if has_more else None
+                return {
+                    "resource_key": resource_key,
+                    "items": items,
+                    "next_cursor": next_cursor,
+                    "has_more": has_more,
+                    "total_terminal": total_terminal,
+                }
+            else:
+                cursor_row = conn.execute(
+                    "SELECT COALESCE(released_at_utc, created_at_utc) AS sort_ts, request_id FROM host_resource_requests WHERE request_id = ?",
+                    (cursor,),
+                ).fetchone()
+                if cursor_row:
+                    ts_part = str(cursor_row["sort_ts"])
+                    id_part = str(cursor_row["request_id"])
+                    query += " AND (COALESCE(released_at_utc, created_at_utc) < ? OR (COALESCE(released_at_utc, created_at_utc) = ? AND request_id < ?))"
+                    params.extend([ts_part, ts_part, id_part])
+
+        query += " ORDER BY COALESCE(released_at_utc, created_at_utc) DESC, request_id DESC LIMIT ?"
+        params.append(page_limit + 1)
+        rows = conn.execute(query, params).fetchall()
+        has_more = len(rows) > page_limit
+        page_rows = rows[:page_limit]
+        items = [_row_to_request_dict(r) for r in page_rows]
+        next_cursor = None
+        if has_more and items:
+            last_item = items[-1]
+            ts = last_item.get("released_at_utc") or last_item.get("created_at_utc") or ""
+            next_cursor = f"{ts}|{last_item['request_id']}"
+
+        return {
+            "resource_key": resource_key,
+            "items": items,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "total_terminal": total_terminal,
+        }
+
+
+
 def format_duration(seconds: float) -> str:
     """Format elapsed seconds, clamped at 0. Returns '<1m' below 60 seconds."""
     sec = max(0.0, float(seconds))
