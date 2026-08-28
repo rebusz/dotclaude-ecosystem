@@ -15,6 +15,7 @@ import psutil
 import pytest
 
 from scripts.conductor_resources import (
+    resolve_resource_key,
     DEFAULT_LEASE_TTL_SECONDS,
     HostResourceManager,
     ResourceAdmissionError,
@@ -974,3 +975,36 @@ def test_per_pool_disable_isolates_only_disabled_pool(tmp_path: pathlib.Path):
     manager_gpt = HostResourceManager(store, resource_key="cdp:chatgpt")
     r_gpt = manager_gpt.request(purpose="cdp_chatgpt", attempt_id="at-ok-g", agent_instance="ag-ok-g")
     assert r_gpt["state"] == HostResourceRequestState.ACTIVE.value
+
+
+def test_cdp_tv_pool_admits_cctv_and_isolates_from_host_heavy(tmp_path: pathlib.Path):
+    """CCTV drives chrome_tv, which had no pool when the split first shipped.
+
+    #90 enforced that cdp_* purposes are refused on host:heavy, but seeded only
+    cdp:perplexity, cdp:chatgpt and cdp:gemini. CCTV (chrome_tv, port 9225,
+    dedicated TV profile) was left with nowhere valid to go and would have
+    hard-failed on its next admission request.
+    """
+    store = ConductorStore(root_dir=tmp_path)
+    tv = HostResourceManager(store, resource_key="cdp:tv")
+    admitted = tv.request(
+        purpose="cdp_provider",
+        attempt_id="cctv-provider-1",
+        agent_instance="tsignal-cctv:1234",
+    )
+    assert admitted["state"] == "ACTIVE"
+
+    # A fence on the TV lane must not touch the other pools.
+    tv.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert tv.status()["recovery_required"] == 1
+    for key, purpose in (
+        ("host:heavy", "pytest_full"),
+        ("cdp:perplexity", "cdp_provider"),
+    ):
+        other = HostResourceManager(store, resource_key=key)
+        result = other.request(purpose=purpose, attempt_id=f"probe-{key}", agent_instance="probe")
+        assert result["state"] == "ACTIVE", f"{key} was blocked by a cdp:tv fence"
+
+
+def test_chrome_tv_role_routes_to_cdp_tv():
+    assert resolve_resource_key(role="chrome_tv") == "cdp:tv"

@@ -344,7 +344,13 @@ def read_resource_live_snapshot(
         return _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
 
 
-DEFAULT_RESOURCE_POOLS = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini")
+DEFAULT_RESOURCE_POOLS = (
+    "host:heavy",
+    "cdp:perplexity",
+    "cdp:chatgpt",
+    "cdp:gemini",
+    "cdp:tv",
+)
 
 
 def read_all_pools_live(
@@ -1385,6 +1391,13 @@ class ConductorStore:
                     INSERT OR IGNORE INTO host_resource_pools
                         (resource_key, capacity, enabled, schema_version)
                         VALUES ('cdp:perplexity', 3, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('cdp:tv', 1, 1, 'conductor.resource-pool.v1')
                     """
                 )
                 conn.execute(
