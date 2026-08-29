@@ -344,7 +344,13 @@ def read_resource_live_snapshot(
         return _read_resource_live_snapshot_from_conn(conn, resource_key=resource_key)
 
 
-DEFAULT_RESOURCE_POOLS = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini")
+DEFAULT_RESOURCE_POOLS = (
+    "host:heavy",
+    "cdp:perplexity",
+    "cdp:chatgpt",
+    "cdp:gemini",
+    "cdp:tv",
+)
 
 
 def read_all_pools_live(
@@ -1403,6 +1409,23 @@ class ConductorStore:
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (5, datetime('now'))"
+                )
+
+            if current_version < 6:
+                # cdp:tv arrives after migration 5 shipped, so it needs its own
+                # version. Seeding it inside the `< 5` block would land only on
+                # databases created after this commit: every workstation that
+                # already ran #90 is at version 5 and would silently never get
+                # the row, leaving CCTV (chrome_tv) with no pool at runtime.
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO host_resource_pools
+                        (resource_key, capacity, enabled, schema_version)
+                        VALUES ('cdp:tv', 1, 1, 'conductor.resource-pool.v1')
+                    """
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (6, datetime('now'))"
                 )
 
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:

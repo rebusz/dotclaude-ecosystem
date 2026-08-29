@@ -32,17 +32,21 @@ from scripts.conductor_store import ConductorStore
 RESOURCE_KEY = "host:heavy"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
-CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini"})
+CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 DEFAULT_POOL_CAPACITIES = {
     "host:heavy": 1,
     "cdp:perplexity": 3,
     "cdp:chatgpt": 3,
     "cdp:gemini": 1,
+    # chrome_tv is a dedicated, continuous TradingView capture lane (port 9225,
+    # profile TV, not fleet-shared). One browser doing one capture, so capacity 1.
+    "cdp:tv": 1,
 }
 ROLE_TO_RESOURCE_KEY = {
     "chrome_ppl": "cdp:perplexity",
     "chrome_gpt": "cdp:chatgpt",
     "chrome_gemini": "cdp:gemini",
+    "chrome_tv": "cdp:tv",
 }
 PURPOSE_TO_RESOURCE_KEY = {
     "pytest_full": "host:heavy",
@@ -52,6 +56,7 @@ PURPOSE_TO_RESOURCE_KEY = {
     "cdp_perplexity": "cdp:perplexity",
     "cdp_chatgpt": "cdp:chatgpt",
     "cdp_gemini": "cdp:gemini",
+    "cdp_tv": "cdp:tv",
 }
 VALID_PURPOSES = frozenset(
     {
@@ -63,6 +68,7 @@ VALID_PURPOSES = frozenset(
         "cdp_perplexity",
         "cdp_chatgpt",
         "cdp_gemini",
+        "cdp_tv",
     }
 )
 

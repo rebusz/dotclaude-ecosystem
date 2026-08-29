@@ -1,0 +1,29 @@
+[
+  {
+    "cleanup_status": "released",
+    "completed_at_utc": "2026-08-29T19:05:14.705753Z",
+    "elapsed_s": 184.83,
+    "error": "response timeout after 151.948s",
+    "fallback_attempted": false,
+    "input_revision": "89bc1158101d9a86062919f0e0deca47a18418d1",
+    "input_sha256": "a8c1f221e25f9c2c33146ee71cc969001f2651294e9a77ced78ba1ccfc7f85e3",
+    "label": "GPT Pro current UI model",
+    "model_id": "gpt-pro/current-ui-model",
+    "policy_id": "watchf.gpt_transport.v1",
+    "provider": "gpt",
+    "reason_code": "SUBMISSION_TIMEOUT",
+    "request_id": "gpt_55db5016ed98468a9e8d4a6a32253102",
+    "requested_at_utc": "2026-08-29T19:02:09.875406Z",
+    "requested_purpose": "implementation_review",
+    "requested_transport": "chatgpt_cdp",
+    "resolved_transport": "chatgpt_cdp",
+    "role": "chrome_gpt",
+    "runtime_context": null,
+    "schema_version": "watchf.model_dispatch.v1",
+    "slug": "01_gpt_pro_current",
+    "source": "gpt_cdp",
+    "started_at_utc": "2026-08-29T19:02:09.875492Z",
+    "status": "failed",
+    "success": false
+  }
+]

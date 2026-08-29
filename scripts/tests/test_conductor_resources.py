@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import pathlib
+import sqlite3
 import subprocess
 import sys
 
@@ -15,6 +16,8 @@ import psutil
 import pytest
 
 from scripts.conductor_resources import (
+    resolve_resource_key,
+    RESOURCE_KEY,
     DEFAULT_LEASE_TTL_SECONDS,
     HostResourceManager,
     ResourceAdmissionError,
@@ -974,3 +977,97 @@ def test_per_pool_disable_isolates_only_disabled_pool(tmp_path: pathlib.Path):
     manager_gpt = HostResourceManager(store, resource_key="cdp:chatgpt")
     r_gpt = manager_gpt.request(purpose="cdp_chatgpt", attempt_id="at-ok-g", agent_instance="ag-ok-g")
     assert r_gpt["state"] == HostResourceRequestState.ACTIVE.value
+
+
+def test_cdp_tv_pool_admits_cctv_and_isolates_from_host_heavy(tmp_path: pathlib.Path):
+    """CCTV drives chrome_tv, which had no pool when the split first shipped.
+
+    #90 enforced that cdp_* purposes are refused on host:heavy, but seeded only
+    cdp:perplexity, cdp:chatgpt and cdp:gemini. CCTV (chrome_tv, port 9225,
+    dedicated TV profile) was left with nowhere valid to go and would have
+    hard-failed on its next admission request.
+    """
+    store = ConductorStore(root_dir=tmp_path)
+    tv = HostResourceManager(store, resource_key="cdp:tv")
+    admitted = tv.request(
+        purpose="cdp_provider",
+        attempt_id="cctv-provider-1",
+        agent_instance="tsignal-cctv:1234",
+    )
+    assert admitted["state"] == "ACTIVE"
+
+    # A fence on the TV lane must not touch the other pools.
+    tv.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert tv.status()["recovery_required"] == 1
+    for key, purpose in (
+        ("host:heavy", "pytest_full"),
+        ("cdp:perplexity", "cdp_provider"),
+    ):
+        other = HostResourceManager(store, resource_key=key)
+        result = other.request(purpose=purpose, attempt_id=f"probe-{key}", agent_instance="probe")
+        assert result["state"] == "ACTIVE", f"{key} was blocked by a cdp:tv fence"
+
+
+def test_chrome_tv_role_routes_to_cdp_tv():
+    assert resolve_resource_key(role="chrome_tv") == "cdp:tv"
+
+
+def test_cdp_tv_pool_seeded_when_opening_existing_v5_database(tmp_path: pathlib.Path):
+    """The seed must reach a database that already ran migration 5.
+
+    #90 shipped migration 5 with three CDP pools. Seeding cdp:tv inside that
+    same `current_version < 5` block made the fix a no-op on every workstation
+    already at version 5 - the guard is False, the INSERT never runs, and CCTV
+    is left with no pool row. Only fresh tmp_path databases saw the row, which
+    is why the rest of this suite could not catch it.
+
+    This drives the real migration path: build a store, roll it back to the
+    pre-cdp:tv v5 state, then reopen it with the current code.
+    """
+    store = ConductorStore(root_dir=tmp_path)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("DELETE FROM host_resource_pools WHERE resource_key = 'cdp:tv'")
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 6")
+        conn.commit()
+        remaining = {
+            row[0] for row in conn.execute("SELECT resource_key FROM host_resource_pools").fetchall()
+        }
+        assert "cdp:tv" not in remaining, "arrange failed: v5 state still holds cdp:tv"
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 5
+
+    reopened = ConductorStore(root_dir=tmp_path)
+    with sqlite3.connect(reopened.db_path) as conn:
+        pools = {
+            row[0] for row in conn.execute("SELECT resource_key FROM host_resource_pools").fetchall()
+        }
+    assert "cdp:tv" in pools, "cdp:tv was not seeded into an existing v5 database"
+
+    tv = HostResourceManager(reopened, resource_key="cdp:tv")
+    admitted = tv.request(
+        purpose="cdp_tv",
+        attempt_id="cctv-upgrade-1",
+        agent_instance="tsignal-cctv:4321",
+    )
+    assert admitted["state"] == "ACTIVE"
+
+
+def test_cdp_tv_purpose_routes_to_cdp_tv_pool():
+    """Guards the purpose path; only the role path was asserted before."""
+    assert resolve_resource_key(purpose="cdp_tv") == "cdp:tv"
+    assert resolve_resource_key(purpose="cdp_tv") != RESOURCE_KEY
+
+
+def test_cdp_tv_purpose_is_refused_on_host_heavy(tmp_path: pathlib.Path):
+    """#90's rule - a cdp_* purpose must not be admitted on host:heavy.
+
+    The guard is a `cdp_` prefix match, so cdp_tv is covered without a new
+    branch; this pins that it stays covered.
+    """
+    store = ConductorStore(root_dir=tmp_path)
+    heavy = HostResourceManager(store, resource_key="host:heavy")
+    with pytest.raises(ValueError, match="cannot consume 'host:heavy'"):
+        heavy.request(
+            purpose="cdp_tv",
+            attempt_id="cctv-wrong-pool",
+            agent_instance="tsignal-cctv:9999",
+        )
