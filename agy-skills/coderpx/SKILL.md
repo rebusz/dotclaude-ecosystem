@@ -36,10 +36,11 @@ proceed; do not stall a bounded lane on a clarifying question.
 
 Verified live 2026-08-29 via `--probe-models`: Sonar 2, GPT-5.6 Terra,
 Gemini 3.7 Flash, Claude Sonnet 5, Kimi K3, GLM 5.3, Grok 4.6, Nemotron 3 Ultra.
+The picker serves **GLM 5.3**, not 5.2 as older docs claim.
 
-- **Strong** — `plan`, `review`, `grill`: `Kimi K3`, `Grok 4.6`,
-  `Claude Sonnet 5`, `GPT-5.6 Terra`.
-- **Fast** — mechanical `implement`: `Sonar 2`, `Gemini 3.7 Flash`, `GLM 5.3`.
+- **Strong** — `plan`, `review`, `grill`, deep analysis, multi-file refactors:
+  `Kimi K3`, `GLM 5.3`, `Grok 4.6`, `Claude Sonnet 5`, `GPT-5.6 Terra`.
+- **Fast** — mechanical `implement`: `Sonar 2`, `Gemini 3.7 Flash`.
 
 **GPT-5.6 Sol and Claude Opus 5 are NOT available.** The subscription is
 Perplexity **Pro**, not Max. Do not put them in a packet and do not tell the
