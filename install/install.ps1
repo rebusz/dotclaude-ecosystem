@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ClaudeHome = Join-Path $env:USERPROFILE ".claude"
 $CodexHome = Join-Path $env:USERPROFILE ".codex"
+$GeminiHome = Join-Path $env:USERPROFILE ".gemini\config"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
 Write-Host "=== dotclaude-ecosystem installer ===" -ForegroundColor Cyan
@@ -51,6 +52,22 @@ if (Test-Path $CodexHome) {
         Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
     }
     Write-Host "  copied bundled skills -> ~/.codex/skills/" -ForegroundColor Green
+}
+
+# Antigravity (agy) skills -> ~/.gemini/config/skills/
+# Separate root from ~/.claude/skills: these are read by the agy CLI, not Claude.
+if (Test-Path $GeminiHome) {
+    $AgySkills = @("fwa", "coderpx")
+    foreach ($skill in $AgySkills) {
+        $src = Join-Path $RepoRoot "agy-skills\$skill"
+        $dst = Join-Path $GeminiHome "skills\$skill"
+        if (Test-Path $dst) {
+            Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
+    }
+    Write-Host "  copied agy skills -> ~/.gemini/config/skills/" -ForegroundColor Green
 }
 
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
