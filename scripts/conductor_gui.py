@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import pathlib
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -62,6 +64,24 @@ COLOR_DEGRADED_FG = "#4a148c"
 COLOR_NEUTRAL_BG = "#f8f9fa"
 COLOR_CARD_BG = "#ffffff"
 COLOR_BORDER = "#dcdcdc"
+def _conductorctl_command() -> tuple:
+    """Resolve the installer-owned conductorctl, never a PATH guess.
+
+    Mirrors the resolution the CCTV supervisor uses: the install manifest names
+    the canonical interpreter and script, so the GUI runs the same binary the
+    rest of the ecosystem does rather than whatever happens to be on PATH.
+    """
+    manifest = pathlib.Path.home() / ".conductor" / "install-manifest.json"
+    try:
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        command = (raw.get("canonical_commands") or {}).get("conductorctl")
+    except (OSError, ValueError):
+        command = None
+    if isinstance(command, list) and len(command) == 2 and all(command):
+        return tuple(command)
+    raise RuntimeError(f"conductorctl not resolvable from {manifest}")
+
+
 COLOR_TEXT = "#212529"
 COLOR_MUTED = "#6c757d"
 COLOR_STALE = "#e65100"
@@ -332,15 +352,31 @@ class PoolSectionView:
         else:
             self.stale_marker_label.pack_forget()
 
-        self._render_cards(verdict_res, gate_snapshot)
-
         queue_items = gate_snapshot.get("queue", [])
         quarantined_items = gate_snapshot.get("quarantined", [])
-        if not queue_items and not quarantined_items:
-            self.queue_container.pack_forget()
-        else:
-            self.queue_container.pack(fill=tk.BOTH, expand=True, pady=2)
-            self._render_queue(queue_items, quarantined_items)
+
+        # Rebuilding the cards means destroying and recreating every widget, which
+        # reads as a full-panel flash on each tick. The DB signature changes far
+        # more often than what is actually displayed (heartbeat rows alone move
+        # it), so gate the rebuild on the RENDERED content instead.
+        content_sig = repr((
+            verdict_res.headline,
+            verdict_res.subtext,
+            gate_snapshot.get("holder"),
+            gate_snapshot.get("fenced"),
+            gate_snapshot.get("inherited"),
+            gate_snapshot.get("capacity"),
+            queue_items,
+            quarantined_items,
+        ))
+        if content_sig != getattr(self, "_last_content_sig", None):
+            self._last_content_sig = content_sig
+            self._render_cards(verdict_res, gate_snapshot)
+            if not queue_items and not quarantined_items:
+                self.queue_container.pack_forget()
+            else:
+                self.queue_container.pack(fill=tk.BOTH, expand=True, pady=2)
+                self._render_queue(queue_items, quarantined_items)
 
     def _clear_cards(self) -> None:
         for child in self.cards_container.winfo_children():
@@ -683,6 +719,24 @@ class PoolSectionView:
             )
             copy_btn.configure(command=lambda b=copy_btn, c=cmd: self.panel.copy_to_clipboard(c, b))
             copy_btn.pack(side=tk.RIGHT)
+
+            # A copyable command is not an answer to "the gate is fenced, now
+            # what". Recovery is an operator ATTESTATION, so the button asks for
+            # it explicitly rather than running silently.
+            recover_btn = tk.Button(
+                cmd_row,
+                text="RECOVER",
+                font=(FONT_FAMILY_UI, 8, "bold"),
+                bg="#c62828",
+                fg="#ffffff",
+                relief=tk.FLAT,
+                padx=10,
+                pady=2,
+            )
+            recover_btn.configure(
+                command=lambda b=recover_btn, rid=req_id, adj=adjudication: self.panel.recover_request(rid, adj, b)
+            )
+            recover_btn.pack(side=tk.RIGHT, padx=(0, 6))
 
     def _render_queue(self, queue_items: List[Dict[str, Any]], quarantined_items: List[Dict[str, Any]]) -> None:
         q_count = len(queue_items)
@@ -1040,6 +1094,72 @@ class ConductorGatePanel(tk.Frame):
             orig_text = button.cget("text")
             button.configure(text="COPIED!", bg="#c8e6c9")
             self.master.after(1500, lambda: button.configure(text=orig_text, bg="#e0e0e0"))
+
+    def recover_request(self, request_id: str, adjudication: Any, button: Any) -> None:
+        """Clear a RECOVERY_REQUIRED fence after an explicit operator attestation.
+
+        The panel is otherwise read-only. This is the one mutation, and it stays
+        an operator act: Conductor refuses resource-recover unless the caller
+        attests the owner is gone, so the dialog states exactly what is being
+        attested and to which request before anything runs. A recorded process
+        that is still alive is refused by Conductor regardless of this dialog.
+        """
+        from tkinter import messagebox, simpledialog
+
+        detail = getattr(adjudication, "recover_code", "") or "RECOVERY_REQUIRED"
+        message = "\n".join([
+            f"Request:  {request_id}",
+            f"Refusal:  {detail}",
+            "",
+            "You are attesting that the process holding this lease no longer exists.",
+            "Verify it first (Get-Process on the recorded PID, or the agent's own logs).",
+            "",
+            "Proceed?",
+        ])
+        confirmed = messagebox.askyesno(
+            "Attest that the owner is gone",
+            message,
+            icon="warning",
+            default="no",
+        )
+        if not confirmed:
+            return
+        reason = simpledialog.askstring(
+            "Reason (recorded in the receipt)",
+            "Why is the owner known to be gone?",
+            initialvalue="operator verified the owner process is absent",
+        )
+        if not reason or not reason.strip():
+            return
+
+        cmd = list(_conductorctl_command()) + [
+            "resource-recover",
+            "--request-id", request_id,
+            "--attest-owner-gone",
+            "--reason", reason.strip(),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60, check=False,
+            )
+        except Exception as exc:
+            messagebox.showerror("Recover failed", f"{type(exc).__name__}: {exc}")
+            return
+
+        if proc.returncode == 0:
+            button.configure(text="RECOVERED", bg="#2e7d32")
+            # Force the next tick to redraw: the content gate would otherwise
+            # hold the stale card until the DB signature happens to move.
+            for section in getattr(self, "pool_sections", {}).values() or ():
+                section._last_content_sig = None
+            if self.worker:
+                self.worker.resume()
+        else:
+            messagebox.showerror(
+                "Conductor refused",
+                (proc.stderr or proc.stdout or "no output").strip()[:800],
+            )
 
     def _render_footer(
         self,
