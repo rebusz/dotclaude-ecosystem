@@ -7,6 +7,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLAUDE_HOME="${HOME}/.claude"
 CODEX_HOME="${HOME}/.codex"
+GEMINI_HOME="${HOME}/.gemini/config"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 echo "=== dotclaude-ecosystem installer ==="
@@ -46,6 +47,21 @@ if [ -d "$CODEX_HOME" ]; then
         cp -R "$REPO_ROOT/skills/$skill/"* "$CODEX_HOME/skills/$skill/"
     done
     echo "  copied bundled skills -> ~/.codex/skills/"
+fi
+
+
+# Antigravity (agy) skills -> ~/.gemini/config/skills/
+# Separate root from ~/.claude/skills: these are read by the agy CLI, not Claude.
+if [ -d "$GEMINI_HOME" ]; then
+    AGY_SKILLS=(fwa coderpx)
+    for skill in "${AGY_SKILLS[@]}"; do
+        if [ -d "$GEMINI_HOME/skills/$skill" ]; then
+            cp -R "$GEMINI_HOME/skills/$skill" "$GEMINI_HOME/skills/$skill.bak.$STAMP"
+        fi
+        mkdir -p "$GEMINI_HOME/skills/$skill"
+        cp -R "$REPO_ROOT/agy-skills/$skill/"* "$GEMINI_HOME/skills/$skill/"
+    done
+    echo "  copied agy skills -> ~/.gemini/config/skills/"
 fi
 
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
