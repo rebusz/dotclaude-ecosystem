@@ -10,8 +10,8 @@ skill *about* driving agy; the two are not interchangeable.
 
 | Skill | Command | Purpose |
 |---|---|---|
-| `fwa` | `/fwa` | Execute a pasted plan or handoff: implement easy slices locally, push hard ones to ChatGPT CDP or CoderPX, verify, land. |
-| `coderpx` | `/coderpx` | One bounded submit to a Perplexity picker model; the task kind (implement / review / plan / grill) is inferred from conversation context. |
+| `fwa` | `/fwa` | Execute a plan by delegating implementation/review work to ChatGPT CDP or Perplexity CoderPX; agy is implementation fallback only. |
+| `coderpx` | `/coderpx` | Route agy plan, implementation and PR-review work across ChatGPT Sol and the allowed Perplexity models, then report ownership. |
 
 ## Install
 
@@ -29,12 +29,13 @@ Discovery and content loading are separate things — check both:
 
 ```bash
 agy -p "List every skill you can invoke as a slash command." --model gemini-3.7-flash --effort low
-agy -p "/coderpx Is GPT-5.6 Sol available? Answer in one sentence." --model gemini-3.7-flash --effort low
+agy -p "/coderpx State the plan-routing rule only; do not submit external work." --model gemini-3.7-flash --effort low
 ```
 
-The second must answer that Sol is unavailable because the subscription is
-Perplexity Pro rather than Max. A run that lists the skill but cannot answer
-that has found the file without reading it.
+The second must answer that agy never writes plans: primary is ChatGPT CDP Sol
+Pro, then verified Sol Extra High, then Kimi K3 through Perplexity CoderPX. A
+run that lists the skill but cannot answer that has found the file without
+reading it.
 
 ## Frontmatter contract
 
