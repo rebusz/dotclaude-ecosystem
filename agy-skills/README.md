@@ -33,9 +33,9 @@ agy -p "/coderpx State the plan-routing rule only; do not submit external work."
 ```
 
 The second must answer that agy never writes plans: primary is ChatGPT CDP Sol
-Pro, then verified Sol Extra High, then Kimi K3 through Perplexity CoderPX. A
-run that lists the skill but cannot answer that has found the file without
-reading it.
+Pro, then verified Sol Extra High, then GLM 5.3 with Reasoning through
+Perplexity CoderPX. A run that lists the skill but cannot answer that has found
+the file without reading it.
 
 ## Frontmatter contract
 

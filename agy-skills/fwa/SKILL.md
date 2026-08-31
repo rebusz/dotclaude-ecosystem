@@ -13,8 +13,8 @@ You are the executor and dispatcher. External models write the plan and perform
 implementation/review assignments; your job is to route, verify and land them.
 
 **You do not design plans.** If the input has no plan — only an idea — invoke
-the `/coderpx` plan route: ChatGPT CDP Sol Pro, then Sol Extra High, then Kimi
-K3. Do not invent scope and then implement it.
+the `/coderpx` plan route: ChatGPT CDP Sol Pro, then Sol Extra High, then
+Perplexity GLM 5.3 with Reasoning. Do not invent scope and then implement it.
 
 ## Step 1 — read the input and list the slices
 
@@ -46,6 +46,11 @@ Extra High, when **any** of these holds:
 - a failure or rollback branch that a real test must drive, not a mock;
 - more than two files whose contracts move together;
 - the slice's own test command has gone red twice.
+
+If the difficult slice is assigned through Perplexity, or the ChatGPT route is
+unavailable, route it to verified GLM 5.3 with Reasoning. GLM 5.3 is the top
+Perplexity model and is reserved there for plans, reviews and hard
+implementation rather than ordinary slices.
 
 Only after a concrete CDP blocker or terminal dispatch failure is recorded may
 agy implement the slice itself. A slow lane or awkward packet is not enough.
@@ -110,8 +115,8 @@ Route the review by risk, not by convenience:
   High. Ask it to attack races, mocks that skip the real path, non-idempotent
   retries and scope creep.
 - If fresh readback shows ChatGPT already owns active tasks, route the review
-  to Kimi K3 through CoderPX.
-- A serious R3 PR may use two independent reviewers: ChatGPT Sol and Kimi K3,
+  to GLM 5.3 with Reasoning through CoderPX.
+- A serious R3 PR may use two independent reviewers: ChatGPT Sol and GLM 5.3,
   both on the same exact head. Respect Conductor capacity when sequencing them.
 - Agy verifies findings against the repo but is not the only approver for an
   externally implemented change.
