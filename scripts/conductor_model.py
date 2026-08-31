@@ -257,6 +257,10 @@ class HostResourceRequest:
     released_at_utc: Optional[str] = None
     reason_code: Optional[str] = None
     slot_key: str = ""
+    owner_process_pid: Optional[int] = None
+    owner_process_start_time: Optional[float] = None
+    owner_identity_source: str = "UNRECORDED"
+    owner_last_seen_at_utc: Optional[str] = None
     schema_version: str = SCHEMA_RESOURCE_REQUEST
 
     def to_dict(self) -> Dict[str, Any]:

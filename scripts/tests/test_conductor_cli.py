@@ -91,12 +91,38 @@ def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: py
 
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store)
-    wedged = manager.request(purpose="pytest_heavy", attempt_id="at-cli", agent_instance="inst-cli")
-    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    from scripts.conductor_model import HostResourceRequestState
+    from scripts.conductor_resources import current_utc_iso
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_123456abcdef",
+                "idemp_cli_wedged",
+                "host:heavy",
+                "pytest_heavy",
+                "at-cli",
+                "inst-cli",
+                HostResourceRequestState.RECOVERY_REQUIRED.value,
+                50,
+                "",
+                current_utc_iso(),
+                "LEASE_EXPIRED",
+                "",
+                "conductor.resource-request.v1",
+            ),
+        )
     queued = manager.request(purpose="pytest_full", attempt_id="at-cli-queued", agent_instance="inst-cli")
 
     # Without attestation the CLI must fail closed and exit non-zero.
-    assert conductorctl.main(["resource-recover", "--request-id", wedged["request_id"]]) == 1
+    assert conductorctl.main(["resource-recover", "--request-id", "rr_123456abcdef"]) == 1
     refusal = json.loads(capsys.readouterr().out)
     assert refusal["status"] == "ERROR"
     assert "OWNER_LIVENESS_UNPROVEN" in refusal["error_message"]
@@ -105,7 +131,7 @@ def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: py
         [
             "resource-recover",
             "--request-id",
-            wedged["request_id"],
+            "rr_123456abcdef",
             "--attest-owner-gone",
             "--reason",
             "owning agent host is gone",

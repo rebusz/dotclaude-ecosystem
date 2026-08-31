@@ -23,6 +23,7 @@ from scripts.conductor_resources import (
     ResourceAdmissionError,
     ResourceBusyError,
     classify_pytest_invocation,
+    current_utc_iso,
 )
 from scripts.conductor_store import (
     ConductorStore,
@@ -164,8 +165,10 @@ def test_forged_and_expired_inherited_tokens_fail_closed(manager: HostResourceMa
         agent_instance="inst",
         parent_lease_id=parent["lease_id"],
     )
+    # With auto-recovery sweep, the expired parent is moved to RECOVERY_REQUIRED
+    # before the child can attempt inheritance, so the lease check finds a non-ACTIVE parent.
     assert stale["state"] == HostResourceRequestState.QUEUED.value
-    assert stale["reason_code"] == "INHERITED_LEASE_EXPIRED"
+    assert stale["reason_code"] in ("INHERITED_LEASE_EXPIRED", "INHERITED_LEASE_INVALID")
 
 
 def test_heartbeat_order_and_expiry_recovery(manager: HostResourceManager):
@@ -323,9 +326,19 @@ def test_pytest_adapter_filters_secret_environment_and_rejects_arbitrary_executa
         )
 
 
-def _wedge(manager: HostResourceManager, *, purpose: str = "pytest_heavy") -> dict:
+def _wedge(manager: HostResourceManager, purpose: str = "pytest_heavy", record_owner: bool = False) -> Dict[str, Any]:
     """Drive a real request into RECOVERY_REQUIRED the way expiry does."""
     request = manager.request(purpose=purpose, attempt_id="at-wedge", agent_instance="inst-wedge")
+    if not record_owner:
+        with manager.store._connection() as conn:
+            conn.execute(
+                "UPDATE host_resource_requests SET owner_process_pid = NULL, owner_process_start_time = NULL, owner_identity_source = 'UNRECORDED' WHERE request_id = ?",
+                (request["request_id"],),
+            )
+            conn.execute(
+                "UPDATE host_resource_leases SET process_pid = NULL, process_start_time = NULL WHERE lease_id = ?",
+                (request["lease_id"],),
+            )
     manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
     assert manager.status()["recovery_required"] == 1
     return request
@@ -336,6 +349,10 @@ def _set_lease_process(manager: HostResourceManager, lease_id: str, pid, start_t
         conn.execute(
             "UPDATE host_resource_leases SET process_pid = ?, process_start_time = ? WHERE lease_id = ?",
             (pid, start_time, lease_id),
+        )
+        conn.execute(
+            "UPDATE host_resource_requests SET owner_process_pid = ?, owner_process_start_time = ?, owner_identity_source = ? WHERE request_id = (SELECT request_id FROM host_resource_leases WHERE lease_id = ?)",
+            (pid, start_time, "EXPLICIT_VALIDATED" if pid is not None else "UNRECORDED", lease_id),
         )
 
 
@@ -514,7 +531,14 @@ def test_verdict_differential_against_admission(tmp_path: pathlib.Path):
     # 4. FENCED (RECOVERY_REQUIRED >= 1)
     store_fenced = ConductorStore(root_dir=tmp_path / "fenced_pool")
     manager_fenced = HostResourceManager(store_fenced)
-    req_fenced = manager_fenced.request(purpose="pytest_heavy", attempt_id="at-f1", agent_instance="tsignal-cctv:79584")
+    proc = psutil.Process(os.getpid())
+    req_fenced = manager_fenced.request(
+        purpose="pytest_heavy",
+        attempt_id="at-f1",
+        agent_instance=f"tsignal-cctv:{proc.pid}",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
+    )
     manager_fenced.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
 
     snapshot_fenced = read_resource_live_snapshot(root_dir=tmp_path / "fenced_pool")
@@ -739,11 +763,14 @@ def test_isolation_fenced_cdp_does_not_block_other_pools(tmp_path: pathlib.Path)
     manager_gem = HostResourceManager(store, resource_key="cdp:gemini")
     manager_heavy = HostResourceManager(store, resource_key="host:heavy")
 
-    # 1. Drive cdp:perplexity into RECOVERY_REQUIRED with captured 2026-08-27 CCTV shape
+    # 1. Drive cdp:perplexity into RECOVERY_REQUIRED with live process PID
+    proc = psutil.Process(os.getpid())
     cctv_req = manager_ppl.request(
         purpose="cdp_perplexity",
-        attempt_id="cctv-provider-79584-938a899a374f-15",
-        agent_instance="tsignal-cctv:79584",
+        attempt_id="cctv-provider-live-15",
+        agent_instance=f"tsignal-cctv:{proc.pid}",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
         slot_key="sonar-reasoning",
     )
     assert cctv_req["state"] == HostResourceRequestState.ACTIVE.value
@@ -989,10 +1016,13 @@ def test_cdp_tv_pool_admits_cctv_and_isolates_from_host_heavy(tmp_path: pathlib.
     """
     store = ConductorStore(root_dir=tmp_path)
     tv = HostResourceManager(store, resource_key="cdp:tv")
+    proc = psutil.Process(os.getpid())
     admitted = tv.request(
         purpose="cdp_provider",
         attempt_id="cctv-provider-1",
-        agent_instance="tsignal-cctv:1234",
+        agent_instance=f"tsignal-cctv:{proc.pid}",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
     )
     assert admitted["state"] == "ACTIVE"
 
@@ -1071,3 +1101,474 @@ def test_cdp_tv_purpose_is_refused_on_host_heavy(tmp_path: pathlib.Path):
             attempt_id="cctv-wrong-pool",
             agent_instance="tsignal-cctv:9999",
         )
+
+
+def test_auto_recovery_expired_owner_pid_absent_atomically_releases_and_admits_newcomer(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+
+    # Insert directly to avoid validate_caller_owner_identity rejecting the dead PID
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, owner_process_pid, owner_process_start_time,
+                owner_identity_source, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_dead_owner",
+                "idemp_dead_owner",
+                "host:heavy",
+                "pytest_heavy",
+                "dead-attempt",
+                "dead-inst",
+                HostResourceRequestState.ACTIVE.value,
+                50,
+                "",
+                current_utc_iso(),
+                "HOST_RESOURCE_ADMITTED",
+                "",
+                dead.pid,
+                1.0,
+                "EXPLICIT_VALIDATED",
+                "conductor.resource-request.v1",
+            ),
+        )
+        # Create a lease too
+        from scripts.conductor_resources import _iso, _now
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO host_resource_leases (
+                lease_id, request_id, resource_key, attempt_id, agent_instance,
+                heartbeat_sequence, expires_at_utc, last_heartbeat_utc,
+                process_pid, process_start_time, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "hrl_dead_owner",
+                "rr_dead_owner",
+                "host:heavy",
+                "dead-attempt",
+                "dead-inst",
+                1,
+                _iso(now + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS)),
+                _iso(now),
+                dead.pid,
+                1.0,
+                "conductor.resource-lease.v1",
+            ),
+        )
+
+    # Fast forward time to expire lease
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    # New request arrives — sweep should auto-recover the dead owner
+    second = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="live-attempt",
+        agent_instance="live-inst",
+    )
+    assert second["state"] == "ACTIVE"
+
+    # Check that previous fenced row was auto-recovered
+    old_req = store.get_resource_request("rr_dead_owner")
+    assert old_req.state == HostResourceRequestState.RELEASED
+    assert old_req.reason_code == "AUTO_RECOVERY_OWNER_PROCESS_GONE"
+
+
+def test_auto_recovery_reused_pid_releases_fence(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, owner_process_pid, owner_process_start_time,
+                owner_identity_source, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_reused_owner",
+                "idemp_reused_owner",
+                "host:heavy",
+                "pytest_heavy",
+                "reused-attempt",
+                "reused-inst",
+                HostResourceRequestState.ACTIVE.value,
+                50,
+                "",
+                current_utc_iso(),
+                "HOST_RESOURCE_ADMITTED",
+                "",
+                os.getpid(),
+                1.0,  # mismatch with live process start time
+                "EXPLICIT_VALIDATED",
+                "conductor.resource-request.v1",
+            ),
+        )
+        from scripts.conductor_resources import _iso, _now
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO host_resource_leases (
+                lease_id, request_id, resource_key, attempt_id, agent_instance,
+                heartbeat_sequence, expires_at_utc, last_heartbeat_utc,
+                process_pid, process_start_time, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "hrl_reused_owner",
+                "rr_reused_owner",
+                "host:heavy",
+                "reused-attempt",
+                "reused-inst",
+                1,
+                _iso(now + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS)),
+                _iso(now),
+                os.getpid(),
+                1.0,
+                "conductor.resource-lease.v1",
+            ),
+        )
+
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+
+    second = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="live-attempt-2",
+        agent_instance="live-inst-2",
+    )
+    assert second["state"] == "ACTIVE"
+
+    old_req = store.get_resource_request("rr_reused_owner")
+    assert old_req.state == HostResourceRequestState.RELEASED
+    assert old_req.reason_code == "AUTO_RECOVERY_OWNER_PID_REUSED"
+
+
+def test_auto_recovery_owner_pid_alive_remains_fenced_and_newcomer_queues(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    proc = psutil.Process(os.getpid())
+    first = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="alive-attempt",
+        agent_instance="alive-inst",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
+    )
+    assert first["state"] == "ACTIVE"
+
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert manager.status()["state_counts"]["RECOVERY_REQUIRED"] == 1
+
+    second = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="new-attempt",
+        agent_instance="new-inst",
+    )
+    assert second["state"] == "QUEUED"
+
+    old_req = store.get_resource_request(first["request_id"])
+    assert old_req.state == HostResourceRequestState.RECOVERY_REQUIRED
+
+
+def test_auto_recovery_active_inherited_child_blocks_auto_recovery(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, owner_process_pid, owner_process_start_time,
+                owner_identity_source, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_parent_dead",
+                "idemp_parent_dead",
+                "host:heavy",
+                "pytest_heavy",
+                "parent-attempt",
+                "parent-inst",
+                HostResourceRequestState.ACTIVE.value,
+                50,
+                "",
+                current_utc_iso(),
+                "HOST_RESOURCE_ADMITTED",
+                "",
+                dead.pid,
+                1.0,
+                "EXPLICIT_VALIDATED",
+                "conductor.resource-request.v1",
+            ),
+        )
+        from scripts.conductor_resources import _iso, _now
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO host_resource_leases (
+                lease_id, request_id, resource_key, attempt_id, agent_instance,
+                heartbeat_sequence, expires_at_utc, last_heartbeat_utc,
+                process_pid, process_start_time, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "hrl_parent_dead",
+                "rr_parent_dead",
+                "host:heavy",
+                "parent-attempt",
+                "parent-inst",
+                1,
+                _iso(now + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS)),
+                _iso(now),
+                dead.pid,
+                1.0,
+                "conductor.resource-lease.v1",
+            ),
+        )
+
+    child = manager.request(
+        purpose="pytest_focused",
+        attempt_id="child-attempt",
+        agent_instance="child-inst",
+        parent_lease_id="hrl_parent_dead",
+    )
+    assert child["state"] == "INHERITED"
+
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert manager.status()["state_counts"]["RECOVERY_REQUIRED"] == 1
+
+    newcomer = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="new-attempt-3",
+        agent_instance="new-inst-3",
+    )
+    assert newcomer["state"] == "QUEUED"
+
+
+def test_auto_recovery_legacy_agent_instance_absent_pid(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_legacy_dead",
+                "idemp_legacy_dead",
+                "host:heavy",
+                "pytest_heavy",
+                "att_legacy",
+                "tsignal-cctv:9999998",
+                HostResourceRequestState.RECOVERY_REQUIRED.value,
+                50,
+                "",
+                current_utc_iso(),
+                "LEASE_EXPIRED",
+                "",
+                "conductor.resource-request.v1",
+            ),
+        )
+
+    newcomer = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="live-after-legacy",
+        agent_instance="live-after-legacy",
+    )
+    assert newcomer["state"] == "ACTIVE"
+
+    old_req = store.get_resource_request("rr_legacy_dead")
+    assert old_req.state == HostResourceRequestState.RELEASED
+    assert old_req.reason_code == "AUTO_RECOVERY_LEGACY_AGENT_PID_ABSENT"
+
+
+def test_auto_recovery_stale_queued_owners_terminalized_and_live_promoted(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    # Occupy capacity
+    first = manager.request(purpose="pytest_heavy", attempt_id="live-1", agent_instance="live-1")
+    assert first["state"] == "ACTIVE"
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+
+    # Queue dead owner directly via DB
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, owner_process_pid, owner_process_start_time,
+                owner_identity_source, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_q_dead1",
+                "idemp_q_dead1",
+                "host:heavy",
+                "pytest_heavy",
+                "q-dead-1",
+                "q-dead-1",
+                HostResourceRequestState.QUEUED.value,
+                50,
+                "",
+                current_utc_iso(),
+                "HOST_RESOURCE_BUSY",
+                "",
+                dead.pid,
+                1.0,
+                "EXPLICIT_VALIDATED",
+                "conductor.resource-request.v1",
+            ),
+        )
+
+    # Queue live owner
+    proc = psutil.Process(os.getpid())
+    q_live = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="q-live",
+        agent_instance="q-live",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
+    )
+    assert q_live["state"] == "QUEUED"
+
+    # Release first request
+    manager.release(first["request_id"])
+
+    # Verify dead queued request was terminalized and live queued request was promoted
+    req_dead = store.get_resource_request("rr_q_dead1")
+    assert req_dead.state == HostResourceRequestState.RELEASED
+    assert req_dead.reason_code == "QUEUE_OWNER_PROCESS_GONE"
+
+    req_live = store.get_resource_request(q_live["request_id"])
+    assert req_live.state == HostResourceRequestState.ACTIVE
+    assert req_live.reason_code == "HOST_RESOURCE_PROMOTED"
+
+
+def test_auto_recovery_legacy_unrecorded_queued_rows_terminalized(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, owner_identity_source, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_legacy_queued",
+                "idemp_legacy_queued",
+                "host:heavy",
+                "pytest_heavy",
+                "att_legacy_q",
+                "agent-unrecorded",
+                HostResourceRequestState.QUEUED.value,
+                50,
+                "",
+                current_utc_iso(),
+                "HOST_RESOURCE_BUSY",
+                "",
+                "UNRECORDED",
+                "conductor.resource-request.v1",
+            ),
+        )
+
+    # Reconcile/sweep
+    manager.reconcile()
+
+    old_q = store.get_resource_request("rr_legacy_queued")
+    assert old_q.state == HostResourceRequestState.RELEASED
+    assert old_q.reason_code == "LEGACY_QUEUE_OWNER_UNRECORDED"
+
+
+def test_idempotent_replay_same_owner_refreshes_last_seen_different_owner_rejected(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    proc = psutil.Process(os.getpid())
+    req = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="idemp-test",
+        agent_instance="inst-test",
+        idempotency_key="unique_key_1",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
+    )
+    assert req["state"] == "ACTIVE"
+    first_seen = req["owner_last_seen_at_utc"]
+
+    # Replay by same owner
+    replayed = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="idemp-test",
+        agent_instance="inst-test",
+        idempotency_key="unique_key_1",
+        owner_process_pid=proc.pid,
+        owner_process_start_time=proc.create_time(),
+    )
+    assert replayed["idempotent_replay"] is True
+
+    # Replay by foreign/invalid owner
+    with pytest.raises(ResourceAdmissionError, match="OWNER_PROCESS_IDENTITY_INVALID"):
+        manager.request(
+            purpose="pytest_heavy",
+            attempt_id="idemp-test",
+            agent_instance="inst-test",
+            idempotency_key="unique_key_1",
+            owner_process_pid=9999997,
+            owner_process_start_time=1.0,
+        )
+
+
+def test_reconcile_dry_run_reports_candidates_without_modifications(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="host:heavy")
+
+    first = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="dry-test",
+        agent_instance="inst-dry",
+    )
+    assert first["state"] == "ACTIVE"
+
+    # Dry run reconcile at future time
+    result = manager.reconcile(
+        dry_run=True,
+        now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60),
+    )
+    assert result["dry_run"] is True
+    assert result["expired_count"] == 1
+
+    # In db, state is still ACTIVE
+    req = store.get_resource_request(first["request_id"])
+    assert req.state == HostResourceRequestState.ACTIVE
+
