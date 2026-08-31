@@ -90,6 +90,10 @@ self-grading. The selected command owns the entire
 lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
 checkout synchronization. There is no separate closeout command.
 
+R1 `auditf.py` gets Kimi 3 through the Perplexity CDP picker. R2/R3 `fuse.py`
+and coding/repository-review tasks use Kimi CLI. The dedicated Kimi CDP lane is
+retired from the workflow topology.
+
 The audit and matrix Python runners are internal stages, not public workflow
 entrypoints. They expose only `--mode free|paid`; model presets, lane selection,
 and CDP bypasses are not part of the workflow contract. Codex always passes
