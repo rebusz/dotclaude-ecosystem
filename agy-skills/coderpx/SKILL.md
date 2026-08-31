@@ -102,6 +102,25 @@ Perplexity output is advisory until you check it yourself.
   content it was never shown. Reject those with evidence rather than fixing
   imaginary problems.
 
+## Step 7 — end with a model-use table
+
+End every `/coderpx` answer with a compact Markdown table showing which model
+was assigned to which task. The table is the final section of the answer and
+has one row for every CoderPX assignment, including blocked or unconfirmed
+attempts. Match the table language to the user's language.
+
+| Task | Model used | Assignment | Status |
+|---|---|---|---|
+| concise user-facing subtask | exact `verified_model` | `implement`, `review`, `plan`, or `grill` | manifest status |
+
+- For `SUCCESS`, copy the exact `verified_model` from the manifest. Do not use
+  the requested picker fragment as proof of the model that answered.
+- When `verified_model` is absent, write `UNVERIFIED (requested: <model>)` or
+  `NOT USED (requested: <model>)`, as appropriate. Never imply that a blocked
+  or `SUBMIT_UNCONFIRMED` assignment actually ran on the requested model.
+- Describe the task narrowly enough that the model-to-work mapping is clear.
+  Do not list models that were considered but never assigned.
+
 ## Red lines
 
 - **Two rounds maximum.** After two submits without green tests, finish the work
