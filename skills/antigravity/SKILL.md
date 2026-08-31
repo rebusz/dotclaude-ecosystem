@@ -39,7 +39,7 @@ All local file modifications through `agy` MUST pass the exact pinned flags and 
 
 ```powershell
 agy -p "<packet>" --mode accept-edits --dangerously-skip-permissions `
-    --add-dir "<ABSOLUTE worktree path>" --model gemini-3.7-flash --effort high
+    --add-dir "<ABSOLUTE worktree path>" --model gemini-3.7-flash-high --effort high
 ```
 
 ### Containment Refusal Gate (Mandatory)
