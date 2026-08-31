@@ -120,6 +120,10 @@ def _row_to_request_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "released_at_utc": str(row["released_at_utc"]) if row["released_at_utc"] is not None else None,
         "reason_code": str(row["reason_code"]) if row["reason_code"] is not None else None,
         "slot_key": str(row["slot_key"]) if "slot_key" in row.keys() and row["slot_key"] is not None else "",
+        "owner_process_pid": int(row["owner_process_pid"]) if "owner_process_pid" in row.keys() and row["owner_process_pid"] is not None else None,
+        "owner_process_start_time": float(row["owner_process_start_time"]) if "owner_process_start_time" in row.keys() and row["owner_process_start_time"] is not None else None,
+        "owner_identity_source": str(row["owner_identity_source"]) if "owner_identity_source" in row.keys() and row["owner_identity_source"] is not None else "UNRECORDED",
+        "owner_last_seen_at_utc": str(row["owner_last_seen_at_utc"]) if "owner_last_seen_at_utc" in row.keys() and row["owner_last_seen_at_utc"] is not None else None,
         "schema_version": str(row["schema_version"]),
     }
 
@@ -1428,6 +1432,22 @@ class ConductorStore:
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (6, datetime('now'))"
                 )
 
+            if current_version < 7:
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+                }
+                if "owner_process_pid" not in columns:
+                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_owner_identity_{int(time.time())}.db"
+                        shutil.copy2(self.db_path, backup_file)
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_pid INTEGER NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_start_time REAL NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_identity_source TEXT NOT NULL DEFAULT 'UNRECORDED'")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_last_seen_at_utc TEXT NULL")
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (7, datetime('now'))"
+                )
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
@@ -1798,6 +1818,19 @@ class ConductorStore:
             schema_version=row["schema_version"],
         )
 
+    def list_resource_pools(self) -> List[HostResourcePool]:
+        with self._connection() as conn:
+            rows = conn.execute("SELECT * FROM host_resource_pools ORDER BY resource_key").fetchall()
+        return [
+            HostResourcePool(
+                resource_key=row["resource_key"],
+                capacity=int(row["capacity"]),
+                enabled=bool(row["enabled"]),
+                schema_version=row["schema_version"],
+            )
+            for row in rows
+        ]
+
     def save_resource_request(self, request: HostResourceRequest) -> None:
         with self._connection() as conn:
             conn.execute(
@@ -1805,15 +1838,21 @@ class ConductorStore:
                 INSERT INTO host_resource_requests (
                     request_id, idempotency_key, resource_key, purpose, attempt_id,
                     agent_instance, state, priority, parent_lease_id, command_sha256,
-                    created_at_utc, released_at_utc, reason_code, slot_key, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at_utc, released_at_utc, reason_code, slot_key,
+                    owner_process_pid, owner_process_start_time, owner_identity_source,
+                    owner_last_seen_at_utc, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO UPDATE SET
                     state = excluded.state,
                     priority = excluded.priority,
                     parent_lease_id = excluded.parent_lease_id,
                     released_at_utc = excluded.released_at_utc,
                     reason_code = excluded.reason_code,
-                    slot_key = excluded.slot_key
+                    slot_key = excluded.slot_key,
+                    owner_process_pid = excluded.owner_process_pid,
+                    owner_process_start_time = excluded.owner_process_start_time,
+                    owner_identity_source = excluded.owner_identity_source,
+                    owner_last_seen_at_utc = excluded.owner_last_seen_at_utc
                 """,
                 (
                     request.request_id,
@@ -1830,6 +1869,10 @@ class ConductorStore:
                     request.released_at_utc,
                     request.reason_code,
                     request.slot_key,
+                    request.owner_process_pid,
+                    request.owner_process_start_time,
+                    request.owner_identity_source,
+                    request.owner_last_seen_at_utc,
                     request.schema_version,
                 ),
             )
@@ -1918,6 +1961,7 @@ class ConductorStore:
 
     @staticmethod
     def _row_to_resource_request(row: sqlite3.Row) -> HostResourceRequest:
+        keys = row.keys()
         return HostResourceRequest(
             request_id=row["request_id"],
             idempotency_key=row["idempotency_key"],
@@ -1932,7 +1976,11 @@ class ConductorStore:
             created_at_utc=row["created_at_utc"],
             released_at_utc=row["released_at_utc"],
             reason_code=row["reason_code"],
-            slot_key=str(row["slot_key"]) if "slot_key" in row.keys() and row["slot_key"] is not None else "",
+            slot_key=str(row["slot_key"]) if "slot_key" in keys and row["slot_key"] is not None else "",
+            owner_process_pid=int(row["owner_process_pid"]) if "owner_process_pid" in keys and row["owner_process_pid"] is not None else None,
+            owner_process_start_time=float(row["owner_process_start_time"]) if "owner_process_start_time" in keys and row["owner_process_start_time"] is not None else None,
+            owner_identity_source=str(row["owner_identity_source"]) if "owner_identity_source" in keys and row["owner_identity_source"] is not None else "UNRECORDED",
+            owner_last_seen_at_utc=str(row["owner_last_seen_at_utc"]) if "owner_last_seen_at_utc" in keys and row["owner_last_seen_at_utc"] is not None else None,
             schema_version=row["schema_version"],
         )
 

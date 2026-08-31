@@ -652,16 +652,35 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     from scripts.conductor_resources import DEFAULT_LEASE_TTL_SECONDS, HostResourceManager
 
     store = ConductorStore(root_dir=tmp_path)
-    manager = HostResourceManager(store)
-    wedged = manager.request(purpose="pytest_heavy", attempt_id="at-ps", agent_instance="tsignal-cctv:79584")
-    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    from scripts.conductor_resources import current_utc_iso
+    with store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, command_sha256, created_at_utc,
+                reason_code, slot_key, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rr_123456abcdef",
+                "idemp_ps_wedged",
+                "host:heavy",
+                "pytest_heavy",
+                "at-ps",
+                "inst-ps",
+                HostResourceRequestState.RECOVERY_REQUIRED.value,
+                50,
+                "",
+                current_utc_iso(),
+                "LEASE_EXPIRED",
+                "",
+                "conductor.resource-request.v1",
+            ),
+        )
 
-    fenced_req = store.get_resource_request(wedged["request_id"]).to_dict()
-    lease = store.get_resource_lease_by_request(wedged["request_id"]) if hasattr(store, "get_resource_lease_by_request") else None
-    if not lease:
-        leases = [l for l in store.list_resource_leases() if l.request_id == wedged["request_id"]]
-        lease = leases[0] if leases else None
-    fenced_req["lease"] = lease.to_dict() if lease else None
+    fenced_req = store.get_resource_request("rr_123456abcdef").to_dict()
+    fenced_req["lease"] = None
 
     # Build command string
     raw_cmd = build_recovery_command(fenced_req, repo_path=ROOT)
@@ -685,7 +704,7 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     assert completed.returncode == 0, completed.stderr
 
     # Verify request is released and recovered in DB
-    updated = store.get_resource_request(wedged["request_id"])
+    updated = store.get_resource_request("rr_123456abcdef")
     assert updated.state == HostResourceRequestState.RELEASED
     assert updated.reason_code == "RECOVERY_ATTESTED"
 
@@ -774,3 +793,77 @@ def test_read_all_pools_live_single_snapshot_read(tmp_path: pathlib.Path):
         assert mock_copy2.call_count == 1
         assert "gates" in frame
         assert len(frame["gates"]) >= 4
+
+
+def test_schema_migration_v7_adds_owner_identity_columns_and_preserves_data(tmp_path: pathlib.Path):
+    """Verifies that migration v7 upgrades existing v6 databases and preserves data."""
+    store_dir = tmp_path / "v6_store"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    db_path = store_dir / "conductor.db"
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_utc TEXT NOT NULL)")
+    for v in range(1, 7):
+        conn.execute("INSERT INTO schema_migrations (version, applied_at_utc) VALUES (?, datetime('now'))", (v,))
+
+    conn.execute(
+        """
+        CREATE TABLE host_resource_requests (
+            request_id TEXT PRIMARY KEY,
+            idempotency_key TEXT UNIQUE NOT NULL,
+            resource_key TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            agent_instance TEXT NOT NULL,
+            state TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 50,
+            parent_lease_id TEXT NULL,
+            command_sha256 TEXT NOT NULL DEFAULT '',
+            created_at_utc TEXT NOT NULL,
+            released_at_utc TEXT NULL,
+            reason_code TEXT NULL,
+            slot_key TEXT NOT NULL DEFAULT '',
+            schema_version TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO host_resource_requests (
+            request_id, idempotency_key, resource_key, purpose, attempt_id, agent_instance,
+            state, priority, command_sha256, created_at_utc, slot_key, schema_version
+        ) VALUES (
+            'rr_v6_data', 'idemp_v6', 'host:heavy', 'pytest_heavy', 'att_v6', 'agent_v6',
+            'ACTIVE', 50, '', datetime('now'), '', 'conductor.resource-request.v1'
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Re-open store with v7 code
+    store = ConductorStore(root_dir=store_dir)
+    with store._connection() as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()}
+        assert "owner_process_pid" in cols
+        assert "owner_process_start_time" in cols
+        assert "owner_identity_source" in cols
+        assert "owner_last_seen_at_utc" in cols
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 7
+
+    req = store.get_resource_request("rr_v6_data")
+    assert req is not None
+    assert req.owner_identity_source == "UNRECORDED"
+    assert req.owner_process_pid is None
+
+
+def test_fresh_db_initializes_with_v7(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    with store._connection() as conn:
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 7
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()}
+        assert "owner_process_pid" in cols
+        assert "owner_process_start_time" in cols
+        assert "owner_identity_source" in cols
+        assert "owner_last_seen_at_utc" in cols
+

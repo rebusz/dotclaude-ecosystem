@@ -238,6 +238,49 @@ def classify_pytest_invocation(
     return "pytest_heavy_unknown"
 
 
+def validate_caller_owner_identity(
+    explicit_owner_pid: Optional[int] = None,
+    explicit_owner_start_time: Optional[float] = None,
+    default_source: str = "CALLER_PROCESS",
+) -> tuple[Optional[int], Optional[float], str]:
+    """Validate explicit owner process identity if provided or capture calling process."""
+    if explicit_owner_pid is not None:
+        try:
+            proc = psutil.Process(int(explicit_owner_pid))
+            actual_start = proc.create_time()
+        except (OSError, ValueError, psutil.Error) as exc:
+            raise ResourceAdmissionError("OWNER_PROCESS_IDENTITY_INVALID") from exc
+
+        if (
+            explicit_owner_start_time is not None
+            and abs(actual_start - float(explicit_owner_start_time)) > 1.0
+        ):
+            raise ResourceAdmissionError("OWNER_PROCESS_IDENTITY_INVALID")
+
+        # Validate that explicit_owner_pid is current process or in ancestry
+        try:
+            curr = psutil.Process(os.getpid())
+            allowed_pids = {curr.pid}
+            for p in curr.parents():
+                allowed_pids.add(p.pid)
+            if int(explicit_owner_pid) not in allowed_pids:
+                raise ResourceAdmissionError("OWNER_PROCESS_IDENTITY_INVALID")
+        except (OSError, psutil.Error) as exc:
+            raise ResourceAdmissionError("OWNER_PROCESS_IDENTITY_INVALID") from exc
+
+        source = default_source if default_source not in {"UNRECORDED", "CALLER_PROCESS"} else "EXPLICIT_VALIDATED"
+        return int(explicit_owner_pid), actual_start, source
+
+    try:
+        curr = psutil.Process(os.getpid())
+        parent = curr.parent()
+        if parent is not None:
+            return parent.pid, parent.create_time(), default_source if default_source != "CALLER_PROCESS" else "CALLER_PARENT"
+        return curr.pid, curr.create_time(), "CALLER_PROCESS"
+    except (OSError, psutil.Error):
+        return None, None, "UNRECORDED"
+
+
 class HostResourceManager:
     """Single-writer resource admission over :class:`ConductorStore`."""
 
@@ -266,6 +309,9 @@ class HostResourceManager:
         environment: Optional[Mapping[str, str]] = None,
         lease_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS,
         actor: str = "resource-adapter",
+        owner_process_pid: Optional[int] = None,
+        owner_process_start_time: Optional[float] = None,
+        owner_identity_source: str = "UNRECORDED",
     ) -> Dict[str, Any]:
         """Admit a named consumer, queue it, or inherit its ancestor lease.
 
@@ -273,6 +319,13 @@ class HostResourceManager:
         so two independent callers cannot both observe capacity as available.
         """
         self._validate_request(purpose, attempt_id, agent_instance, lease_ttl_seconds, priority, self.resource_key)
+
+        validated_pid, validated_start_time, validated_source = validate_caller_owner_identity(
+            explicit_owner_pid=owner_process_pid,
+            explicit_owner_start_time=owner_process_start_time,
+            default_source=owner_identity_source,
+        )
+
         idempotency_key = idempotency_key or f"resource_{uuid.uuid4().hex}"
         slot_key = str(slot_key or "").strip()
         inherited_id = parent_lease_id or (environment or {}).get(LEASE_ENV)
@@ -282,12 +335,32 @@ class HostResourceManager:
 
         with self.store._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+
+            # Atomic self-heal sweep of this pool before admission / replay
+            self._sweep_pool_locked(conn, resource_key=self.resource_key, now=now, dry_run=False)
+
             existing = conn.execute(
                 "SELECT * FROM host_resource_requests WHERE idempotency_key = ?",
                 (idempotency_key,),
             ).fetchone()
             if existing:
                 request = self.store._row_to_resource_request(existing)
+                # Verify replay is from the same proven owner if recorded
+                if request.owner_process_pid is not None and validated_pid is not None:
+                    if (
+                        request.owner_process_pid != validated_pid
+                        or (
+                            request.owner_process_start_time is not None
+                            and validated_start_time is not None
+                            and abs(request.owner_process_start_time - validated_start_time) > 1.0
+                        )
+                    ):
+                        raise ResourceAdmissionError("OWNER_PROCESS_IDENTITY_INVALID")
+                conn.execute(
+                    "UPDATE host_resource_requests SET owner_last_seen_at_utc = ? WHERE request_id = ?",
+                    (now_iso, request.request_id),
+                )
+                request.owner_last_seen_at_utc = now_iso
                 return self._request_result(conn, request, replayed=True)
 
             pool = conn.execute(
@@ -341,6 +414,10 @@ class HostResourceManager:
                                 command_sha256=command_sha256,
                                 reason_code="INHERITED_CHILD_BUSY",
                                 slot_key=slot_key,
+                                owner_process_pid=validated_pid,
+                                owner_process_start_time=validated_start_time,
+                                owner_identity_source=validated_source,
+                                owner_last_seen_at_utc=now_iso,
                             ),
                         )
                         self._event(conn, request_id, None, None, HostResourceRequestState.QUARANTINED.value, actor, "INHERITED_CHILD_BUSY")
@@ -362,6 +439,10 @@ class HostResourceManager:
                         parent_lease_id=inherited_id,
                         command_sha256=command_sha256,
                         slot_key=slot_key,
+                        owner_process_pid=validated_pid,
+                        owner_process_start_time=validated_start_time,
+                        owner_identity_source=validated_source,
+                        owner_last_seen_at_utc=now_iso,
                     )
                     self._insert_request(conn, request)
                     self._event(conn, request_id, inherited_id, None, request.state.value, actor, "LEASE_INHERITED")
@@ -410,6 +491,10 @@ class HostResourceManager:
                 command_sha256=command_sha256,
                 reason_code=reason,
                 slot_key=slot_key,
+                owner_process_pid=validated_pid,
+                owner_process_start_time=validated_start_time,
+                owner_identity_source=validated_source,
+                owner_last_seen_at_utc=now_iso,
             )
             self._insert_request(conn, request)
             lease_id: Optional[str] = None
@@ -503,39 +588,23 @@ class HostResourceManager:
             return {"request_id": request_id, "status": "RELEASED", "promoted": promoted}
 
     def reconcile(self, *, dry_run: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
-        """Mark expired resource leases recovery-required; never auto-retry them."""
+        """Mark expired resource leases recovery-required, auto-recover dead owners, and terminalize dead queued rows."""
         now = now or _now()
-        now_iso = _iso(now)
         with self.store._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                """
-                SELECT l.lease_id, l.request_id, r.state FROM host_resource_leases l
-                JOIN host_resource_requests r ON r.request_id = l.request_id
-                WHERE r.state = ? AND l.expires_at_utc < ?
-                """,
-                (HostResourceRequestState.ACTIVE.value, now_iso),
-            ).fetchall()
-            if not dry_run:
-                for row in rows:
-                    conn.execute(
-                        "UPDATE host_resource_requests SET state = ?, reason_code = ? WHERE request_id = ?",
-                        (HostResourceRequestState.RECOVERY_REQUIRED.value, "LEASE_EXPIRED", row["request_id"]),
-                    )
-                    self._event(
-                        conn,
-                        row["request_id"],
-                        row["lease_id"],
-                        row["state"],
-                        HostResourceRequestState.RECOVERY_REQUIRED.value,
-                        "reconciler",
-                        "LEASE_EXPIRED",
-                    )
-            return {
-                "expired_count": len(rows),
-                "request_ids": [row["request_id"] for row in rows],
-                "dry_run": dry_run,
-            }
+            return self._sweep_pool_locked(conn, resource_key=self.resource_key, now=now, dry_run=dry_run)
+
+    def reconcile_all(self, *, dry_run: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Sweep all configured host resource pools."""
+        now = now or _now()
+        results: Dict[str, Any] = {}
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pools = conn.execute("SELECT resource_key FROM host_resource_pools").fetchall()
+            for pool in pools:
+                r_key = pool["resource_key"]
+                results[r_key] = self._sweep_pool_locked(conn, resource_key=r_key, now=now, dry_run=dry_run)
+        return results
 
     def recover(
         self,
@@ -587,10 +656,25 @@ class HostResourceManager:
                 # parent is gone but a child still believes it holds capacity.
                 raise ResourceBusyError("INHERITED_CHILD_ACTIVE")
 
-            owner_gone, evidence = self._owner_liveness(
-                lease_row["process_pid"] if lease_row else None,
-                lease_row["process_start_time"] if lease_row else None,
-            )
+            r_keys = row.keys()
+            owner_pid = row["owner_process_pid"] if "owner_process_pid" in r_keys and row["owner_process_pid"] is not None else (lease_row["process_pid"] if lease_row else None)
+            owner_start = row["owner_process_start_time"] if "owner_process_start_time" in r_keys and row["owner_process_start_time"] is not None else (lease_row["process_start_time"] if lease_row else None)
+
+            owner_gone, evidence = self._owner_liveness(owner_pid, owner_start)
+            if not owner_gone and evidence == "OWNER_UNRECORDED":
+                agent_inst = str(row["agent_instance"] or "").strip()
+                m = re.match(r"^(tsignal-cctv|coderpx):(?P<pid>[1-9][0-9]*)$", agent_inst)
+                if m:
+                    legacy_pid = int(m.group("pid"))
+                    try:
+                        psutil.Process(legacy_pid)
+                        evidence = "OWNER_PROCESS_ALIVE"
+                    except psutil.NoSuchProcess:
+                        owner_gone = True
+                        evidence = "AUTO_RECOVERY_LEGACY_AGENT_PID_ABSENT"
+                    except (psutil.AccessDenied, psutil.Error, OSError):
+                        pass
+
             if not owner_gone:
                 if evidence == "OWNER_PROCESS_ALIVE":
                     raise ResourceAdmissionError("OWNER_PROCESS_ALIVE")
@@ -660,6 +744,199 @@ class HostResourceManager:
             "storage": self.store.storage_status(),
             "requests": [request.to_dict() for request in requests],
             "leases": [lease.to_dict() for lease in leases],
+        }
+
+    def _sweep_pool_locked(
+        self,
+        conn: Any,
+        *,
+        resource_key: str,
+        now: datetime,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Atomically sweep expired leases, auto-recover proven-dead fenced owners,
+        terminalize dead queued requests, and promote live queued requests.
+        """
+        now_iso = _iso(now)
+        recovered_request_ids: list[str] = []
+        terminalized_queued_ids: list[str] = []
+
+        # 1. Convert expired ACTIVE leases to RECOVERY_REQUIRED
+        expired_rows = conn.execute(
+            """
+            SELECT l.lease_id, l.request_id, r.state FROM host_resource_leases l
+            JOIN host_resource_requests r ON r.request_id = l.request_id
+            WHERE r.resource_key = ? AND r.state = ? AND l.expires_at_utc < ?
+            """,
+            (resource_key, HostResourceRequestState.ACTIVE.value, now_iso),
+        ).fetchall()
+        expired_count = len(expired_rows)
+        if not dry_run:
+            for row in expired_rows:
+                conn.execute(
+                    "UPDATE host_resource_requests SET state = ?, reason_code = ? WHERE request_id = ?",
+                    (HostResourceRequestState.RECOVERY_REQUIRED.value, "LEASE_EXPIRED", row["request_id"]),
+                )
+                self._event(
+                    conn,
+                    row["request_id"],
+                    row["lease_id"],
+                    row["state"],
+                    HostResourceRequestState.RECOVERY_REQUIRED.value,
+                    "reconciler",
+                    "LEASE_EXPIRED",
+                )
+
+        # 2. Release proven-dead fenced owners (RECOVERY_REQUIRED)
+        fenced_rows = conn.execute(
+            """
+            SELECT r.*, l.lease_id, l.process_pid AS lease_pid, l.process_start_time AS lease_start_time
+            FROM host_resource_requests r
+            LEFT JOIN host_resource_leases l ON l.request_id = r.request_id
+            WHERE r.resource_key = ? AND r.state = ?
+            ORDER BY r.created_at_utc, r.request_id
+            """,
+            (resource_key, HostResourceRequestState.RECOVERY_REQUIRED.value),
+        ).fetchall()
+
+        for frow in fenced_rows:
+            lease_id = frow["lease_id"] or frow["parent_lease_id"]
+            if lease_id:
+                inherited_children = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM host_resource_requests
+                    WHERE parent_lease_id = ? AND state = ?
+                    """,
+                    (lease_id, HostResourceRequestState.INHERITED.value),
+                ).fetchone()[0]
+                if inherited_children:
+                    # Child is active; remains fenced
+                    continue
+
+            f_keys = frow.keys()
+            pid = frow["owner_process_pid"] if "owner_process_pid" in f_keys and frow["owner_process_pid"] is not None else frow["lease_pid"]
+            start_time = frow["owner_process_start_time"] if "owner_process_start_time" in f_keys and frow["owner_process_start_time"] is not None else frow["lease_start_time"]
+
+            auto_recovery_reason: Optional[str] = None
+            if pid is not None:
+                try:
+                    proc = psutil.Process(int(pid))
+                    observed_start = proc.create_time()
+                    if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
+                        auto_recovery_reason = "AUTO_RECOVERY_OWNER_PID_REUSED"
+                except psutil.NoSuchProcess:
+                    auto_recovery_reason = "AUTO_RECOVERY_OWNER_PROCESS_GONE"
+                except (psutil.AccessDenied, psutil.Error, OSError):
+                    # Access denied or lookup error -> remain fenced
+                    auto_recovery_reason = None
+            else:
+                # Legacy identity fallback
+                agent_inst = str(frow["agent_instance"] or "").strip()
+                m = re.match(r"^(tsignal-cctv|coderpx):(?P<pid>[1-9][0-9]*)$", agent_inst)
+                if m:
+                    legacy_pid = int(m.group("pid"))
+                    try:
+                        proc = psutil.Process(legacy_pid)
+                        # Process exists -> remain fenced
+                        auto_recovery_reason = None
+                    except psutil.NoSuchProcess:
+                        auto_recovery_reason = "AUTO_RECOVERY_LEGACY_AGENT_PID_ABSENT"
+                    except (psutil.AccessDenied, psutil.Error, OSError):
+                        auto_recovery_reason = None
+
+            if auto_recovery_reason:
+                recovered_request_ids.append(frow["request_id"])
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
+                        (HostResourceRequestState.RELEASED.value, now_iso, auto_recovery_reason, frow["request_id"]),
+                    )
+                    self._event(
+                        conn,
+                        frow["request_id"],
+                        lease_id,
+                        HostResourceRequestState.RECOVERY_REQUIRED.value,
+                        HostResourceRequestState.RELEASED.value,
+                        "resource-auto-recovery",
+                        auto_recovery_reason,
+                        details={
+                            "pid": pid,
+                            "start_time": start_time,
+                            "reason_code": auto_recovery_reason,
+                            "request_id": frow["request_id"],
+                            "lease_id": lease_id,
+                            "resource_key": resource_key,
+                        },
+                    )
+
+        # 3. Terminalize proven-dead queued requests (QUEUED)
+        queued_rows = conn.execute(
+            """
+            SELECT * FROM host_resource_requests
+            WHERE resource_key = ? AND state = ?
+            ORDER BY priority DESC, created_at_utc, request_id
+            """,
+            (resource_key, HostResourceRequestState.QUEUED.value),
+        ).fetchall()
+
+        for qrow in queued_rows:
+            q_keys = qrow.keys()
+            q_pid = qrow["owner_process_pid"] if "owner_process_pid" in q_keys else None
+            q_start = qrow["owner_process_start_time"] if "owner_process_start_time" in q_keys else None
+            q_source = qrow["owner_identity_source"] if "owner_identity_source" in q_keys else "UNRECORDED"
+
+            term_reason: Optional[str] = None
+            if q_source == "UNRECORDED" and q_pid is None:
+                term_reason = "LEGACY_QUEUE_OWNER_UNRECORDED"
+            elif q_pid is not None:
+                try:
+                    proc = psutil.Process(int(q_pid))
+                    obs_start = proc.create_time()
+                    if q_start is not None and abs(obs_start - float(q_start)) > 1.0:
+                        term_reason = "QUEUE_OWNER_PID_REUSED"
+                except psutil.NoSuchProcess:
+                    term_reason = "QUEUE_OWNER_PROCESS_GONE"
+                except (psutil.AccessDenied, psutil.Error, OSError):
+                    pass
+
+            if term_reason:
+                terminalized_queued_ids.append(qrow["request_id"])
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
+                        (HostResourceRequestState.RELEASED.value, now_iso, term_reason, qrow["request_id"]),
+                    )
+                    self._event(
+                        conn,
+                        qrow["request_id"],
+                        None,
+                        HostResourceRequestState.QUEUED.value,
+                        HostResourceRequestState.RELEASED.value,
+                        "resource-auto-recovery",
+                        term_reason,
+                        details={
+                            "pid": q_pid,
+                            "start_time": q_start,
+                            "reason_code": term_reason,
+                            "request_id": qrow["request_id"],
+                            "resource_key": resource_key,
+                        },
+                    )
+
+        # 4. Promotion (if not dry_run)
+        promoted = None
+        if not dry_run:
+            promoted = self._promote_locked(conn, resource_key=resource_key, actor="resource-auto-recovery")
+
+        return {
+            "expired_count": expired_count,
+            "request_ids": [r["request_id"] for r in expired_rows],
+            "recovered_count": len(recovered_request_ids),
+            "recovered_request_ids": recovered_request_ids,
+            "terminalized_queued_count": len(terminalized_queued_ids),
+            "terminalized_queued_ids": terminalized_queued_ids,
+            "promoted": promoted,
+            "dry_run": dry_run,
         }
 
     def child_environment(
@@ -937,8 +1214,10 @@ class HostResourceManager:
             INSERT INTO host_resource_requests (
                 request_id, idempotency_key, resource_key, purpose, attempt_id,
                 agent_instance, state, priority, parent_lease_id, command_sha256,
-                created_at_utc, released_at_utc, reason_code, slot_key, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at_utc, released_at_utc, reason_code, slot_key,
+                owner_process_pid, owner_process_start_time, owner_identity_source,
+                owner_last_seen_at_utc, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request.request_id,
@@ -955,6 +1234,10 @@ class HostResourceManager:
                 request.released_at_utc,
                 request.reason_code,
                 request.slot_key,
+                request.owner_process_pid,
+                request.owner_process_start_time,
+                request.owner_identity_source,
+                request.owner_last_seen_at_utc,
                 request.schema_version,
             ),
         )
@@ -1030,6 +1313,25 @@ class HostResourceManager:
                 # Documented choice: When the head of the queue is blocked only by slot exclusivity,
                 # promotion skips it and takes the next eligible request (non-strict FIFO for slot exclusivity).
                 continue
+
+            q_keys = qrow.keys()
+            q_pid = qrow["owner_process_pid"] if "owner_process_pid" in q_keys else None
+            q_start = qrow["owner_process_start_time"] if "owner_process_start_time" in q_keys else None
+            q_source = qrow["owner_identity_source"] if "owner_identity_source" in q_keys else "UNRECORDED"
+
+            if q_source == "UNRECORDED" and q_pid is None:
+                continue
+
+            # Only skip candidates whose owner PID is explicitly recorded and proven dead/reused
+            if q_pid is not None:
+                try:
+                    proc = psutil.Process(int(q_pid))
+                    obs_start = proc.create_time()
+                    if q_start is not None and abs(obs_start - float(q_start)) > 1.0:
+                        continue
+                except (OSError, psutil.Error, ValueError):
+                    continue
+
             eligible_row = qrow
             break
 
@@ -1100,5 +1402,9 @@ class HostResourceManager:
             "reason_code": request.reason_code,
             "slot_key": request.slot_key,
             "priority": request.priority,
+            "owner_process_pid": request.owner_process_pid,
+            "owner_process_start_time": request.owner_process_start_time,
+            "owner_identity_source": request.owner_identity_source,
+            "owner_last_seen_at_utc": request.owner_last_seen_at_utc,
             "idempotent_replay": replayed,
         }

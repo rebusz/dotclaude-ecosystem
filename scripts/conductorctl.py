@@ -9,9 +9,12 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import pathlib
 import sys
 import uuid
+
+import psutil
 
 _repo_root = pathlib.Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
@@ -98,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="CDP role (chrome_ppl, chrome_gpt, chrome_gemini)",
     )
+    p_resource_request.add_argument("--owner-pid", type=int, default=None, help="Explicit owner process PID")
+    p_resource_request.add_argument("--owner-start-time", type=float, default=None, help="Explicit owner process start time")
 
     p_resource_heartbeat = subparsers.add_parser("resource-heartbeat", help="Heartbeat a host resource lease")
     p_resource_heartbeat.add_argument("--lease-id", required=True)
@@ -114,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_recover.add_argument(
         "--attest-owner-gone",
         action="store_true",
-        help="Operator attestation for a lease that never recorded a child process; refused while a recorded process is alive",
+        help="Attest that the owner process is dead when Conductor has no child pid recorded",
     )
     p_resource_recover.add_argument(
         "--reason",
@@ -123,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     p_resource_reconcile = subparsers.add_parser("resource-reconcile", help="Reconcile expired host resource leases")
+    p_resource_reconcile.add_argument("--resource-key", default=None, help="Specific pool key to reconcile")
     p_resource_reconcile.add_argument("--dry-run", action="store_true")
 
     p_pytest = subparsers.add_parser("pytest", help="Run bounded pytest through host admission")
@@ -292,6 +298,21 @@ def main(argv: list[str] | None = None) -> int:
             role=args.role,
             resource_key=args.resource_key,
         )
+        owner_pid = getattr(args, "owner_pid", None)
+        owner_start = getattr(args, "owner_start_time", None)
+        owner_source = "UNRECORDED"
+        if owner_pid is not None:
+            owner_source = "EXPLICIT_VALIDATED"
+        else:
+            try:
+                parent = psutil.Process(os.getpid()).parent()
+                if parent:
+                    owner_pid = parent.pid
+                    owner_start = parent.create_time()
+                    owner_source = "CALLER_PARENT"
+            except (OSError, psutil.Error):
+                pass
+
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="resource_request",
@@ -305,6 +326,9 @@ def main(argv: list[str] | None = None) -> int:
                 "resource_key": target_resource_key,
                 "slot_key": args.slot_key or "",
                 "role": args.role,
+                "owner_process_pid": owner_pid,
+                "owner_process_start_time": owner_start,
+                "owner_identity_source": owner_source,
             },
             idempotency_key=f"idemp_resource_request_{uuid.uuid4().hex[:8]}",
         )
@@ -354,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="resource_reconcile",
-            payload={"dry_run": args.dry_run},
+            payload={"dry_run": args.dry_run, "resource_key": getattr(args, "resource_key", None)},
             idempotency_key=f"idemp_resource_reconcile_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)

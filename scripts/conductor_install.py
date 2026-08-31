@@ -24,6 +24,7 @@ MAX_MANIFEST_BYTES = 1_048_576
 TOOL_SCRIPTS = {
     "conductorctl": "conductorctl.py",
     "conductord": "conductord.py",
+    "conductor_gui": "conductor_gui.py",
     "conductor_mcp": "conductor_mcp.py",
     "conductor_install": "conductor_install.py",
 }
@@ -285,9 +286,10 @@ def _load_manifest(path: pathlib.Path, ownership_home: pathlib.Path) -> Dict[str
     if (
         not _is_hex_digest(raw["source_head_sha"], lengths={40, 64})
         or not _is_hex_digest(raw["source_tree_sha256"], lengths={64})
-        or not isinstance(raw["interpreter"], str)
-        or set(raw["canonical_commands"]) != set(TOOL_SCRIPTS)
-        or set(raw["shims"]) != set(TOOL_SCRIPTS)
+        or not isinstance(raw.get("interpreter"), str)
+        or not set(raw["canonical_commands"]).issubset(set(TOOL_SCRIPTS))
+        or not set(raw["shims"]).issubset(set(TOOL_SCRIPTS))
+        or set(raw["canonical_commands"]) != set(raw["shims"])
     ):
         raise InstallError("invalid install manifest identity")
     seen_targets = set()

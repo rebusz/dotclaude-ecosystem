@@ -286,6 +286,9 @@ class ConductorCommandProcessor:
             environment=payload.get("environment"),
             lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
             actor=payload.get("actor", "resource-command"),
+            owner_process_pid=payload.get("owner_process_pid"),
+            owner_process_start_time=payload.get("owner_process_start_time"),
+            owner_identity_source=payload.get("owner_identity_source", "UNRECORDED"),
         )
 
     def _handle_resource_heartbeat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -312,6 +315,10 @@ class ConductorCommandProcessor:
         )
 
     def _handle_resource_reconcile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        resource_key = payload.get("resource_key")
+        if resource_key:
+            manager = HostResourceManager(self.store, resource_key=resource_key)
+            return manager.reconcile(dry_run=bool(payload.get("dry_run", False)))
         return self.resources.reconcile(dry_run=bool(payload.get("dry_run", False)))
 
     def _handle_resource_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -422,7 +429,17 @@ class ConductorCommandProcessor:
                         attempt_id=attempt_id,
                     )
 
-        return {"expired_count": expired_count, "reconciled_items": reconciled_items, "dry_run": dry_run}
+        # AR-3: Sweep all host-resource pools as part of reconcile
+        from scripts.conductor_resources import HostResourceManager
+        resource_mgr = HostResourceManager(self.store)
+        resource_sweep = resource_mgr.reconcile_all(dry_run=dry_run, now=now_dt)
+
+        return {
+            "expired_count": expired_count,
+            "reconciled_items": reconciled_items,
+            "resource_sweep": resource_sweep,
+            "dry_run": dry_run,
+        }
 
     def _handle_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Return status overview."""

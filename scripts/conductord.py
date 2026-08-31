@@ -76,6 +76,19 @@ def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool =
                 idempotency_key=f"auto_rec_{int(time.time())}",
             )
             processor.process_envelope(rec_envelope)
+
+            # Sweep all host resource pools
+            for pool in store.list_resource_pools():
+                try:
+                    pool_rec_envelope = CommandEnvelope(
+                        command_id=f"auto_rec_pool_{pool.resource_key}_{int(time.time())}",
+                        command_type="resource_reconcile",
+                        payload={"dry_run": False, "resource_key": pool.resource_key},
+                        idempotency_key=f"auto_rec_pool_{pool.resource_key}_{int(time.time())}",
+                    )
+                    processor.process_envelope(pool_rec_envelope)
+                except Exception as pool_err:
+                    logging.error(f"Error sweeping resource pool {pool.resource_key}: {pool_err}")
         except Exception as err:
             logging.error(f"Error running auto reconcile: {err}")
 
