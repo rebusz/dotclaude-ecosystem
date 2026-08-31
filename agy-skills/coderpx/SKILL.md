@@ -16,8 +16,12 @@ This skill is for **Antigravity (agy) only**. It is installed under
 `/coderpx` owns task routing across two supervisor-owned transports:
 
 - **ChatGPT CDP** on `chrome_gpt` for GPT-5.6 Sol;
-- **Perplexity CoderPX** on `chrome_ppl` for Kimi K3, Claude Sonnet 5,
-  Grok 4.6 and GPT-5.6 Terra.
+- **Perplexity CoderPX** on `chrome_ppl` for GLM 5.3, Kimi K3, Claude
+  Sonnet 5, Grok 4.6 and GPT-5.6 Terra.
+
+**GLM 5.3 is the top Perplexity model.** Use it for Perplexity-authored plans,
+PR review and difficult implementation. Picker evidence must show GLM 5.3 and
+Reasoning; never treat the retired GLM 5.2 identity as successful readback.
 
 CoderPX is a transport, not a model. Always record the provider, requested
 model, verified model and assigned task separately.
@@ -48,7 +52,7 @@ Antigravity has no authority to author plans itself.
 2. If Pro mode cannot be selected and verified: ChatGPT CDP with
    `gpt-5.6-sol` and verified `reasoning_effort=xhigh` (Extra High).
 3. If the ChatGPT CDP route is unavailable or blocked: Perplexity CoderPX with
-   **Kimi K3**.
+   verified **GLM 5.3** and Reasoning enabled.
 
 Agy may prepare the bounded packet, verify the returned plan against the repo
 and present it. It must not fill in missing plan sections from its own
@@ -65,12 +69,16 @@ For ordinary implementation, assign exactly one Perplexity CoderPX model:
 - **GPT-5.6 Terra**
 
 Choose the best fit for the bounded task and state the choice before dispatch.
-Do not use Sonar, Gemini, GLM or Nemotron as implementation substitutes.
+Do not use Sonar, Gemini or Nemotron as implementation substitutes. Reserve
+GLM 5.3 for difficult implementation rather than spending it on an ordinary
+slice.
 
 For difficult implementation — especially concurrency, lifecycle, recovery,
 multi-file contract movement or R3 execution-path work — prefer ChatGPT CDP
 with verified **GPT-5.6 Sol (Pro)**. If Pro cannot be verified, use Sol with
-verified `reasoning_effort=xhigh`.
+verified `reasoning_effort=xhigh`. When the task is assigned through
+Perplexity, or the ChatGPT route is unavailable, use verified **GLM 5.3** with
+Reasoning as the top Perplexity implementation model.
 
 Only after a concrete CDP blocker or terminal dispatch failure is recorded may
 Antigravity implement the slice itself. Label that row
@@ -82,10 +90,11 @@ Antigravity implement the slice itself. Label that row
 2. If Pro cannot be verified: Sol with verified
    `reasoning_effort=xhigh`.
 3. If fresh readback shows ChatGPT already owns active work, use Perplexity
-   CoderPX with **Kimi K3** instead of queueing an avoidable competing review.
+   CoderPX with verified **GLM 5.3** and Reasoning instead of queueing an
+   avoidable competing review.
 
 For a serious R3 PR, two independent reviewers may be used: ChatGPT Sol and
-Kimi K3. They must inspect the same exact head and produce separate evidence.
+GLM 5.3. They must inspect the same exact head and produce separate evidence.
 Respect Conductor capacity; independent does not require simultaneous launch.
 
 ## Step 3 — prove the selected route
