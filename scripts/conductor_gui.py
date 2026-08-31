@@ -43,27 +43,27 @@ from scripts.conductor_store import (
 )
 
 # Semantic Colors
-COLOR_CLEAR = "#2e7d32"      # Green
-COLOR_CLEAR_BG = "#e8f5e9"
-COLOR_CLEAR_FG = "#1b5e20"
+COLOR_CLEAR = "#7CB88A"      # Green
+COLOR_CLEAR_BG = "#202229"
+COLOR_CLEAR_FG = "#7CB88A"
 
-COLOR_OCCUPIED = "#f57c00"   # Amber
-COLOR_OCCUPIED_BG = "#fff3e0"
-COLOR_OCCUPIED_FG = "#e65100"
+COLOR_OCCUPIED = "#E0B85B"   # Amber
+COLOR_OCCUPIED_BG = "#202229"
+COLOR_OCCUPIED_FG = "#E0B85B"
 
-COLOR_FENCED = "#d32f2f"     # Red
-COLOR_FENCED_BG = "#ffebee"
-COLOR_FENCED_FG = "#b71c1c"
+COLOR_FENCED = "#D56A6A"     # Red
+COLOR_FENCED_BG = "#202229"
+COLOR_FENCED_FG = "#D56A6A"
 
-COLOR_DISABLED = "#c62828"   # Dark Red
-COLOR_ANOMALY = "#ad1457"    # Dark Pink/Red
-COLOR_DEGRADED = "#6a1b9a"   # Purple
-COLOR_DEGRADED_BG = "#f3e5f5"
-COLOR_DEGRADED_FG = "#4a148c"
+COLOR_DISABLED = "#D56A6A"   # Dark Red
+COLOR_ANOMALY = "#D4A574"    # Dark Pink/Red
+COLOR_DEGRADED = "#76A8C7"   # Purple
+COLOR_DEGRADED_BG = "#202229"
+COLOR_DEGRADED_FG = "#76A8C7"
 
-COLOR_NEUTRAL_BG = "#f8f9fa"
-COLOR_CARD_BG = "#ffffff"
-COLOR_BORDER = "#dcdcdc"
+COLOR_NEUTRAL_BG = "#0F0F12"
+COLOR_CARD_BG = "#17181D"
+COLOR_BORDER = "#343741"
 def _conductorctl_command() -> tuple:
     """Resolve the installer-owned conductorctl, never a PATH guess.
 
@@ -82,12 +82,12 @@ def _conductorctl_command() -> tuple:
     raise RuntimeError(f"conductorctl not resolvable from {manifest}")
 
 
-COLOR_TEXT = "#212529"
-COLOR_MUTED = "#6c757d"
-COLOR_STALE = "#e65100"
+COLOR_TEXT = "#F4EFE7"
+COLOR_MUTED = "#A9A39A"
+COLOR_STALE = "#E0B85B"
 
-FONT_FAMILY_UI = "Segoe UI" if sys.platform == "win32" else "Helvetica"
-FONT_FAMILY_MONO = "Consolas" if sys.platform == "win32" else "Courier"
+FONT_FAMILY_UI = "Inter" if sys.platform == "win32" else "Inter"
+FONT_FAMILY_MONO = "JetBrains Mono" if sys.platform == "win32" else "JetBrains Mono"
 
 
 def observe_process_liveness(pid: Optional[int], start_time: Optional[float]) -> str:
@@ -213,6 +213,76 @@ class GatePanelWorker:
         })
 
 
+class PoolStrip:
+    """One-line-per-pool overview across the top of the panel.
+
+    Exists because of a real incident on 2026-08-29: `cdp:perplexity` sat fenced
+    for 28 hours by two dead CoderPX processes and nothing surfaced it. The panel
+    shows one pool per section, so a fenced pool below the fold is invisible, and
+    `conductorctl resource-status` without --resource-key only reports
+    host:heavy. The operator found it by scrolling. This strip makes every pool's
+    state readable without scrolling and without a command.
+    """
+
+    ORDER = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv")
+
+    def __init__(self, parent: tk.Widget) -> None:
+        self.frame = tk.Frame(parent, bg=COLOR_NEUTRAL_BG)
+        self.frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+        self._chips: Dict[str, Dict[str, tk.Widget]] = {}
+        self._last_sig: Optional[str] = None
+
+    @staticmethod
+    def _state_of(snap: Dict[str, Any]) -> tuple:
+        """(colour, one-line label). Fenced outranks held; held outranks free."""
+        fenced = snap.get("fenced") or []
+        holder = snap.get("holder")
+        capacity = snap.get("capacity", 1) or 1
+        waiting = len(snap.get("queue") or [])
+        if fenced:
+            return COLOR_FENCED, f"{len(fenced)} fenced"
+        if holder:
+            extra = f", {waiting} waiting" if waiting else ""
+            return COLOR_OCCUPIED, f"held{extra}"
+        return COLOR_CLEAR, f"{capacity}/{capacity} free"
+
+    def render(self, gates: Dict[str, Any]) -> None:
+        keys = [k for k in self.ORDER if k in gates] + [k for k in gates if k not in self.ORDER]
+        sig = repr([(k, self._state_of(gates[k])) for k in keys])
+        if sig == self._last_sig:
+            return  # layout stability: never redraw an unchanged strip
+        self._last_sig = sig
+
+        for child in self.frame.winfo_children():
+            child.destroy()
+        self._chips.clear()
+
+        for col, key in enumerate(keys):
+            colour, label = self._state_of(gates[key])
+            chip = tk.Frame(
+                self.frame, bg=COLOR_CARD_BG,
+                highlightbackground=colour if colour == COLOR_FENCED else COLOR_BORDER,
+                highlightthickness=1,
+            )
+            chip.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 6, 0))
+            self.frame.grid_columnconfigure(col, weight=1, uniform="pool")
+
+            head = tk.Frame(chip, bg=COLOR_CARD_BG)
+            head.pack(fill=tk.X, padx=8, pady=(6, 0))
+            dot = tk.Canvas(head, width=8, height=8, bg=COLOR_CARD_BG, highlightthickness=0)
+            dot.pack(side=tk.LEFT, pady=(4, 0))
+            dot.create_oval(0, 0, 7, 7, fill=colour, outline=colour)
+            tk.Label(
+                head, text=key, font=(FONT_FAMILY_MONO, 9, "bold"),
+                bg=COLOR_CARD_BG, fg=COLOR_TEXT, anchor="w",
+            ).pack(side=tk.LEFT, padx=(6, 0))
+            tk.Label(
+                chip, text=label, font=(FONT_FAMILY_UI, 8),
+                bg=COLOR_CARD_BG, fg=COLOR_MUTED, anchor="w",
+            ).pack(fill=tk.X, padx=8, pady=(0, 6))
+            self._chips[key] = {"chip": chip}
+
+
 class PoolSectionView:
     """View component for a single resource pool section in ConductorGatePanel."""
 
@@ -225,20 +295,20 @@ class PoolSectionView:
         self.section_frame.pack(fill=tk.X, padx=12, pady=(6, 4))
 
         # 1. VERDICT BANNER
-        self.banner_frame = tk.Frame(self.section_frame, bg="#ffffff", bd=1, relief=tk.SOLID)
+        self.banner_frame = tk.Frame(self.section_frame, bg="#17181D", bd=1, relief=tk.SOLID)
         self.banner_frame.pack(fill=tk.X, pady=(0, 4))
 
         self.aspect_bar = tk.Frame(self.banner_frame, bg=COLOR_CLEAR, width=10)
         self.aspect_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-        self.banner_content = tk.Frame(self.banner_frame, bg="#ffffff", padx=12, pady=8)
+        self.banner_content = tk.Frame(self.banner_frame, bg="#17181D", padx=12, pady=8)
         self.banner_content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.verdict_headline = tk.Label(
             self.banner_content,
             text=f"[{self.resource_key.upper()}] CHECKING GATE STATUS...",
             font=(FONT_FAMILY_UI, 11, "bold"),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_TEXT,
             anchor="w",
         )
@@ -248,7 +318,7 @@ class PoolSectionView:
             self.banner_content,
             text=f"Scoped to pool {self.resource_key}",
             font=(FONT_FAMILY_UI, 9),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_MUTED,
             anchor="w",
         )
@@ -258,7 +328,7 @@ class PoolSectionView:
             self.banner_content,
             text="",
             font=(FONT_FAMILY_UI, 9, "bold"),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_STALE,
             anchor="w",
         )
@@ -315,13 +385,13 @@ class PoolSectionView:
         self.queue_tree.column("wait", width=80, stretch=False, anchor="e")
         self.queue_tree.pack(fill=tk.X, expand=True)
 
-        self.quarantine_frame = tk.Frame(self.queue_container, bg="#fff3e0", bd=1, relief=tk.SOLID, padx=8, pady=4)
+        self.quarantine_frame = tk.Frame(self.queue_container, bg="#202229", bd=1, relief=tk.SOLID, padx=8, pady=4)
         self.quarantine_label = tk.Label(
             self.quarantine_frame,
             text="",
             font=(FONT_FAMILY_UI, 8, "bold"),
-            bg="#fff3e0",
-            fg="#e65100",
+            bg="#202229",
+            fg="#E0B85B",
             anchor="w",
         )
         self.quarantine_label.pack(fill=tk.X)
@@ -642,14 +712,14 @@ class PoolSectionView:
             repo_path=self.panel.root_dir.parent if self.panel.root_dir else None,
         )
 
-        explainer_frame = tk.Frame(card, bg="#fafafa", bd=1, relief=tk.SOLID, padx=8, pady=6)
+        explainer_frame = tk.Frame(card, bg="#202229", bd=1, relief=tk.SOLID, padx=8, pady=6)
         explainer_frame.pack(fill=tk.X, pady=(4, 0))
 
         tk.Label(
             explainer_frame,
             text="Refusal explainer:",
             font=(FONT_FAMILY_UI, 8, "bold"),
-            bg="#fafafa",
+            bg="#202229",
             fg=COLOR_TEXT,
             anchor="w",
         ).pack(fill=tk.X)
@@ -675,7 +745,7 @@ class PoolSectionView:
             explainer_frame,
             text=f"{refusal_p1}\n{refusal_p2}",
             font=(FONT_FAMILY_UI, 8),
-            bg="#fafafa",
+            bg="#202229",
             fg=COLOR_MUTED,
             anchor="w",
             justify=tk.LEFT,
@@ -685,20 +755,20 @@ class PoolSectionView:
             explainer_frame,
             text=action_prompt,
             font=(FONT_FAMILY_UI, 8, "bold"),
-            bg="#fafafa",
+            bg="#202229",
             fg=COLOR_TEXT,
             anchor="w",
         ).pack(fill=tk.X, pady=(2, 4))
 
         cmd = adjudication.command
         if cmd:
-            cmd_row = tk.Frame(explainer_frame, bg="#fafafa")
+            cmd_row = tk.Frame(explainer_frame, bg="#202229")
             cmd_row.pack(fill=tk.X, pady=(2, 0))
 
             cmd_entry = tk.Entry(
                 cmd_row,
                 font=(FONT_FAMILY_MONO, 8),
-                bg="#ffffff",
+                bg="#17181D",
                 fg=COLOR_TEXT,
                 bd=1,
                 relief=tk.SOLID,
@@ -711,7 +781,7 @@ class PoolSectionView:
                 cmd_row,
                 text="COPY",
                 font=(FONT_FAMILY_UI, 8, "bold"),
-                bg="#e0e0e0",
+                bg="#343741",
                 fg=COLOR_TEXT,
                 relief=tk.FLAT,
                 padx=10,
@@ -727,8 +797,8 @@ class PoolSectionView:
                 cmd_row,
                 text="RECOVER",
                 font=(FONT_FAMILY_UI, 8, "bold"),
-                bg="#c62828",
-                fg="#ffffff",
+                bg="#D56A6A",
+                fg="#17181D",
                 relief=tk.FLAT,
                 padx=10,
                 pady=2,
@@ -876,12 +946,15 @@ class ConductorGatePanel(tk.Frame):
         except tk.TclError:
             pass
 
+        # Every pool at a glance, above the per-pool sections.
+        self.pool_strip = PoolStrip(self)
+
         # Top scrollable / vertical container for pool sections
         self.pools_container = tk.Frame(self, bg=COLOR_NEUTRAL_BG)
         self.pools_container.pack(fill=tk.BOTH, expand=True)
 
         # Default 4 pools
-        default_pools = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini")
+        default_pools = ("host:heavy", "cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv")
         for p in default_pools:
             self.pool_sections[p] = PoolSectionView(self.pools_container, resource_key=p, panel=self)
 
@@ -920,16 +993,16 @@ class ConductorGatePanel(tk.Frame):
         )
         self.history_toggle_btn.pack(fill=tk.X)
 
-        self.history_drawer = tk.Frame(self.history_outer, bg="#ffffff", bd=1, relief=tk.SOLID)
+        self.history_drawer = tk.Frame(self.history_outer, bg="#17181D", bd=1, relief=tk.SOLID)
 
-        self.history_header_frame = tk.Frame(self.history_drawer, bg="#ffffff", padx=8, pady=4)
+        self.history_header_frame = tk.Frame(self.history_drawer, bg="#17181D", padx=8, pady=4)
         self.history_header_frame.pack(fill=tk.X)
 
         self.history_subtitle = tk.Label(
             self.history_header_frame,
             text="",
             font=(FONT_FAMILY_UI, 9),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_MUTED,
         )
         self.history_subtitle.pack(side=tk.LEFT)
@@ -970,15 +1043,15 @@ class ConductorGatePanel(tk.Frame):
         )
 
         # 5. FOOTER STRIP
-        self.footer_frame = tk.Frame(self, bg="#ffffff", bd=1, relief=tk.SOLID, padx=8, pady=4)
+        self.footer_frame = tk.Frame(self, bg="#17181D", bd=1, relief=tk.SOLID, padx=8, pady=4)
         self.footer_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(4, 8))
 
         self.footer_leader_lamp = tk.Label(
             self.footer_frame,
             text="●",
             font=(FONT_FAMILY_UI, 10, "bold"),
-            bg="#ffffff",
-            fg="#2e7d32",
+            bg="#17181D",
+            fg="#7CB88A",
         )
         self.footer_leader_lamp.pack(side=tk.LEFT, padx=(2, 4))
 
@@ -986,7 +1059,7 @@ class ConductorGatePanel(tk.Frame):
             self.footer_frame,
             text="leader active",
             font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_TEXT,
         )
         self.footer_leader_text.pack(side=tk.LEFT, padx=(0, 8))
@@ -995,7 +1068,7 @@ class ConductorGatePanel(tk.Frame):
             self.footer_frame,
             text="store AVAILABLE",
             font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_TEXT,
         )
         self.footer_store_text.pack(side=tk.LEFT, padx=(0, 8))
@@ -1004,7 +1077,7 @@ class ConductorGatePanel(tk.Frame):
             self.footer_frame,
             text="work items 0",
             font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_TEXT,
         )
         self.footer_workitems_text.pack(side=tk.LEFT, padx=(0, 8))
@@ -1013,7 +1086,7 @@ class ConductorGatePanel(tk.Frame):
             self.footer_frame,
             text="receipts - / 256 MB",
             font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_TEXT,
         )
         self.footer_receipts_text.pack(side=tk.LEFT, padx=(0, 8))
@@ -1022,7 +1095,7 @@ class ConductorGatePanel(tk.Frame):
             self.footer_frame,
             text="read 0 ms, no receipt written",
             font=(FONT_FAMILY_UI, 8),
-            bg="#ffffff",
+            bg="#17181D",
             fg=COLOR_MUTED,
         )
         self.footer_timing_text.pack(side=tk.RIGHT, padx=4)
@@ -1073,6 +1146,8 @@ class ConductorGatePanel(tk.Frame):
             target_key = gate_snapshot.get("resource_key", self.resource_key)
             gates_dict = {target_key: gate_snapshot}
 
+        self.pool_strip.render(gates_dict)
+
         for p_key, p_snap in gates_dict.items():
             if p_key not in self.pool_sections:
                 self.pool_sections[p_key] = PoolSectionView(self.pools_container, resource_key=p_key, panel=self)
@@ -1093,7 +1168,7 @@ class ConductorGatePanel(tk.Frame):
         if button:
             orig_text = button.cget("text")
             button.configure(text="COPIED!", bg="#c8e6c9")
-            self.master.after(1500, lambda: button.configure(text=orig_text, bg="#e0e0e0"))
+            self.master.after(1500, lambda: button.configure(text=orig_text, bg="#343741"))
 
     def recover_request(self, request_id: str, adjudication: Any, button: Any) -> None:
         """Clear a RECOVERY_REQUIRED fence after an explicit operator attestation.
@@ -1148,7 +1223,7 @@ class ConductorGatePanel(tk.Frame):
             return
 
         if proc.returncode == 0:
-            button.configure(text="RECOVERED", bg="#2e7d32")
+            button.configure(text="RECOVERED", bg="#7CB88A")
             # Force the next tick to redraw: the content gate would otherwise
             # hold the stale card until the DB signature happens to move.
             for section in getattr(self, "pool_sections", {}).values() or ():
@@ -1175,10 +1250,10 @@ class ConductorGatePanel(tk.Frame):
         total_wi = store_status.get("total_work_items", 0)
 
         if leader_active:
-            self.footer_leader_lamp.configure(text="●", fg="#2e7d32")
+            self.footer_leader_lamp.configure(text="●", fg="#7CB88A")
             self.footer_leader_text.configure(text=f"leader active {leader_id} pid {leader_pid}")
         else:
-            self.footer_leader_lamp.configure(text="*", fg="#e65100")
+            self.footer_leader_lamp.configure(text="*", fg="#E0B85B")
             self.footer_leader_text.configure(text=f"leader inactive {leader_id} pid {leader_pid}")
 
         self.footer_store_text.configure(text=f"store {store_state}")
