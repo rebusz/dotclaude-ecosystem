@@ -32,7 +32,7 @@ cp "$REPO_ROOT/scripts/"*.py "$CLAUDE_HOME/scripts/"
 
 # Skills
 echo "[3/6] Copy skills -> ~/.claude/skills/"
-BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand run-model-team)
+BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand run-model-team coderpx)
 for skill in "${BUNDLED_SKILLS[@]}"; do
     mkdir -p "$CLAUDE_HOME/skills/$skill"
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
