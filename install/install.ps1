@@ -29,12 +29,15 @@ $AgySkills = @("fwa", "coderpxA")
 # Codex reads ~/.codex/prompts. Before this manifest existed they had no source
 # at all and drifted silently.
 $Commands = @("fwf", "fwp")
-# Skill directories retired by a rename. Kept as .bak instead of deleted so a
-# rollback is a move, not a restore.
-$RetiredSkillDirs = @(
-    (Join-Path $ClaudeHome "skills\coderpx"),
-    (Join-Path $GeminiHome "skills\coderpx")
-)
+# Skill directories retired by a rename. Moved aside instead of deleted so a
+# rollback is a move, not a restore. Each maps to the replacement that must be
+# installed first: a stale directory is never retired until the thing that
+# supersedes it is verifiably on disk.
+$RetiredSkillReplacements = @{
+    (Join-Path $ClaudeHome "skills\coderpx") = (Join-Path $ClaudeHome "skills\coderpxC")
+    (Join-Path $GeminiHome "skills\coderpx") = (Join-Path $GeminiHome "skills\coderpxA")
+}
+$RetiredSkillDirs = @($RetiredSkillReplacements.Keys)
 
 function Get-ManifestPairs {
     $pairs = @()
@@ -105,16 +108,20 @@ if ($Check) {
         }
         $srcMap = Get-TreeHashes $pair.Src
         $dstMap = Get-TreeHashes $pair.Dst
+        # A single-file pair hashes under the "" key, so appending "/$key" would
+        # print "codex/prompts/fwf.md/". Label the file by itself instead.
         foreach ($key in $srcMap.Keys) {
+            if ($key) { $where = "$($pair.Label)/$key" } else { $where = $pair.Label }
             if (-not $dstMap.ContainsKey($key)) {
-                $drift += "MISSING FILE    $($pair.Label)/$key"
+                $drift += "MISSING FILE    $where"
             } elseif ($dstMap[$key] -ne $srcMap[$key]) {
-                $drift += "DRIFT           $($pair.Label)/$key"
+                $drift += "DRIFT           $where"
             }
         }
         foreach ($key in $dstMap.Keys) {
             if (-not $srcMap.ContainsKey($key)) {
-                $drift += "EXTRA FILE      $($pair.Label)/$key"
+                if ($key) { $where = "$($pair.Label)/$key" } else { $where = $pair.Label }
+                $drift += "EXTRA FILE      $where"
             }
         }
     }
@@ -156,6 +163,7 @@ Copy-Item -Path "$ScriptsSrc\*.py" -Destination $ScriptsDst -Force
 
 # Skills, commands and agy skills, all from the one manifest
 Write-Host "[3/7] Copy skills and commands (manifest-driven)" -ForegroundColor Cyan
+$Installed = @{}
 foreach ($pair in (Get-ManifestPairs)) {
     if (-not (Test-Path $pair.Src)) {
         Write-Host "  skip (no source): $($pair.Label)" -ForegroundColor Yellow
@@ -175,15 +183,28 @@ foreach ($pair in (Get-ManifestPairs)) {
         }
         Copy-Item -Path $pair.Src -Destination $pair.Dst -Force
     }
+    $Installed[$pair.Dst] = $true
     Write-Host "  $($pair.Label)" -ForegroundColor Green
 }
 
-# Retire directories replaced by a rename. Moved aside, never deleted.
+# Retire directories replaced by a rename. Moved aside, never deleted -- and
+# only once the replacement is verifiably in place. Retiring unconditionally
+# would, on a failed or skipped copy, leave the operator with NEITHER the old
+# skill nor the new one; the loop above is allowed to skip a pair when its
+# source is missing, so that is a reachable state, not a hypothetical.
 foreach ($stale in $RetiredSkillDirs) {
-    if (Test-Path $stale) {
-        Move-Item -Path $stale -Destination "$stale.retired.$Stamp" -Force
-        Write-Host "  retired $stale -> $stale.retired.$Stamp" -ForegroundColor Yellow
+    if (-not (Test-Path $stale)) { continue }
+    $replacement = $RetiredSkillReplacements[$stale]
+    if (-not $replacement) {
+        Write-Host "  keeping $stale (no replacement declared)" -ForegroundColor Yellow
+        continue
     }
+    if (-not ($Installed.ContainsKey($replacement) -and (Test-Path $replacement))) {
+        Write-Host "  KEEPING $stale -- its replacement $replacement was not installed" -ForegroundColor Red
+        continue
+    }
+    Move-Item -Path $stale -Destination "$stale.retired.$Stamp" -Force
+    Write-Host "  retired $stale -> $stale.retired.$Stamp" -ForegroundColor Yellow
 }
 
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
