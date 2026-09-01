@@ -16,7 +16,7 @@ Two failure modes, two mechanisms.
    Guard: mirror the file onto `main` as its own commit.
 
 The mirror is pure plumbing — `hash-object` / `read-tree` into a temporary index
-/ `commit-tree` / `push <sha>:refs/heads/main`. It never touches any working
+/ `commit-tree` / `push <sha>:refs/heads/docs/auto-backup`. It never touches any working
 tree, index, or checked-out branch. That matters: `main` is a concurrently
 written trunk with a live trading bot running from it, and an earlier attempt to
 land docs by editing main's working tree had a parallel session swallow the
@@ -98,6 +98,11 @@ def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
     return True
 
 
+# One collecting branch for every auto-backed-up design document. Deliberately
+# NOT the trunk: see the 2026-09-01 outage note in the module docstring.
+DOCS_BRANCH = "docs/auto-backup"
+
+
 def _base_ref(git_root: str) -> str | None:
     """The trunk this repo actually uses. Not every repo here calls it `main`."""
     for ref in ("origin/main", "origin/master"):
@@ -106,13 +111,15 @@ def _base_ref(git_root: str) -> str | None:
     return None
 
 
-def _mirror_to_trunk(git_root: str, rel_path: str, abs_path: str, subject: str) -> str:
+def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject: str) -> str:
     """Land this one file on the trunk as its own commit, touching nothing else.
 
     Plumbing only. The tree is built in a throwaway index (GIT_INDEX_FILE), so
     the caller's working tree, staging area and checked-out branch are never
-    read or written. The commit's sole parent is the freshly fetched trunk tip,
-    so the push is a fast-forward or it is refused — it can never clobber.
+    read or written. The commit's sole parent is the freshly fetched tip of the
+    docs branch (or the trunk, the first time that branch does not exist), so
+    the push is a fast-forward or it is refused — it can never clobber, and it
+    never moves the trunk.
 
     Returns a short status string for the log line.
     """
@@ -145,10 +152,15 @@ def _mirror_to_trunk(git_root: str, rel_path: str, abs_path: str, subject: str) 
         # error worth surfacing.
         for _ in range(3):
             g(["fetch", "origin", "--quiet"])
-            base = _base_ref(git_root)
-            if base is None:
-                return "mirror skipped: no trunk ref"
-            branch = base.split("/", 1)[1]
+            # Collect onto the docs branch; fall back to the trunk only as the
+            # PARENT for the branch's very first commit. `branch` is always the
+            # docs branch, so the trunk is never the push target.
+            branch = DOCS_BRANCH
+            base = f"origin/{DOCS_BRANCH}"
+            if g(["rev-parse", "--verify", "--quiet", base]).returncode != 0:
+                base = _base_ref(git_root)
+                if base is None:
+                    return "mirror skipped: no base ref"
 
             existing = g(["rev-parse", "--verify", "--quiet", f"{base}:{rel_path}"])
             if existing.returncode == 0 and existing.stdout.strip() == blob:
@@ -167,8 +179,8 @@ def _mirror_to_trunk(git_root: str, rel_path: str, abs_path: str, subject: str) 
 
             message = (
                 f"{subject}\n\n"
-                "Mirrored onto the trunk by the design-doc PostToolUse hook "
-                "so the document is readable from every checkout, not only "
+                "Mirrored onto the docs collecting branch by the design-doc "
+                "PostToolUse hook so the document is findable from any checkout, "
                 "the branch that happened to be current.\n"
                 f"File: {rel_path}\n"
             )
@@ -179,7 +191,7 @@ def _mirror_to_trunk(git_root: str, rel_path: str, abs_path: str, subject: str) 
             if g(["push", "origin", f"{commit}:refs/heads/{branch}"]).returncode == 0:
                 return f"mirrored -> {branch}"
 
-        return "mirror refused: trunk moved"
+        return "mirror refused: docs branch moved"
     except Exception:
         return "mirror failed"
     finally:
@@ -258,7 +270,7 @@ def main() -> None:
         # what makes the mirror self-healing: any later touch of the document
         # gets it another chance, instead of stranding it permanently on the
         # first bad race. A no-op when the trunk already has the blob.
-        mirror = _mirror_to_trunk(git_root, rel_path, str(abs_path), subject)
+        mirror = _mirror_to_docs_branch(git_root, rel_path, str(abs_path), subject)
         if mirror not in ("already on trunk", "mirror off"):
             print(f"[autocommit] {fname} → {mirror} ({git_root})", file=sys.stderr)
         return
@@ -275,7 +287,7 @@ def main() -> None:
 
     # The branch backup above is the crash guard and must stay first: if the
     # mirror fails for any reason the document is still safe on a pushed branch.
-    mirror = _mirror_to_trunk(git_root, rel_path, str(abs_path), subject)
+    mirror = _mirror_to_docs_branch(git_root, rel_path, str(abs_path), subject)
 
     # Print to stderr so Claude Code shows it as a system note
     verb = "amend + push" if amended else "commit + push"
