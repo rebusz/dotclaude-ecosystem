@@ -1,1 +1,0 @@
-# Second probe — accumulation check
