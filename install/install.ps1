@@ -188,7 +188,11 @@ foreach ($pair in (Get-ManifestPairs)) {
         $parent = Split-Path -Parent $pair.Dst
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
         if (Test-Path $pair.Dst) {
-            Copy-Item -Path $pair.Dst -Destination "$($pair.Dst).bak.$Stamp" -Force
+            # Same rule for single files: Codex loads every *.md in ~/.codex/prompts
+            # as a prompt, so fwf.md.bak.<stamp> beside fwf.md became a prompt.
+            $bakRoot = Join-Path (Split-Path -Parent $parent) ((Split-Path -Leaf $parent) + ".bak\" + $Stamp)
+            New-Item -ItemType Directory -Force -Path $bakRoot | Out-Null
+            Copy-Item -Path $pair.Dst -Destination (Join-Path $bakRoot (Split-Path -Leaf $pair.Dst)) -Force
         }
         Copy-Item -Path $pair.Src -Destination $pair.Dst -Force
     }
