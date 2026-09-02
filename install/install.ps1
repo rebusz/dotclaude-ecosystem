@@ -1,5 +1,14 @@
 # dotclaude-ecosystem installer (Windows)
 # Idempotent: safe to re-run.
+#
+#   .\install.ps1           install / refresh every managed artifact
+#   .\install.ps1 -Check    compare installed copies against the repo and exit
+#                           non-zero on drift. Writes nothing.
+#
+# One manifest drives both modes, so -Check can never fall out of step with
+# what install actually copies.
+
+param([switch]$Check)
 
 $ErrorActionPreference = "Stop"
 
@@ -9,6 +18,130 @@ $CodexHome = Join-Path $env:USERPROFILE ".codex"
 $GeminiHome = Join-Path $env:USERPROFILE ".gemini\config"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
+# ---------------------------------------------------------------- manifest
+# Skills read by Claude Code.
+$BundledSkills = @("master-agent", "executor", "distill-repo", "ponytail-on-demand", "run-model-team", "coderpxC")
+# Skills read by the Codex CLI.
+$CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team", "coderpxG")
+# Skills read by the Antigravity (agy) CLI. Separate root from ~/.claude/skills.
+$AgySkills = @("fwa", "coderpxA")
+# Workflow commands. One source, two runtimes: Claude reads ~/.claude/commands,
+# Codex reads ~/.codex/prompts. Before this manifest existed they had no source
+# at all and drifted silently.
+$Commands = @("fwf", "fwp")
+# Skill directories retired by a rename. Moved aside instead of deleted so a
+# rollback is a move, not a restore. Each maps to the replacement that must be
+# installed first: a stale directory is never retired until the thing that
+# supersedes it is verifiably on disk.
+$RetiredSkillReplacements = @{
+    (Join-Path $ClaudeHome "skills\coderpx") = (Join-Path $ClaudeHome "skills\coderpxC")
+    (Join-Path $GeminiHome "skills\coderpx") = (Join-Path $GeminiHome "skills\coderpxA")
+}
+$RetiredSkillDirs = @($RetiredSkillReplacements.Keys)
+
+function Get-ManifestPairs {
+    $pairs = @()
+    foreach ($skill in $BundledSkills) {
+        $pairs += @{ Src = (Join-Path $RepoRoot "skills\$skill"); Dst = (Join-Path $ClaudeHome "skills\$skill"); Kind = "dir"; Label = "claude/skills/$skill" }
+    }
+    if (Test-Path $CodexHome) {
+        foreach ($skill in $CodexSkills) {
+            $pairs += @{ Src = (Join-Path $RepoRoot "skills\$skill"); Dst = (Join-Path $CodexHome "skills\$skill"); Kind = "dir"; Label = "codex/skills/$skill" }
+        }
+        foreach ($cmd in $Commands) {
+            $pairs += @{ Src = (Join-Path $RepoRoot "commands\$cmd.md"); Dst = (Join-Path $CodexHome "prompts\$cmd.md"); Kind = "file"; Label = "codex/prompts/$cmd.md" }
+        }
+        $pairs += @{ Src = (Join-Path $RepoRoot "agy-skills\fwa\SKILL.md"); Dst = (Join-Path $CodexHome "prompts\fwa.md"); Kind = "file"; Label = "codex/prompts/fwa.md" }
+    }
+    if (Test-Path $GeminiHome) {
+        foreach ($skill in $AgySkills) {
+            $pairs += @{ Src = (Join-Path $RepoRoot "agy-skills\$skill"); Dst = (Join-Path $GeminiHome "skills\$skill"); Kind = "dir"; Label = "agy/skills/$skill" }
+        }
+    }
+    foreach ($cmd in $Commands) {
+        $pairs += @{ Src = (Join-Path $RepoRoot "commands\$cmd.md"); Dst = (Join-Path $ClaudeHome "commands\$cmd.md"); Kind = "file"; Label = "claude/commands/$cmd.md" }
+    }
+    return $pairs
+}
+
+# Build artifacts and our own backups are not drift. Without this filter the
+# report is dominated by __pycache__ and .bak.<stamp> noise and nobody reads it.
+function Test-IgnoredPath([string]$rel) {
+    if ($rel -match '(^|\\)__pycache__(\\|$)') { return $true }
+    if ($rel -match '\.pyc$') { return $true }
+    if ($rel -match '\.bak\.\d') { return $true }
+    if ($rel -match '\.retired\.\d') { return $true }
+    if ($rel -match '(^|\\)\.git(\\|$)') { return $true }
+    # Codex writes agents\openai.yaml into a skill it loads; it is the consuming
+    # tool's own manifest, not part of any source, so it is not drift.
+    if ($rel -match '(^|\\)agents\\openai\.yaml$') { return $true }
+    return $false
+}
+
+function Get-TreeHashes([string]$root) {
+    $map = @{}
+    if (-not (Test-Path $root)) { return $map }
+    $item = Get-Item $root
+    if (-not $item.PSIsContainer) {
+        $map[""] = (Get-FileHash -Path $root -Algorithm SHA256).Hash
+        return $map
+    }
+    foreach ($f in Get-ChildItem -Path $root -Recurse -File) {
+        $rel = $f.FullName.Substring($item.FullName.Length).TrimStart('\')
+        if (Test-IgnoredPath $rel) { continue }
+        $map[$rel] = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash
+    }
+    return $map
+}
+
+# ---------------------------------------------------------------- check mode
+if ($Check) {
+    Write-Host "=== dotclaude-ecosystem installer -- CHECK (no writes) ===" -ForegroundColor Cyan
+    Write-Host "Source : $RepoRoot"
+    Write-Host ""
+    $drift = @()
+    foreach ($pair in (Get-ManifestPairs)) {
+        if (-not (Test-Path $pair.Src)) {
+            $drift += "MISSING SOURCE  $($pair.Label)  ($($pair.Src))"
+            continue
+        }
+        if (-not (Test-Path $pair.Dst)) {
+            $drift += "NOT INSTALLED   $($pair.Label)"
+            continue
+        }
+        $srcMap = Get-TreeHashes $pair.Src
+        $dstMap = Get-TreeHashes $pair.Dst
+        # A single-file pair hashes under the "" key, so appending "/$key" would
+        # print "codex/prompts/fwf.md/". Label the file by itself instead.
+        foreach ($key in $srcMap.Keys) {
+            if ($key) { $where = "$($pair.Label)/$key" } else { $where = $pair.Label }
+            if (-not $dstMap.ContainsKey($key)) {
+                $drift += "MISSING FILE    $where"
+            } elseif ($dstMap[$key] -ne $srcMap[$key]) {
+                $drift += "DRIFT           $where"
+            }
+        }
+        foreach ($key in $dstMap.Keys) {
+            if (-not $srcMap.ContainsKey($key)) {
+                if ($key) { $where = "$($pair.Label)/$key" } else { $where = $pair.Label }
+                $drift += "EXTRA FILE      $where"
+            }
+        }
+    }
+    foreach ($stale in $RetiredSkillDirs) {
+        if (Test-Path $stale) { $drift += "RETIRED PRESENT $stale (run install to move it aside)" }
+    }
+    if ($drift.Count -eq 0) {
+        Write-Host "No drift: every managed artifact matches the repo." -ForegroundColor Green
+        exit 0
+    }
+    foreach ($d in $drift) { Write-Host "  $d" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "$($drift.Count) drift item(s). Re-run .\install.ps1 to refresh, or land the installed change in the repo." -ForegroundColor Yellow
+    exit 1
+}
+
+# ---------------------------------------------------------------- install
 Write-Host "=== dotclaude-ecosystem installer ===" -ForegroundColor Cyan
 Write-Host "Source : $RepoRoot"
 Write-Host "Target : $ClaudeHome"
@@ -17,68 +150,75 @@ Write-Host ""
 # Backup existing
 if (Test-Path $ClaudeHome) {
     $backup = "$ClaudeHome.bak.$Stamp"
-    Write-Host "[1/6] Backup ~/.claude -> $backup" -ForegroundColor Yellow
+    Write-Host "[1/7] Backup ~/.claude -> $backup" -ForegroundColor Yellow
     Copy-Item -Path $ClaudeHome -Destination $backup -Recurse -Force
 } else {
-    Write-Host "[1/6] No existing ~/.claude to back up" -ForegroundColor Green
+    Write-Host "[1/7] No existing ~/.claude to back up" -ForegroundColor Green
     New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
 }
 
 # Scripts
-Write-Host "[2/6] Copy scripts -> ~/.claude/scripts/" -ForegroundColor Cyan
+Write-Host "[2/7] Copy scripts -> ~/.claude/scripts/" -ForegroundColor Cyan
 $ScriptsSrc = Join-Path $RepoRoot "scripts"
 $ScriptsDst = Join-Path $ClaudeHome "scripts"
 New-Item -ItemType Directory -Force -Path $ScriptsDst | Out-Null
 Copy-Item -Path "$ScriptsSrc\*.py" -Destination $ScriptsDst -Force
 
-# Skills
-Write-Host "[3/6] Copy skills -> ~/.claude/skills/" -ForegroundColor Cyan
-$BundledSkills = @("master-agent", "executor", "distill-repo", "ponytail-on-demand", "run-model-team", "coderpx")
-foreach ($skill in $BundledSkills) {
-    $src = Join-Path $RepoRoot "skills\$skill"
-    $dst = Join-Path $ClaudeHome "skills\$skill"
-    New-Item -ItemType Directory -Force -Path $dst | Out-Null
-    Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
-}
-if (Test-Path $CodexHome) {
-    $CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team")
-    foreach ($skill in $CodexSkills) {
-        $src = Join-Path $RepoRoot "skills\$skill"
-        $dst = Join-Path $CodexHome "skills\$skill"
-        if (Test-Path $dst) {
-            Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
-        }
-        New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
+# Skills, commands and agy skills, all from the one manifest
+Write-Host "[3/7] Copy skills and commands (manifest-driven)" -ForegroundColor Cyan
+$Installed = @{}
+foreach ($pair in (Get-ManifestPairs)) {
+    if (-not (Test-Path $pair.Src)) {
+        Write-Host "  skip (no source): $($pair.Label)" -ForegroundColor Yellow
+        continue
     }
-    Write-Host "  copied bundled skills -> ~/.codex/skills/" -ForegroundColor Green
+    if ($pair.Kind -eq "dir") {
+        if (Test-Path $pair.Dst) {
+            Copy-Item -Path $pair.Dst -Destination "$($pair.Dst).bak.$Stamp" -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $pair.Dst | Out-Null
+        Copy-Item -Path "$($pair.Src)\*" -Destination $pair.Dst -Recurse -Force
+    } else {
+        $parent = Split-Path -Parent $pair.Dst
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        if (Test-Path $pair.Dst) {
+            Copy-Item -Path $pair.Dst -Destination "$($pair.Dst).bak.$Stamp" -Force
+        }
+        Copy-Item -Path $pair.Src -Destination $pair.Dst -Force
+    }
+    $Installed[$pair.Dst] = $true
+    Write-Host "  $($pair.Label)" -ForegroundColor Green
 }
 
-# Antigravity (agy) skills -> ~/.gemini/config/skills/
-# Separate root from ~/.claude/skills: these are read by the agy CLI, not Claude.
-if (Test-Path $GeminiHome) {
-    $AgySkills = @("fwa", "coderpx")
-    foreach ($skill in $AgySkills) {
-        $src = Join-Path $RepoRoot "agy-skills\$skill"
-        $dst = Join-Path $GeminiHome "skills\$skill"
-        if (Test-Path $dst) {
-            Copy-Item -Path $dst -Destination "$dst.bak.$Stamp" -Recurse -Force
-        }
-        New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
+# Retire directories replaced by a rename. Moved aside, never deleted -- and
+# only once the replacement is verifiably in place. Retiring unconditionally
+# would, on a failed or skipped copy, leave the operator with NEITHER the old
+# skill nor the new one; the loop above is allowed to skip a pair when its
+# source is missing, so that is a reachable state, not a hypothetical.
+foreach ($stale in $RetiredSkillDirs) {
+    if (-not (Test-Path $stale)) { continue }
+    $replacement = $RetiredSkillReplacements[$stale]
+    if (-not $replacement) {
+        Write-Host "  keeping $stale (no replacement declared)" -ForegroundColor Yellow
+        continue
     }
-    Write-Host "  copied agy skills -> ~/.gemini/config/skills/" -ForegroundColor Green
+    if (-not ($Installed.ContainsKey($replacement) -and (Test-Path $replacement))) {
+        Write-Host "  KEEPING $stale -- its replacement $replacement was not installed" -ForegroundColor Red
+        continue
+    }
+    Move-Item -Path $stale -Destination "$stale.retired.$Stamp" -Force
+    Write-Host "  retired $stale -> $stale.retired.$Stamp" -ForegroundColor Yellow
 }
 
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
-Write-Host "[4/6] Wire managed hooks into ~/.claude/settings.json" -ForegroundColor Cyan
+Write-Host "[4/7] Wire managed hooks into ~/.claude/settings.json" -ForegroundColor Cyan
 $HooksInstaller = Join-Path $RepoRoot "scripts\hooks_install.py"
 & py $HooksInstaller install --checkout $RepoRoot            # dry-run diff
 & py $HooksInstaller install --checkout $RepoRoot --apply    # merge managed block, foreign hooks preserved
 Write-Host "  managed hook block wired (run: py $HooksInstaller doctor)" -ForegroundColor Green
 
 # CLAUDE.md
-Write-Host "[5/6] Install CLAUDE.md template" -ForegroundColor Cyan
+Write-Host "[5/7] Install CLAUDE.md template" -ForegroundColor Cyan
 $ClaudeMdTpl = Join-Path $RepoRoot "templates\CLAUDE.md.template"
 $ClaudeMdDst = Join-Path $ClaudeHome "CLAUDE.md"
 if (Test-Path $ClaudeMdDst) {
@@ -90,7 +230,7 @@ if (Test-Path $ClaudeMdDst) {
 }
 
 # Codex AGENTS.md (optional)
-Write-Host "[6/6] Codex AGENTS.md (optional)" -ForegroundColor Cyan
+Write-Host "[6/7] Codex AGENTS.md (optional)" -ForegroundColor Cyan
 if (Test-Path $CodexHome) {
     $AgentsTpl = Join-Path $RepoRoot "templates\AGENTS.md.template"
     $AgentsDst = Join-Path $CodexHome "AGENTS.md"
@@ -113,6 +253,7 @@ if (Test-Path $CodexHome) {
 }
 
 # Initial empty memory/idea-box if missing
+Write-Host "[7/7] Seed memory / idea box if missing" -ForegroundColor Cyan
 foreach ($f in @("MEMORY.md", "ECOSYSTEM_IDEA_BOX.md")) {
     $p = Join-Path $ClaudeHome $f
     if (-not (Test-Path $p)) {
@@ -129,3 +270,4 @@ Write-Host "  2. Review ~/.claude/settings.json hooks"
 Write-Host "  3. (Optional) Set up your private context repo for AI tool sharing"
 Write-Host "  4. Run: python ~/.claude/scripts/plan_catalog.py to generate PLANS.md"
 Write-Host "  5. Run: python ~/.claude/scripts/vision_catalog.py to generate VISIONS.md"
+Write-Host "  6. Verify no drift: .\install\install.ps1 -Check"
