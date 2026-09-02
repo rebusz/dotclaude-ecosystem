@@ -72,6 +72,9 @@ function Test-IgnoredPath([string]$rel) {
     if ($rel -match '\.bak\.\d') { return $true }
     if ($rel -match '\.retired\.\d') { return $true }
     if ($rel -match '(^|\\)\.git(\\|$)') { return $true }
+    # Codex writes agents\openai.yaml into a skill it loads; it is the consuming
+    # tool's own manifest, not part of any source, so it is not drift.
+    if ($rel -match '(^|\\)agents\\openai\.yaml$') { return $true }
     return $false
 }
 

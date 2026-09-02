@@ -40,11 +40,13 @@ Run from the plan repository root:
 Use `gpt` in Codex and `claude` in Claude Code only as final-judge provenance.
 The runner always launches the same fixed non-OpenRouter panel:
 
-- ChatGPT CDP: the strongest available ChatGPT tier, with a single verified
-  pre-submit fallback. Measured 2026-09-01: **`Pro` is a MODEL beside GPT-5.6
-  Sol, not an effort of Sol**, and effort is a four-position slider whose top is
-  Extra High. So this reads: model `Pro` first, and on verified pre-submit
-  failure model `GPT-5.6 Sol` at Extra High. Never claim a model or an effort
+- ChatGPT CDP: GPT-5.6 Sol at its strongest available tier, with a single
+  verified pre-submit fallback. Measured 2026-09-01: `Pro` is Sol's Pro tier,
+  but the picker renders it as an entry beside GPT-5.6 Sol and GPT-5.5, so it
+  is selected as that entry and never driven on the effort slider; the slider
+  is a four-position ladder topped by Extra High. A spent Pro quota greys the
+  entry out (`aria-disabled`). So this reads: the `Pro` entry first, and when
+  it is disabled, `GPT-5.6 Sol` at Extra High. Never claim a model or an effort
   that was not read back from the UI.
 - Antigravity CLI: `gemini-3.7-flash-high` in read-only plan+sandbox mode; failure falls
   back inside the same logical lane to Gemini CDP pinned to Gemini 3.7 Flash.
