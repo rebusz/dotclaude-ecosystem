@@ -174,7 +174,13 @@ foreach ($pair in (Get-ManifestPairs)) {
     }
     if ($pair.Kind -eq "dir") {
         if (Test-Path $pair.Dst) {
-            Copy-Item -Path $pair.Dst -Destination "$($pair.Dst).bak.$Stamp" -Recurse -Force
+            # Backups live OUTSIDE the skills root. A `<skill>.bak.<stamp>` dir
+            # beside the live skill is itself a directory with a SKILL.md, so
+            # Claude Code loaded it as a skill and the retired /coderpx stayed
+            # callable as "coderpx.retired.<stamp>" (seen 2026-09-01).
+            $bakRoot = Join-Path (Split-Path -Parent (Split-Path -Parent $pair.Dst)) "skills.bak\$Stamp"
+            New-Item -ItemType Directory -Force -Path $bakRoot | Out-Null
+            Copy-Item -Path $pair.Dst -Destination (Join-Path $bakRoot (Split-Path -Leaf $pair.Dst)) -Recurse -Force
         }
         New-Item -ItemType Directory -Force -Path $pair.Dst | Out-Null
         Copy-Item -Path "$($pair.Src)\*" -Destination $pair.Dst -Recurse -Force
@@ -182,7 +188,11 @@ foreach ($pair in (Get-ManifestPairs)) {
         $parent = Split-Path -Parent $pair.Dst
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
         if (Test-Path $pair.Dst) {
-            Copy-Item -Path $pair.Dst -Destination "$($pair.Dst).bak.$Stamp" -Force
+            # Same rule for single files: Codex loads every *.md in ~/.codex/prompts
+            # as a prompt, so fwf.md.bak.<stamp> beside fwf.md became a prompt.
+            $bakRoot = Join-Path (Split-Path -Parent $parent) ((Split-Path -Leaf $parent) + ".bak\" + $Stamp)
+            New-Item -ItemType Directory -Force -Path $bakRoot | Out-Null
+            Copy-Item -Path $pair.Dst -Destination (Join-Path $bakRoot (Split-Path -Leaf $pair.Dst)) -Force
         }
         Copy-Item -Path $pair.Src -Destination $pair.Dst -Force
     }
@@ -206,8 +216,11 @@ foreach ($stale in $RetiredSkillDirs) {
         Write-Host "  KEEPING $stale -- its replacement $replacement was not installed" -ForegroundColor Red
         continue
     }
-    Move-Item -Path $stale -Destination "$stale.retired.$Stamp" -Force
-    Write-Host "  retired $stale -> $stale.retired.$Stamp" -ForegroundColor Yellow
+    $retRoot = Join-Path (Split-Path -Parent (Split-Path -Parent $stale)) "skills.bak\$Stamp"
+    New-Item -ItemType Directory -Force -Path $retRoot | Out-Null
+    $retDest = Join-Path $retRoot ((Split-Path -Leaf $stale) + ".retired")
+    Move-Item -Path $stale -Destination $retDest -Force
+    Write-Host "  retired $stale -> $retDest" -ForegroundColor Yellow
 }
 
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
