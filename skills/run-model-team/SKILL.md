@@ -5,8 +5,8 @@ description: Compatibility entry for an explicit model-team request; forward the
 
 # Model-team compatibility entry
 
-Read [CoderPX G](../coderpxg/SKILL.md) and its
-[worker contract](../coderpxg/references/workers.md). Forward the current task,
+Read [CoderPX G](../coderpxG/SKILL.md) and its
+[worker contract](../coderpxG/references/workers.md). Forward the current task,
 plan path, authorization and lifecycle stage once. Do not start another
 supervisor, select a separate roster or recursively invoke /fwf; there is no Codex CLI fallback.
 Keep in-flight legacy receipts and limits on their original contract until explicitly migrated.

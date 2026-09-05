@@ -207,6 +207,15 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("`/audit`", text)
         self.assertNotIn("To audit a plan/design", text)
 
+    def test_all_declared_skills_exist_on_disk(self) -> None:
+        skills_dir = ROOT / "skills"
+        agy_skills_dir = ROOT / "agy-skills"
+        existing = {p.name for p in skills_dir.iterdir() if p.is_dir()}
+        if agy_skills_dir.exists():
+            existing.update(p.name for p in agy_skills_dir.iterdir() if p.is_dir())
+        for skill in ("master-agent", "executor", "distill-repo", "ponytail-on-demand", "run-model-team", "coderpxC", "coderpxG", "fwa", "coderpxA"):
+            self.assertIn(skill, existing, f"Declared skill {skill} does not exist on disk")
+
 
 if __name__ == "__main__":
     unittest.main()

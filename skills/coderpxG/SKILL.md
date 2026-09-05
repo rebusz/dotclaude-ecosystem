@@ -25,7 +25,7 @@ risk, acceptance and assignments. R0 needs a plan only when requested or
 required by the repository. Never choose a plan merely because it is newest.
 
 For R1/R2/R3 full-workflow requests, pass the exact plan to /fwf and follow
-[the full workflow](../../workflows/full-workflow.md); preserve /fwp when
+[the full workflow](../../commands/fwf.md); preserve /fwp when
 selected. A plan-writing-only request stops after writing the plan; run only
 reviews included in the request, without automatically launching the full
 panel. R0 uses its repository publication path without requiring /fwf.
@@ -89,3 +89,19 @@ NO_REVIEW; an unused lane is NOT USED.
 Record plan author, remote code author, local applying runtime/model, material
 local edits, tests and independent reviewer separately. Local application does
 not transfer code authorship from the CDP producer to Astra or Luna.
+
+## Review and Ownership Invariants
+
+1. **CoderPX G does not replace configured panels.**
+   - CoderPX G cannot replace the configured `/fwf` or `/fwp` panel.
+   - Any workflow that requires `/fwf` or `/fwp` must still route through those panels as configured in the host agent.
+
+2. **Independent model identities for implementation and review.**
+   - Implementation and review assignments must resolve to distinct, independent model identities.
+   - Changing provider alone is not independence.
+   - Independence requires different model families or verified independent identities with non-overseeing roles.
+
+3. **Ship-blocking repairs require re-review.**
+   - Any ship-blocking repair creates a new exact HEAD that must pass through the required independent review gate again before landing.
+   - `/model-team` forwards into the already-running workflow and cannot own landing, merge, or review closeout.
+   - Only the designated review panel (e.g. `/fwf` or `/fwp`) may close the review gate.

@@ -280,8 +280,31 @@ def test_doctor_probes_supervisor_and_luna(
     payload = json.loads(capsys.readouterr().out)
     assert payload["overall"] == "READY"
     assert "supervisor" in payload["lanes"]
-    assert payload["lanes"]["supervisor"]["status"] == "READY"
+    assert payload["lanes"]["supervisor"]["status"] == "CONFIGURED"
+    assert payload["lanes"]["supervisor"]["status"] != "READY"
+    assert "identity configured" in payload["lanes"]["supervisor"]["detail"]
     assert payload["lanes"]["supervisor"]["model"] == "gpt-6-astra"
     assert "luna" in payload["lanes"]
+    assert payload["lanes"]["luna"]["status"] == "CONFIGURED"
+    assert payload["lanes"]["luna"]["status"] != "READY"
     assert payload["lanes"]["luna"]["model"] == "gpt-5.6-luna"
+
+
+def test_relative_md_links_resolve_to_existing_files() -> None:
+    import re
+    root = Path(__file__).resolve().parents[2]
+    skill_paths = [
+        root / "skills" / "run-model-team" / "SKILL.md",
+        root / "skills" / "coderpxG" / "SKILL.md",
+    ]
+    pattern = r"\[([^\]]*)\]\(([^)]+\.md)\)"
+    for skill_path in skill_paths:
+        assert skill_path.exists(), f"Missing skill file: {skill_path}"
+        text = skill_path.read_text(encoding="utf-8")
+        for m in re.finditer(pattern, text):
+            target = m.group(2)
+            if not target.startswith(("http://", "https://")):
+                resolved = (skill_path.parent / target).resolve()
+                assert resolved.exists(), f"Link '{target}' in {skill_path} resolves to nonexistent {resolved}"
+
 
