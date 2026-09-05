@@ -154,6 +154,18 @@ plan review through implementation review. Direct IMPLEMENT/EXECUTOR work invoke
 the `review` skill after local tests. R0 documentation/prompt-only diffs have no
 mandatory review workflow.
 
+## Review Workflow Routing
+
+| Risk | Workflow |
+|---|---|
+| R3 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review |
+| R2 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review |
+| R1 | `/fwf` or `/fwp`: CEO -> audit -> eng -> implementation -> review |
+| R0 | Direct / docs | no mandatory review workflow |
+
+There is no separate closeout command. Codex always passes
+`--synthesizer gpt`.
+
 The owning review stage must preserve all existing exact-head evidence gates:
 validated commit, draft PR, provider-neutral `implementation_review_packet.py`
 output when external publication is needed, fail-closed secret rejection, and

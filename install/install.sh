@@ -32,13 +32,13 @@ cp "$REPO_ROOT/scripts/"*.py "$CLAUDE_HOME/scripts/"
 
 # Skills
 echo "[3/6] Copy skills -> ~/.claude/skills/"
-BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand run-model-team coderpx)
+BUNDLED_SKILLS=(master-agent executor distill-repo ponytail-on-demand run-model-team coderpxC)
 for skill in "${BUNDLED_SKILLS[@]}"; do
     mkdir -p "$CLAUDE_HOME/skills/$skill"
     cp -R "$REPO_ROOT/skills/$skill/"* "$CLAUDE_HOME/skills/$skill/"
 done
 if [ -d "$CODEX_HOME" ]; then
-    CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team)
+    CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team coderpxG)
     for skill in "${CODEX_SKILLS[@]}"; do
         if [ -d "$CODEX_HOME/skills/$skill" ]; then
             cp -R "$CODEX_HOME/skills/$skill" "$CODEX_HOME/skills/$skill.bak.$STAMP"
@@ -53,7 +53,7 @@ fi
 # Antigravity (agy) skills -> ~/.gemini/config/skills/
 # Separate root from ~/.claude/skills: these are read by the agy CLI, not Claude.
 if [ -d "$GEMINI_HOME" ]; then
-    AGY_SKILLS=(fwa coderpx)
+    AGY_SKILLS=(fwa coderpxA)
     for skill in "${AGY_SKILLS[@]}"; do
         if [ -d "$GEMINI_HOME/skills/$skill" ]; then
             cp -R "$GEMINI_HOME/skills/$skill" "$GEMINI_HOME/skills/$skill.bak.$STAMP"
