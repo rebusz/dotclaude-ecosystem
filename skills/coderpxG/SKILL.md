@@ -1,130 +1,107 @@
 ---
 name: coderpxG
-description: >-
-  Codex CLI's dispatcher profile in the CoderPX A/C/G flow. Codex routes,
-  verifies and lands delegated work; it is NOT a routine implementer, because
-  its Sol quota is reserved for reasoning rather than typing. Use when a Codex
-  user invokes /coderpxG or /coderpx, or asks Codex to route model work. Codex
-  executes plans and never authors them, edits locally only as the last link of
-  the local executor chain, and finishes with an ownership ledger.
+description: Conserve local Codex tokens by assigning implementation and independent review to Perplexity CDP and ChatGPT CDP. Astra authors the plan and key decisions; Codex owns local files, tests and Git. Handles /coderpxG, /coderpxg and model-team compatibility.
 ---
 
-# `/coderpxG` — Codex: dispatch, verify, land
+# CoderPX G v1 — subscription CDP work, local execution
 
-You are **coderpxG**. This skill is for the Codex CLI only; it is installed
-under `~/.codex/skills/` and is not a Claude Code or Antigravity workflow.
+The operator's objective is efficient local token use. Astra writes the plan
+and resolves the most important architectural, scope and conflicting-evidence
+decisions. Delegate substantive implementation and review to Perplexity CDP
+and ChatGPT CDP as far as available capability and task boundaries permit.
+Codex is the local runtime, not a synonym for Astra: it prepares file context,
+applies returned changes, runs tests, collects evidence and owns Git/landing.
+Luna may serve this bounded local work through the verified worker contract.
 
-The shared contract — vocabulary, the `stamp v2` slice schema, review
-resolution, round and chain caps, receipts and the ownership ledger, the
-runbook, and the measured ChatGPT composer facts — lives in
-`D:/APPS/_shared/coderpx/DISPATCHERS.md`. Read it before dispatching. This file
-covers only what is different about being Codex.
+This is candidate policy. Changed roles and receipts activate only with the
+coordinated migration; existing assignments retain their recorded contracts.
+Do not impersonate native Astra with a legacy local/G/Luna receipt.
 
-Siblings: **coderpxC** (Claude Code, the brain that writes plans and runs
-`/fwf`) and **coderpxA** (Antigravity `agy`, the primary local executor). You
-and coderpxA run `/fwa`.
+## Idea to one full workflow
 
-## What you are for, and what you are not for
+Accept an idea, task or exact plan path. Inspect intent files and the plan
+index, reuse a relevant plan, or let Astra author the R1/R2/R3 plan with scope,
+risk, acceptance and assignments. R0 needs a plan only when requested or
+required by the repository. Never choose a plan merely because it is newest.
 
-**You are a dispatcher runtime.** You read a stamped plan, route each slice to
-the lane its stamp names, verify what comes back against the repo, and own the
-landing lifecycle.
+For R1/R2/R3 full-workflow requests, pass the exact plan to /fwf and follow
+[the full workflow](../../commands/fwf.md); preserve /fwp when
+selected. A plan-writing-only request stops after writing the plan; run only
+reviews included in the request, without automatically launching the full
+panel. R0 uses its repository publication path without requiring /fwf.
+R2/R3 code still needs scoped standing GO. Already inside /fwf: resume that stage, never start a
+second cycle. /fwa consumes the existing approved plan/assignments.
+/model-team forwards its task, plan, authorization and stage once to this owner.
 
-**Your quota is not for implementation.** Operator decision, 2026-09-01: the
-local executor order is `agy → cursor → glm → codex`. You edit files only as
-the **last** link of that chain, when every earlier executor is genuinely
-unavailable, and then on `gpt-5.6-luna` at maximum effort — never on Sol.
-`dispatch.py` enforces this: `codex_calls_this_plan` caps you at one local
-slice per plan, and the reason lands in the receipt.
+## Delegate code and review; retain local custody
 
-When you do implement, work in an isolated worktree with
-`codex exec --sandbox workspace-write -C <worktree> -m gpt-5.6-luna`, and
-attribute the row as `Codex (luna)` in the ledger. Prove the change with
-`git diff` and the test exit code; your own narration is not evidence.
+Read the active D:/APPS/_shared/coderpx/DISPATCHERS.md and the provider's actual
+adapter contract before dispatch. D:/APPS/_shared/coderpx/README.md describes
+the Perplexity lane; it is not the ChatGPT driver specification. Use verified
+chrome_ppl and chrome_gpt routes and existing stamps, limits and Conductor.
+Do not use these design instructions as an invented driver interface.
 
-**You never author a plan.** If the input is an idea rather than a plan, route
-it to coderpxC or to a lane for a plan first. An unverified or failed external
-result is `NO_PLAN`, not permission to write one yourself.
+1. Prepare one self-contained packet per coherent slice: exact base HEAD,
+   allowed paths, current relevant files/contracts, intended behavior, test
+   commands and return format (complete files or an applicable patch). Use
+   existing packet renderers and secret rejection. Browser models have no
+   local filesystem access; missing context must come from Codex, not guesses.
+2. Assign code generation to an available approved CDP producer. Follow the
+   active resolver's ordering and prove actual model/effort. Coupled files can
+   be one coherent packet; having them in Astra's context is not a reason for
+   Astra to write the implementation. Never copy credentials or irrelevant
+   full history; sufficient source context matters more than a tiny packet.
+3. Codex retains the response and manifest, checks paths/base, applies the
+   authorized result in its owned worktree and runs actual local validation.
+   Return only relevant failures and changed context in a bounded delta round.
+   Remote claims of test success do not prove local tests ran.
+4. Send the actual resulting diff, exact HEAD, relevant contracts and local
+   checks to an independent CDP reviewer. Prefer the other provider, but
+   verify model identity as well: changing providers alone is not independence.
+   Preserve the full workflow's configured required review panel, without
+   duplicating a gate already satisfied for that exact head.
+5. Codex applies justified fixes, validates, records authorship and completes
+   authorized Git/PR/CI/merge steps. Astra resolves material disputed findings;
+   it does not routinely rewrite patches or repeat external review itself.
 
-## The one thing you must not do to a plan
+## Token discipline and local workers
 
-`/fwf` and `/fwp` forbid Codex CLI as an audit or review lane, and that is not
-an oversight. When you audit or review, the work goes out through the gpt lane
-or the ppl lane like everyone else's — **never through your own CLI**. A Codex
-session grading a plan through Codex is the self-grading the workflow exists to
-prevent, and it multiplies token burn besides.
+Read [workers.md](references/workers.md) for optional Luna and escalation.
+Astra stays out of routine implementation, test iteration and patch rewriting.
+Reuse task/attempt state and bounded packets; summarize tool output and retain
+full artifacts on disk. Record actual dispatches and observable local usage;
+do not promise savings or infer per-model costs from aggregate quota.
 
-Being a first-class dispatcher and being barred from being the reviewer of
-record are consistent: dispatcher is not reviewer.
+No automatic native-Astra coding fallback when CDP is unavailable or capped.
+Keep the failed lane visible; use another already authorized route only when
+the active contract permits it and the prior submission is unambiguous.
+Otherwise finish independent local preparation and report the precise blocker.
+Astra decides a material recovery question; direct substantive Astra coding
+requires an explicit operator exception. Mechanical local application is not
+such an exception. Never launch nested Codex CLI to fake independent review.
 
-## Dispatching
+SUBMIT_UNCONFIRMED stops automatic retry and chain fallback. Reconcile a late
+reply only with the same attempt, packet and verified identity through the
+transport's documented process. Retain the uncertain event; reconciliation
+never resets caps or grants a new submit. Missing proof stays UNVERIFIED or
+NO_REVIEW; an unused lane is NOT USED.
 
-Invocation lines, ports and drivers are in `DISPATCHERS.md` §1. Honour the
-slice stamp: run `lane: local` through the executor chain, send everything else
-outward. You may escalate a `lane: local` slice outward with a recorded reason;
-you may never de-escalate a slice stamped for an outward lane.
+Record plan author, remote code author, local applying runtime/model, material
+local edits, tests and independent reviewer separately. Local application does
+not transfer code authorship from the CDP producer to Astra or Luna.
 
-Before dispatch, state in one line:
+## Review and Ownership Invariants
 
-`<task> -> <provider> / <requested model> / <requested effort> because <reason>`
+1. **CoderPX G does not replace configured panels.**
+   - CoderPX G cannot replace the configured `/fwf` or `/fwp` panel.
+   - Any workflow that requires `/fwf` or `/fwp` must still route through those panels as configured in the host agent.
 
-For the gpt lane, `DISPATCHERS.md` §8 measured that **"Pro" is a model, a
-sibling of GPT-5.6 Sol — not an effort of Sol.** "Sol Pro, or Sol Extra High
-when Pro is out" means model `Pro` first, then model `GPT-5.6 Sol` with the
-effort slider at Extra High. Never claim a model or an effort you did not read
-back from the UI.
+2. **Independent model identities for implementation and review.**
+   - Implementation and review assignments must resolve to distinct, independent model identities.
+   - Changing provider alone is not independence.
+   - Independence requires different model families or verified independent identities with non-overseeing roles.
 
-Packet rules, the secret-hygiene checklist and the output contract live in
-`DISPATCHERS.md` and `PACKET_TEMPLATE.md`. Two that cost real submits: orient
-the model in the first 200 words, and state the git topology explicitly for an
-`implement` task.
-
-## Evidence decides
-
-For the ppl lane, use the reply only when the sibling `.meta.json` says
-`"status": "SUCCESS"` with a matching `verified_model`. For the gpt lane,
-require the result artifact to prove success and the observed model label.
-
-`SUBMIT_UNCONFIRMED` is terminal. Never resubmit automatically. Two rounds per
-slice, counted in the parent receipt; there is no third.
-
-## Verify, then route the review
-
-Run the slice's real test command and read the actual diff. A green run that
-never executed the intended path is not evidence.
-
-Review never resolves to the producer — not the runtime that wrote the diff and
-not the model that wrote it. `DISPATCHERS.md` §3 has the resolution rules. If
-you implemented the slice as the last chain link, you are not its approver.
-
-## Land
-
-Branch → validate → commit → push → **draft** PR → review gate → mark ready
-once → squash-merge → fast-forward the operator checkout. Keep the PR draft
-while work moves: a self-hosted runner is capacity-one and shares the box with
-a live trading stack, so batch pushes instead of triggering CI on each one.
-
-Never direct-push to `main` for anything touching contracts, persistence or the
-order path.
-
-## Red lines
-
-- Codex never authors or completes a plan.
-- Codex never audits or reviews through its own CLI; that work goes out through
-  a lane.
-- Codex implementation is the last chain link, on `gpt-5.6-luna`, once per
-  plan — never the default route and never on Sol quota.
-- Never claim a model or an effort without observed identity.
-- Never send a third round for a slice.
-- Never put secrets or live account data in a packet.
-- External models never merge, mark ready, arm a runtime, or perform
-  broker/order actions.
-
-## Report
-
-End with the ownership ledger from `DISPATCHERS.md` §5: one row per plan,
-implementation slice and review assignment, naming the executor or provider,
-the verified model, and an evidence-backed status. Attribute from dispatch
-receipts and the actual diff, never from branch names or narration. Write
-`UNVERIFIED (requested: <model>)` when identity is missing and
-`NOT USED (requested: <model>)` when no submit happened.
+3. **Ship-blocking repairs require re-review.**
+   - Any ship-blocking repair creates a new exact HEAD that must pass through the required independent review gate again before landing.
+   - `/model-team` forwards into the already-running workflow and cannot own landing, merge, or review closeout.
+   - Only the designated review panel (e.g. `/fwf` or `/fwp`) may close the review gate.

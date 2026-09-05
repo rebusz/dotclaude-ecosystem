@@ -459,8 +459,26 @@ def _fable_probe(*, deep: bool) -> dict[str, object]:
 def doctor(*, deep: bool = False) -> int:
     codex = _version_probe("codex")
     git = _version_probe("git")
+    supervisor_model = os.environ.get(
+        "MODEL_TEAM_SUPERVISOR_MODEL",
+        ROLE_CONFIG.get("supervisor", {}).get("model", "gpt-6-astra"),
+    )
+    supervisor = {
+        "status": "CONFIGURED",
+        "executable": codex.get("executable"),
+        "model": supervisor_model,
+        "detail": "identity configured; host model execution not probed",
+    }
     lanes = {
+        "supervisor": supervisor,
         "sol": dict(codex, model=ROLE_CONFIG["sol"]["model"]),
+        "luna": {
+            "status": "CONFIGURED",
+            "executable": codex.get("executable"),
+            "model": "gpt-5.6-luna",
+            "role": "routine_local_ops",
+            "detail": "optional local worker configured",
+        },
         "chatgpt": _chatgpt_probe(deep=deep),
         "ox": _ox_probe(deep=deep),
         "antigravity": _antigravity_probe(deep=deep),

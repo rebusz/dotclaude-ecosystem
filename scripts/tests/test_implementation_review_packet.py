@@ -180,9 +180,9 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
         powershell = (ROOT / "install" / "install.ps1").read_text(encoding="utf-8")
         shell = (ROOT / "install" / "install.sh").read_text(encoding="utf-8")
 
-        self.assertIn('$CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team")', powershell)
+        self.assertIn('$CodexSkills = @("master-agent", "executor", "ponytail-on-demand", "run-model-team", "coderpxG")', powershell)
         self.assertIn('Join-Path $CodexHome "skills\\$skill"', powershell)
-        self.assertIn("CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team)", shell)
+        self.assertIn("CODEX_SKILLS=(master-agent executor ponytail-on-demand run-model-team coderpxG)", shell)
         self.assertIn('for skill in "${CODEX_SKILLS[@]}"', shell)
         self.assertIn('$CODEX_HOME/skills/$skill', shell)
 
@@ -201,11 +201,20 @@ class ExternalReviewWorkflowContractTests(unittest.TestCase):
 
         self.assertIn("Review Workflow Routing", text)
         self.assertIn("`/fwf` and `/fwp` are the only public full-workflow commands", text)
-        self.assertIn("R1 uses `auditf.py`; R2/R3 use `fuse.py`", text)
+        self.assertIn("The only internal runner for R1/R2/R3 is `D:/APPS/_shared/audit/fuse.py`", text)
         self.assertIn("`--synthesizer gpt`", text)
         self.assertNotIn("/fw close", text)
         self.assertNotIn("`/audit`", text)
         self.assertNotIn("To audit a plan/design", text)
+
+    def test_all_declared_skills_exist_on_disk(self) -> None:
+        skills_dir = ROOT / "skills"
+        agy_skills_dir = ROOT / "agy-skills"
+        existing = {p.name for p in skills_dir.iterdir() if p.is_dir()}
+        if agy_skills_dir.exists():
+            existing.update(p.name for p in agy_skills_dir.iterdir() if p.is_dir())
+        for skill in ("master-agent", "executor", "distill-repo", "ponytail-on-demand", "run-model-team", "coderpxC", "coderpxG", "fwa", "coderpxA"):
+            self.assertIn(skill, existing, f"Declared skill {skill} does not exist on disk")
 
 
 if __name__ == "__main__":
