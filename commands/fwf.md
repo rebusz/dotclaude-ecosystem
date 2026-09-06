@@ -37,6 +37,10 @@ Run from the plan repository root:
 
 `D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode free --synthesizer <claude|gpt> "@<plan>"`
 
+Each panel lane admits on its named CDP pool (`cdp:chatgpt` + `chrome_gpt`,
+`cdp:perplexity` + `chrome_ppl` and per-model `slot_key`, `cdp:gemini` +
+`chrome_gemini`). Do not request `host:heavy` for a `cdp_provider` purpose.
+
 Use `gpt` in Codex and `claude` in Claude Code only as final-judge provenance.
 The runner always launches the same fixed non-OpenRouter panel:
 
@@ -141,9 +145,10 @@ the change is under ~20 lines and the file is already in context; it spans more
 files than a packet can honestly describe; or two outward rounds went red. Any
 in-session slice is recorded in the ledger with dispatcher `C`.
 
-Conductor holds `host:heavy` at capacity one, so let the Stage 2 lease go
-before dispatching here. Preserve dirty-tree and repo ownership boundaries, and
-keep the plan readback current. Do not stop merely because code has been written.
+Stage 2 panel and coding lanes hold named `cdp:*` leases, not `host:heavy`.
+Release each CDP lease after the lane returns, then dispatch. Preserve dirty-tree
+and repo ownership boundaries, and keep the plan readback current. Do not stop
+merely because code has been written.
 
 ## Stage 6 — `review`, outward
 

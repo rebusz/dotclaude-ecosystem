@@ -19,7 +19,6 @@ if str(_repo_root) not in sys.path:
 
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
-from scripts.conductor_resources import resolve_resource_key  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
     read_all_pools_live,
@@ -30,6 +29,12 @@ from scripts.conductor_store import (  # noqa: E402
     read_store_status,
 )
 from scripts.conductor_truthdeck import check_truthctl_version  # noqa: E402
+
+
+def _print_receipt_exit(receipt) -> int:
+    """Receipts are the verdict. ERROR/REJECTED must not look like success."""
+    print(json.dumps(receipt.to_dict(), indent=2))
+    return 0 if receipt.status == "SUCCESS" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             "cdp_perplexity",
             "cdp_chatgpt",
             "cdp_gemini",
+            "cdp_tv",
         ],
         required=True,
     )
@@ -86,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_request.add_argument(
         "--resource-key",
         default=None,
-        help="Resource pool key (default: host:heavy or derived from role/purpose)",
+        help="Resource pool key (derived from --role/--purpose when omitted; host:heavy is not valid for CDP)",
     )
     p_resource_request.add_argument(
         "--slot-key",
@@ -96,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_request.add_argument(
         "--role",
         default=None,
-        help="CDP role (chrome_ppl, chrome_gpt, chrome_gemini)",
+        help="CDP role (chrome_ppl, chrome_gpt, chrome_gemini, chrome_tv)",
     )
 
     p_resource_heartbeat = subparsers.add_parser("resource-heartbeat", help="Heartbeat a host resource lease")
@@ -287,11 +293,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     elif args.command == "resource-request":
-        target_resource_key = resolve_resource_key(
-            purpose=args.purpose,
-            role=args.role,
-            resource_key=args.resource_key,
-        )
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="resource_request",
@@ -302,15 +303,14 @@ def main(argv: list[str] | None = None) -> int:
                 "priority": args.priority,
                 "idempotency_key": args.idempotency_key,
                 "parent_lease_id": args.parent_lease_id,
-                "resource_key": target_resource_key,
+                "resource_key": args.resource_key,
                 "slot_key": args.slot_key or "",
                 "role": args.role,
             },
             idempotency_key=f"idemp_resource_request_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)
-        print(json.dumps(receipt.to_dict(), indent=2))
-        return 0
+        return _print_receipt_exit(receipt)
 
     elif args.command == "resource-heartbeat":
         envelope = CommandEnvelope(
@@ -331,8 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             idempotency_key=f"idemp_resource_release_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)
-        print(json.dumps(receipt.to_dict(), indent=2))
-        return 0
+        return _print_receipt_exit(receipt)
 
     elif args.command == "resource-recover":
         envelope = CommandEnvelope(
@@ -347,8 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             idempotency_key=f"idemp_resource_recover_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)
-        print(json.dumps(receipt.to_dict(), indent=2))
-        return 0 if receipt.status == "SUCCESS" else 1
+        return _print_receipt_exit(receipt)
 
     elif args.command == "resource-reconcile":
         envelope = CommandEnvelope(
@@ -376,8 +374,7 @@ def main(argv: list[str] | None = None) -> int:
             idempotency_key=f"idemp_pytest_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)
-        print(json.dumps(receipt.to_dict(), indent=2))
-        return 0
+        return _print_receipt_exit(receipt)
 
     if args.command == "enqueue":
         envelope = CommandEnvelope(

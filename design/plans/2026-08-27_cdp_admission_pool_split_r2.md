@@ -1,13 +1,15 @@
 ---
 title: CDP admission pools - stop serialising prompts behind pytest
 date: 2026-08-27
-status: draft-awaiting-go
+status: active-continuation
 risk: R2
 repos: [dotclaude-ecosystem, WatchF]
 tags: [conductor, host-resource, cdp, admission, concurrency, fwf, coderpx]
 related:
   - design/plans/2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md
   - design/plans/2026-08-27_conductor_operator_gui_r1.md
+continuation_of: CP-1/CP-2 shipped; CP-3 adapters remaining
+operator_go: GO named CDP pools 2026-09-06 (DOM H0); original token GO CDP POOL SPLIT R2 already exercised by #90/#91
 ---
 
 # CDP admission pools - stop serialising prompts behind pytest
@@ -278,13 +280,50 @@ Consequence, stated so the two plans do not drift:
 
 ## Definition of Done
 
-- [ ] More than one pool exists and each maps to one physical resource.
-- [ ] A fence in one CDP pool provably does not block another pool or pytest.
-- [ ] Perplexity admits 3 concurrent submissions with at most one per model.
-- [ ] `/fwf` and CoderPX share each CDP pool and are separated by priority, not by pool.
-- [ ] No consumer reaches a browser without admission; no CDP request consumes a CPU slot.
-- [ ] `host:heavy` semantics and tests are unchanged.
-- [ ] The Gate Panel renders every pool, and CP-5 is reflected in the GUI plan when it lands.
+- [x] More than one pool exists and each maps to one physical resource. (CP-1, #90/#91)
+- [x] A fence in one CDP pool provably does not block another pool or pytest.
+- [x] Perplexity admits 3 concurrent submissions with at most one per model.
+- [x] `/fwf` and CoderPX share each CDP pool and are separated by priority, not by pool. (scheduler no longer fences CDP behind `host:heavy`; adapters still must request the named pool)
+- [ ] No consumer reaches a browser without admission; no CDP request consumes a CPU slot. (CP-3: WatchF `HostHeavyLease` / `fuse.py` / `auditgpt.py` / `auditpx.py` / `cdp_chatgpt_code.py` remain the consumer owners; not in this continuation)
+- [x] `host:heavy` semantics and tests are unchanged. (capacity still 1; CDP purposes still refused on that pool)
+- [x] The Gate Panel renders every pool, and CP-5 is reflected in the GUI plan when it lands.
+
+## Continuation CP-7 — 2026-09-06 H0 (named pools, stale routing)
+
+Operator, 2026-09-06: CDP and ordinary work leave `host:heavy`. Do not re-ask.
+Pools already exist (`host:heavy=1`, `cdp:perplexity=3`, `cdp:chatgpt=3`,
+`cdp:gemini=1`, `cdp:tv=1`). This continuation does **not** re-implement the
+split.
+
+Shipped here (dotclaude-ecosystem):
+
+1. `resolve_resource_key` never falls through `cdp_provider` to `host:heavy`.
+   A stale explicit `host:heavy` key with a CDP purpose is ignored so `--role`
+   or a named `cdp:*` key can route. Missing both is a `ValueError`, not a
+   silent heavy admit.
+2. `conductorctl` resource-request/release/recover/pytest return non-zero when
+   the receipt status is not `SUCCESS` (`ERROR` at exit 0 was the DOM-Q1 miss).
+3. Scheduler WorkItems with `job_kind=cdp_provider` are not blocked by an
+   occupied `host:heavy` slot.
+4. Source-of-truth rules (`agent-rules/core.md`, `skills/conductor/SKILL.md`,
+   `/fwf` `/fwp`) match the pool table. Capacities are not raised.
+
+Still WatchF / `_shared` (separate PRs, not this repo):
+
+- `HostHeavyLease.acquire` default pair `cdp_provider + host:heavy`
+- `fuse.py` / dispatcher callers that pass `--resource-key host:heavy` for panel
+  audit (DOM-Q1 receipt `rcp_3991e8ed796d`)
+- `auditgpt.py`, `auditpx.py`, Gemini/Antigravity, `cdp_chatgpt_code.py`
+
+Required argv for DOM-Q1 `/fwf` Stage 2 ChatGPT lane:
+
+```text
+resource-request --purpose cdp_provider --resource-key cdp:chatgpt --role chrome_gpt --priority 50
+```
+
+Perplexity: `--resource-key cdp:perplexity --role chrome_ppl --slot-key <model>`.
+Gemini: `--resource-key cdp:gemini --role chrome_gemini`. CCTV is already
+`--resource-key cdp:tv --role chrome_tv` in Tsignal.
 
 ## Open questions for review
 
@@ -297,4 +336,6 @@ Consequence, stated so the two plans do not drift:
    are chosen for the same reason HRL-R2 fixed capacity at 1: a measured, environment-derived
    capacity drifts per session and cannot be reasoned about from a readback.
 
->> APPROVAL NEEDED - reply `GO CDP POOL SPLIT R2` to authorize implementation
+Continuation CP-7 is authorized by the 2026-09-06 named-pool decision. Do not
+re-request `GO CDP POOL SPLIT R2`. WatchF/`_shared` CP-3 adapters still need
+their own PRs.

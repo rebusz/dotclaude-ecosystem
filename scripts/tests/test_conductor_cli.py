@@ -271,3 +271,58 @@ def test_conductorctl_resource_request_routing_and_slot_key(
     assert out3["cdp:perplexity"]["live_counts"]["ACTIVE"] == 1
     assert out3["cdp:chatgpt"]["live_counts"]["ACTIVE"] == 1
 
+
+def test_resource_request_stale_cdp_on_heavy_exits_nonzero(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    """DOM-Q1 argv: cdp_provider + host:heavy and no role must not look successful."""
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+
+    code = conductorctl.main(
+        [
+            "resource-request",
+            "--purpose",
+            "cdp_provider",
+            "--resource-key",
+            "host:heavy",
+            "--attempt-id",
+            "dom-q1-plan-audit",
+            "--agent-instance",
+            "codex-dom-q1",
+        ]
+    )
+    assert code == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "ERROR"
+    assert "host:heavy is not a CDP pool" in receipt["error_message"]
+
+
+def test_resource_request_stale_heavy_with_role_admits_named_pool(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    monkeypatch.setenv("TDCONDUCTOR_DIR", str(tmp_path))
+    from scripts import conductorctl
+
+    code = conductorctl.main(
+        [
+            "resource-request",
+            "--purpose",
+            "cdp_provider",
+            "--resource-key",
+            "host:heavy",
+            "--role",
+            "chrome_gpt",
+            "--attempt-id",
+            "dom-q1-gpt",
+            "--agent-instance",
+            "codex-dom-q1",
+            "--priority",
+            "50",
+        ]
+    )
+    assert code == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "SUCCESS"
+    assert receipt["result"]["state"] == "ACTIVE"
+    assert receipt["result"]["resource_key"] == "cdp:chatgpt"

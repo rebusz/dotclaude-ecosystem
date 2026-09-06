@@ -71,6 +71,18 @@ VALID_PURPOSES = frozenset(
         "cdp_tv",
     }
 )
+CDP_PURPOSES = frozenset(
+    purpose for purpose in VALID_PURPOSES if purpose == "cdp_provider" or purpose.startswith("cdp_")
+)
+CDP_ROUTING_ERROR = (
+    "CDP purpose requires --role chrome_ppl|chrome_gpt|chrome_gemini|chrome_tv "
+    "or --resource-key cdp:perplexity|cdp:chatgpt|cdp:gemini|cdp:tv; "
+    "host:heavy is not a CDP pool"
+)
+
+
+def _is_cdp_purpose(purpose: Optional[str]) -> bool:
+    return bool(purpose) and purpose in CDP_PURPOSES
 
 
 def resolve_resource_key(
@@ -78,14 +90,26 @@ def resolve_resource_key(
     role: Optional[str] = None,
     resource_key: Optional[str] = None,
 ) -> str:
-    """Resolve target resource pool from explicit key, CDP role, or purpose."""
+    """Resolve target resource pool from explicit key, CDP role, or purpose.
+
+    Generic ``cdp_provider`` is not a pool. Stale adapters still pass
+    ``host:heavy`` with a CDP purpose; that pair is dropped so role or a named
+    ``cdp:*`` key can route. A CDP purpose without a chrome_* role or ``cdp:*``
+    key is refused rather than falling through to ``host:heavy``.
+    """
+    if resource_key == RESOURCE_KEY and _is_cdp_purpose(purpose):
+        resource_key = None
     if resource_key:
         return resource_key
     if role and role in ROLE_TO_RESOURCE_KEY:
         return ROLE_TO_RESOURCE_KEY[role]
     if purpose and purpose in PURPOSE_TO_RESOURCE_KEY:
         return PURPOSE_TO_RESOURCE_KEY[purpose]
+    if _is_cdp_purpose(purpose):
+        raise ValueError(CDP_ROUTING_ERROR)
     return RESOURCE_KEY
+
+
 _PYTHON_EXECUTABLE_RE = re.compile(r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?$", re.IGNORECASE)
 _PYTEST_OPTION_VALUES = frozenset(
     {

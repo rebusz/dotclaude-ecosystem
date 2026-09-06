@@ -22,7 +22,9 @@ class ConductorScheduler:
 
     @staticmethod
     def _resource_purpose(item: WorkItem) -> Optional[str]:
-        if item.job_kind in {"pytest_full", "pytest_heavy", "playwright", "cdp_provider"}:
+        # CDP jobs are admitted on named cdp:* pools by the submitting adapter.
+        # Checking host:heavy here serialised prompts behind pytest (2026-08-27).
+        if item.job_kind in {"pytest_full", "pytest_heavy", "playwright"}:
             return item.job_kind
         return None
 
