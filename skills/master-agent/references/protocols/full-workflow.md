@@ -33,7 +33,7 @@ Wdrożony renderer ma dołączyć kontrakt i rolę v2; dopóki go nie ma, powyż
 komenda używa aktualnych promptów v1. Nie twierdź, że samo istnienie tego pliku
 zmieniło runtime.
 
-Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: low/medium dla
+Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: instant/medium dla
 prostych odczytów i zmian, high dla ograniczonej implementacji, xhigh dla
 złożonego audytu/integracji. Bez klasyfikacji użyj xhigh. Pro wymaga zapisanego
 powodu eskalacji: konkretnego nierozwiązanego problemu i oczekiwanego rezultatu.

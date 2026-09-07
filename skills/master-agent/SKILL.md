@@ -95,7 +95,7 @@ author substantive implementation and independent review. The approved GPT
 Sidecar 2 workflow may assign bounded local work to explicit Luna/Terra/Sol
 App Server workers. Astra and Pro require a concrete escalation reason;
 transport failures never trigger escalation or duplicate submission. Use
-low/medium for straightforward tasks, high for components, xhigh for complex
+instant/medium for straightforward tasks, high for components, xhigh for complex
 review/integration, and verify actual model/effort against the assignment.
 Preserve actual stamp-v2 ownership, dispatcher dry-run, Conductor
 admission, attempt caps and terminal uncertain-submit behavior. Do not invent
