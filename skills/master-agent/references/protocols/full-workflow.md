@@ -69,6 +69,22 @@ osobne granice trigger/deploy/destrukcji pozostają. Wykonaj rolę
 i rozstrzyga, CDP tworzą istotny kod i niezależne review, lokalny Codex
 przekazuje pliki, stosuje zmiany, testuje i prowadzi Git zgodnie z obecną
 polityką pracy. Awaria CDP nie daje automatycznie zgody na autorstwo Astry.
+**Równoległość i postęp.** Blokujący warunek dotyczy zależnego etapu i jego
+zasobu, nie całego zadania. Gdy jedna lane jest zajęta albo odpowiedź pozostaje
+niepewna, kontynuuj niezależne, już autoryzowane prace: prompt/specyfikację,
+przygotowanie pakietu, walidację zakończonego wycinka i niekolidujące przypisania.
+Nie ponawiaj niepewnego wysłania. Brak wymaganego review blokuje clearance i
+landing, ale nie jest nową prośbą o GO dla przygotowania ani naprawy w zakresie.
+
+Kilka promptów CDP może działać równolegle, jeśli adapter przypisuje każdemu
+własną kartę/target i odczytuje odpowiedź z tego samego targetu. Nie traktuj
+całego profilu Chrome jak pojedynczego zadania obliczeniowego. Współdzielone
+operacje uruchomienia/odzyskiwania profilu muszą respektować wszystkich aktywnych
+właścicieli; wejście i odpowiedź wymagają izolacji per zlecenie. Jeżeli obecny
+adapter używa dowolnej gotowej karty albo serializuje cały profil, zapisz to
+jako ograniczenie implementacji. Nie usuwaj samego locka przed izolacją kart
+i nie przedstawiaj zajętego profilu jako braku możliwości równoległości CDP.
+
 Tylko ciężkie pytesty używają `host:heavy`. CDP korzysta z niezależnych pul
 `cdp:*` i nie czeka na lease pytestów ani recovery `host:heavy`. Przeglądarka
 i Playwright nie są heavy. Zachowaj ownership i zwalniaj każdą pulę po jej pracy.

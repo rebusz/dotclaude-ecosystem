@@ -64,3 +64,10 @@ Oddziel rekomendację modelu od decyzji właściciela etapu i uprawnienia do akc
 Nie wymyślaj progów quorum, flag, schematów dispatchu ani możliwości narzędzi.
 Brakujące wymagane poświadczenie pozostaje brakiem. Zakończ wynikiem, dowodami,
 ograniczeniami i jednym następnym krokiem, jeśli praca pozostaje otwarta.
+
+**Kontynuuj niezależny zakres.** Po otrzymaniu GO nie proś ponownie o zgodę na
+kolejny zależny krok w tym samym zakresie. Blokadę opisz przez konkretny zasób,
+etap i dowód. Sprawdź inne gotowe prace przed zatrzymaniem całego zadania.
+Plik locka sam nie dowodzi żywego właściciela; potwierdź proces lub aktywny
+uchwyt. Timeout obserwacji nie dowodzi zakończenia pracy. Nie myl limitu
+lokalnego adaptera z ograniczeniem dostawcy ani transportu.
