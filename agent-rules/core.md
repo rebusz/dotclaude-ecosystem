@@ -27,13 +27,14 @@
 - Assess whether work splits into independent lanes; run or delegate them concurrently when the tooling supports it.
 - GPT coding, plan-audit, and implementation-review work uses signed-in `chrome_gpt` ChatGPT CDP and fails closed; Claude CLI and Codex CLI are never workflow lanes. The separate resolver-owned `purpose=latency_critical_runtime` Codex CLI exception remains limited to registered advisory runtime contexts such as OpusF scenario production; it is not a workflow lane. Fixed panel: signed-in `chrome_gpt` ChatGPT CDP, Antigravity `gemini-3.7-flash-high` (Gemini CDP `gemini-3.7-flash` fallback), and the five-model Perplexity CDP roster. Use the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost. Perplexity Max is the bounded **CoderPX** on-demand lane: an agent submits one validated packet through WatchF's Conductor-gated `chrome_ppl` lifecycle, records response + manifest, then verifies and lands any justified result. CoderPX never auto-retries, marks Ready, merges, or bypasses repo gates. Protocol + packet template: `D:/APPS/_shared/coderpx/README.md`.
 - An approved audited plan (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carries standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens. Re-ask only for scope expansion, unresolved failure/conflict, a real-money/Combine trigger, a destructive action, or a pause.
+- Operator update (2026-09-07): choose model and effort for task difficulty instead of defaulting to Pro/Astra. Use lower effort for straightforward work, Sol high/xhigh for complex code/review, and record a concrete reason before Pro/Astra escalation. Transport failures never justify escalation or duplicate submission. The approved GPT Sidecar 2 workflow permits explicit Luna/Terra/Sol/Astra local App Server workers; this is separate from the independent review panel and supersedes local-worker exclusions for that workflow. Gemini audit pins are 3.8 Flash as verified in the installed runner, superseding the older 3.7 text above.
 - Validate each slice; final reports state changes, tests, remaining work, and repo state.
 
 ## Conductor Host-Resource Gate
 
-- Conductor reserves capacity-one `host:heavy` for measured heavy local tests, builds, stress runs, and replays; acquire before launch.
-- CDP uses independent pools (`cdp:chatgpt`, `cdp:perplexity`, `cdp:gemini`), never `host:heavy`; required leases stay visible in readback.
-- Non-heavy work (focused tests, docs, Git, readback) needs no heavy lease.
+- Only heavy pytest runs use Conductor's capacity-one `host:heavy` lease.
+- CDP uses its independent `cdp:*` pools and never waits for `host:heavy`.
+- Playwright/browser work, builds, replays, docs, Git and readback are not heavy tasks; focused pytest keeps its existing lightweight classification.
 - A bounded child may inherit an active attempt-scoped
   `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
   stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There

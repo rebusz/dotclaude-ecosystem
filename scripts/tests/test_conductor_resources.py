@@ -935,6 +935,8 @@ def test_cross_contamination_pytest_on_cdp_and_cdp_on_host_heavy(tmp_path: pathl
     manager_cdp = HostResourceManager(store, resource_key="cdp:perplexity")
 
     # Pytest on cdp:* is refused
+    with pytest.raises(ValueError, match="cannot consume 'host:heavy'"):
+        manager_heavy.request(purpose="playwright", attempt_id="at-not-heavy", agent_instance="ag-not-heavy")
     with pytest.raises(ValueError, match="cannot consume CDP pool"):
         manager_cdp.request(purpose="pytest_full", attempt_id="at-cross-1", agent_instance="ag-cross-1")
     with pytest.raises(ValueError, match="cannot consume CDP pool"):
@@ -1055,6 +1057,11 @@ def test_cdp_tv_purpose_routes_to_cdp_tv_pool():
     """Guards the purpose path; only the role path was asserted before."""
     assert resolve_resource_key(purpose="cdp_tv") == "cdp:tv"
     assert resolve_resource_key(purpose="cdp_tv") != RESOURCE_KEY
+
+
+def test_focused_pytest_has_no_resource_key_mapping():
+    with pytest.raises(ValueError, match="does not acquire a host resource"):
+        resolve_resource_key(purpose="pytest_focused")
 
 
 def test_cdp_tv_purpose_is_refused_on_host_heavy(tmp_path: pathlib.Path):

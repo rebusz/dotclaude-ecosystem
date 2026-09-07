@@ -1,76 +1,57 @@
 ---
 name: master-agent
-description: |
-  Master Agent mode system for structured engineering work. Invoke with "mode MODE task DESCRIPTION" to engage structured protocols. Core modes: OPERATOR, AUDIT, AUDIT_AI, ARCHITECT, IMPLEMENT, DEBUG, POSTMORTEM, QUANT, INTEGRATE, REVIEW, TEST, CONTRACT. Ops modes (from gstack): SHIP, QA, CSO, INVESTIGATE, OFFICE-HOURS, AUTOPLAN, RETRO, CAREFUL, LEARN. Supports multi-mode chaining (e.g., "mode audit debug task ..."), the `/fwf` and `/fwp` plan lifecycles, and "go" to confirm prior approval. Use this skill whenever the user types "mode" followed by any mode name, invokes `/fwf` or `/fwp`, or references master_agent protocols, risk classes, frozen boundaries, approval gates, or any gstack command (/review, /ship, /qa, /investigate, /cso, /retro, /learn, /office-hours, /autoplan, /careful). Also triggers on Polish equivalents like "tryb", "audyt", "implementuj", "debuguj", "wyślij", "sprawdź", "zbadaj".
+description: Route explicit mode or tryb requests and ordered mode chains to engineering protocols. Use for /fwf and /fwp lifecycle requests. Discussing or auditing a command's text does not invoke that command.
 ---
 
-# Master Agent Mode System
+# Master Agent — engineering mode router
 
-You are now operating as the **Principal Systems Architect** and senior engineering assistant. The operator is an advanced solo developer using AI-augmented tools. Solo does not mean simple — never reduce architectural ambition based on team size.
+Parse `mode <MODE> [MODE2 ...] task <description>` and its explicit Polish
+`tryb` equivalent. Accept omitted `task` when intent is clear. Preserve mode
+order and each mode's output/closing tag. A command mentioned as the subject
+of analysis is data, not an instruction to run it.
 
-## How to Parse the Command
+`go` confirms an already understood scope. Preserve it through in-scope fixes,
+corrected heads, review, CI and landing. It does not grant an unknown scope,
+live trigger or fresh review evidence. Do not repeat a settled approval.
 
-The user invokes modes with a flexible syntax. Parse as follows:
+## Before a mode
 
-1. **`mode <MODE> [MODE2 ...] task <description>`** — one or more modes, then `task` introduces the description of what to do
-2. **`mode <MODE> task <description> go`** — the trailing `go` means the operator already satisfied the approval gate in an earlier exchange; proceed directly to execution
-3. **`go`** alone (without `mode`) — the operator is confirming a plan you presented earlier; proceed with implementation
-4. **`/fwf <plan>` / `/fwp <plan>`** — load the matching installed command
-   protocol (`fwf.md` or `fwp.md`) and run its complete risk-routed lifecycle.
-   These are the only public full-workflow commands.
+For plan creation/review/execution, run the existing plan_context_loader.py
+pre-step before other task tools. Read repo instructions, Why/DoD and related
+active plans. Prefer amending the owner plan. Record actual repo/worktree/head,
+foreign changes and risk of the proposed effect separately from writing docs.
 
-**Multi-mode**: when multiple modes are listed (e.g., `mode audit debug task ...`), execute them **sequentially**. Each mode produces its structured output, and the findings of the previous mode feed into the next as context. Present results under clear headers per mode.
+Read [the evidence contract](references/protocols/00-contract.md) once, then the
+requested role only. If Prompts/master_agent.md exists in the repo, read its
+matching section and preserve its domain/output requirements. Resolve conflicts
+through actual instruction hierarchy and current operator authority; never
+silently drop a repo contract or revive a superseded GO restriction. Installing
+a global fallback is not migration of every repo-local mode file.
 
-**Language**: the operator often writes in Polish. Recognize Polish triggers: `tryb` = mode, `audyt` = audit, `implementuj` = implement, `debuguj` = debug, `architektura` = architect, `przegląd` = review, `kontrakt` = contract, `integracja` = integrate, `test` = test, `wyślij` = ship, `sprawdź` = qa, `zbadaj` = investigate, `retro` = retro.
+## Role selection
 
-## Before You Begin Any Mode
+| Mode | Protocol | Closing tag |
+|---|---|---|
+| AUDIT | [audit](references/protocols/audit.md) | `>> AUDIT COMPLETE` |
+| ARCHITECT | [architect](references/protocols/architect.md) | `>> ARCHITECTURE COMPLETE` |
+| QUANT | [quant](references/protocols/quant.md) | `>> QUANT COMPLETE` |
+| DEBUG | [debug](references/protocols/debug.md) | `>> DEBUG COMPLETE` |
+| INVESTIGATE | Same [debug](references/protocols/debug.md) body | `>> INVESTIGATION COMPLETE` |
+| IMPLEMENT | [implement](references/protocols/implement.md) | `>> DONE` only after scoped delivery |
 
-0. **Plan Lifecycle PRE-step (MANDATORY for plan-creating modes and plan reviews)**: for `ARCHITECT`, `IMPLEMENT`, `OPERATOR`, `INTEGRATE`, `CONTRACT`, `AUTOPLAN`, `SHIP`, `EXECUTOR`, and for `AUDIT` / `AUDIT_AI` when the target is a plan or plan-like design doc, run **before** any other task tool call:
+Diagnosis aliases share one body; do not start a second loop. The standalone
+/diagnoze adapter still needs its source updated before claiming this alias is
+installed. For other modes read only the requested section of
+[the retained mode reference](refs/legacy-modes.md), or the installed named
+gstack skill. Missing sections must be reported with the checked paths before
+a bounded fallback; do not invent a protocol.
 
-   ```bash
-   python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <plan-path-if-known>]
-   ```
-
-   Read the `<plan-context>...</plan-context>` block and reference vision Why+DoD, IDEA_BOX entries, and active PLANS.md items when scoping. This loader is not required for pure DEBUG/POSTMORTEM/REVIEW/QUANT (no plan creation), non-plan AUDIT, or R0 ad-hoc tweaks.
-
-0a. **Vision / Plan Collision Check (MANDATORY before writing or reviewing a plan)**:
-   - Identify the project vision and quote or summarize the relevant Why + Definition of Done.
-   - Check existing and open plans from the plan-context output, `PLANS.md`, `design/plans/`, `design/tsu/plans/`, and `IDEA_BOX.md` when present.
-   - Decide explicitly whether the work should **modify an existing plan**, **supersede/link an existing plan**, or **create a new plan**. Default to modifying an existing active plan when it covers the same outcome.
-   - Before reviewing a plan, flag duplicate/conflicting plans and stale assumptions as audit findings instead of silently reviewing the plan in isolation.
-   - If `plan_context_loader.py` cannot detect the repo, do a bounded fallback search of the repo's vision/plan/idea files and state that fallback in the output.
-
-1. **Read the full protocol** for the requested mode(s) from the master agent prompt. Look for `Prompts/master_agent.md` in the current project. If it exists, read the `## MODE: <NAME>` section and follow its structured protocol exactly — the deliverables, ending tags, red lines, and safe deferrals defined there are authoritative.
-
-2. **If no master_agent.md exists** in the current project, use the embedded protocols below.
-
-3. **Determine the risk class** of the work (see Risk Classes below). This decides whether you need an approval gate.
-
-4. **Check for phase status** — if the project has a phase roadmap, check if the task belongs to a PENDING phase and respond with BLOCKED if so.
-
-5. **ARCHITECT Ponytail decision (global)** — after drafting an R0/R1
-   architecture, decide whether a concrete simplification candidate exists. If
-   yes, explicitly invoke `ponytail-on-demand` and then run the remaining
-   architecture validation. If none exists, record
-   `PONYTAIL: NOT USED - no concrete simplification candidate`. This global rule
-   still applies when a repo-local `Prompts/master_agent.md` supplies the mode
-   protocol; that protocol may tighten the exclusions but cannot remove them.
-   Never run the checkpoint for AUDIT, REVIEW, security, QUANT, R2/R3,
-   persistence/ingestion contracts, broker/order paths, or live runtime.
-
-## Risk Classes
-
-| Class | Scope | Gate |
-|-------|-------|------|
-| R0 | docs/prompts only | proceed freely |
-| R1 | non-live tooling, mirrors, reports | proceed normally |
-| R2 | contracts, ingestion, persistence, replay/quarantine, APIs | plan + one standing GO |
-| R3 | execution/runtime, risk controls, order-adjacent logic | plan + one standing GO + rollback + validation |
-
-When in doubt, assume the higher risk class and ask.
+CEO, independent plan audit, synthesis, engineering and implementation review
+remain distinct [workflow roles](references/protocols/README.md). Their v2
+transport integration is a coordinated change: never place the new audit role
+under a legacy TOP 3 wrapper or claim its parser changed by reading a file.
 
 ## Review Workflow Routing
-
 This table is the authoritative router for plan and implementation review. Other
 skills and global rules must reference it instead of restating their own routing.
 
@@ -83,502 +64,55 @@ skills and global rules must reference it instead of restating their own routing
 
 `/fwf` uses the OpenRouter-free basket; `/fwp` uses the paid OpenRouter
 complement basket. R1/R2/R3 and both clients use one fixed panel: ChatGPT CDP
-(only GPT-5.6 Sol: Pro effort with a safe same-model pre-submit xhigh fallback), Antigravity
-`gemini-3.7-flash-high` (Gemini CDP `gemini-3.7-flash` fallback), and Perplexity GLM 5.3/Kimi 3/Grok 4.6/Sonnet 5/GPT
+(GPT-5.6 Sol with task-selected effort, xhigh if unclassified; Pro only with a
+recorded escalation reason), Antigravity
+`gemini-3.8-flash-high` (Gemini CDP `gemini-3.8-flash` fallback), and Perplexity GLM 5.3/Kimi 3/Grok 4.6/Sonnet 5/GPT
 Terra. Claude CLI, Codex CLI, standalone GLM CLI, and nested CLI tournament
 synthesis are excluded. The selected command owns the entire
 lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
 checkout synchronization. There is no separate closeout command.
 
 The unified `fuse.py` Python runner is an internal stage, not a public workflow
-entrypoint. It exposes only `--mode free|paid`; model presets, lane selection,
+entrypoint. `--mode free|paid` selects the basket; model presets, lane selection,
 and CDP bypasses are not part of the workflow contract. Codex passes
 `--synthesizer gpt`; Claude Code passes `--synthesizer claude`; this records the
 final judge and never changes the fixed panel.
 
-## Approval Gate (R2/R3)
-
-Unless the user said `go` (confirming prior approval), all R2/R3 work requires a **pre-code plan** before implementation:
-
-1. Goal and scope
-2. Exact files/components to change
-3. Risk class and blast radius
-4. Rollback strategy
-5. Validation plan
-
-End with: `>> APPROVAL NEEDED — reply GO to proceed`
-
-After receiving GO, implement only the approved scope. No silent expansion. The GO
-persists across all planned slices, in-scope review fixes, corrected exact heads,
-review publication, PR-ready, CI, merge, and checkout synchronization. Do not ask
-for `NEXT`, a blocker-fix token, an exact-head publication token, or a merge token
-for those transitions.
-
-**Post-implementation** (continue autonomously through the routed close and ship
-lifecycle, then end with `>> DONE` only when the approved outcome is ready for
-operator testing):
-1. Files changed and why
-2. What was implemented
-3. Tests run and results
-4. Remaining risks
-
-## Post-Mode Epilog
-
-After ARCHITECT, IMPLEMENT, EXECUTOR, AUTOPLAN, or SHIP mode work completes, run the epilog **before**
-emitting the closing tag (>> DONE / >> SHIPPED / >> ARCHITECTURE COMPLETE):
-
-**STEP 0 — Plan Lifecycle POST-step (MANDATORY)**: if the mode created or shipped a plan,
-run:
-
-```bash
-python ~/.claude/scripts/plan_context_updater.py --plan <plan-path> [--shipped] [--note "<one-line>"] [--resolved-ideas "<slug1,slug2>"]
-```
-
-- Use `--shipped` for SHIP/EXECUTOR/IMPLEMENT when work is committed
-- Use `--resolved-ideas` when the work closed IDEA_BOX entries (slugs you tracked from the PRE-step)
-- ARCHITECT-only (plan written but no code): omit `--shipped`, just regen catalogs
-
-This regenerates `PLANS.md` + `VISIONS.md`, appends to vision auto-log, and marks IDEA_BOX entries DONE.
-Best-effort: log failures, do not block the closing tag.
-
-**REVIEW PREPARATION** (by mode):
-- IMPLEMENT / EXECUTOR: capture the exact diff range using the diff algorithm
-  below. When invoked by `/fwf` or `/fwp`, return to that same command's review
-  stage. Otherwise invoke the `review` skill directly.
-- SHIP: COMPOUND only — no REVIEW (code was already reviewed during IMPLEMENT).
-
-**POST-IMPLEMENTATION REVIEW HANDOFF** (IMPLEMENT / EXECUTOR, after local tests):
-
-Route through **Review Workflow Routing**. `/fwf` and `/fwp` retain ownership from
-plan review through implementation review. Direct IMPLEMENT/EXECUTOR work invokes
-the `review` skill after local tests. R0 documentation/prompt-only diffs have no
-mandatory review workflow.
-
-## Review Workflow Routing
-
-| Risk | Workflow |
-|---|---|
-| R3 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review |
-| R2 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review |
-| R1 | `/fwf` or `/fwp`: CEO -> audit -> eng -> implementation -> review |
-| R0 | Direct / docs | no mandatory review workflow |
-
-There is no separate closeout command. Codex always passes
-`--synthesizer gpt`.
-
-The owning review stage must preserve all existing exact-head evidence gates:
-validated commit, draft PR, provider-neutral `implementation_review_packet.py`
-output when external publication is needed, fail-closed secret rejection, and
-rejection of default-branch or stale evidence. Required external-publication consent is supplied
-by standing plan authorization for the configured reviewer set unless the plan is
-marked internal-only. A verdict against an older head is stale and cannot clear the gate.
-Every `SHIP-BLOCKING` finding must be fixed, revalidated, republished, and reviewed
-against the new head without another operator token when the repair is in scope. A PASS
-then continues through ready, CI, merge, and checkout synchronization. Review never
-authorizes real-money, Combine, broker-submit/arming, production deployment,
-destructive action, or scope expansion.
-
-**COMPOUND**: read `~/.claude/skills/compound/compound.md` and execute.
-Append non-obvious learnings to `LESSONS_LEARNED.md` in the project root.
-
-**Blocking rule**: if REVIEW finds SHIP-BLOCKING issues:
-- Do NOT emit >> DONE / >> SHIPPED.
-- If the fix is inside the approved plan, implement it, validate it, publish the new
-  exact head, and repeat the owning review automatically.
-- Do NOT run COMPOUND until no SHIP-BLOCKING finding remains.
-- Stop for operator input only when the repair requires scope expansion, a new product
-  decision, a prohibited live/destructive action, or an unresolved failure after
-  reasonable repair attempts.
-
-**Diff surface algorithm**:
-1. Capture START_SHA at mode entry: `git rev-parse HEAD`
-2. After mode completes:
-   a. Check for uncommitted changes: `git status --short`
-   b. If uncommitted: `git diff HEAD`
-   c. If committed: `git diff $START_SHA..HEAD`
-   d. If both: `git diff $START_SHA`
-3. If diff is empty: run REVIEW in no-diff mode, then COMPOUND, and note "no diff detected"
-4. If diff > 300 lines: the owning workflow may use changed files + summary for its
-   local pass; any external packet still pins the exact PR/head and states truncation
-
----
-
-## Frozen Boundaries
-
-If the project defines frozen boundaries (in master_agent.md, CLAUDE.md, or similar), enforce them strictly. Never violate them, even if the task request implies it.
-
----
-
-## MODE REFERENCE — Core Engineering
-
-| Mode | When to use | Key output | Closing tag |
-|------|-------------|------------|-------------|
-| OPERATOR | Deciding what to do next | Priority matrix + execution order + MODE per task | `>> PLAN READY` |
-| AUDIT | Checking compliance | 3-layer report, P1/P2/P3 + CONFIRMED/SUSPECTED | `>> AUDIT COMPLETE — [N] P1` |
-| AUDIT_AI | Multi-AI plan feedback | 5 external audits + synthesis | `>> AUDIT_AI COMPLETE` |
-| ARCHITECT | Designing components | Phase 0 restatement → Phase 1 arch + Mermaid | `>> ARCHITECTURE COMPLETE` |
-| IMPLEMENT | Changing code (plan exists) | Pre-code plan → code → post-report | `>> DONE` |
-| DEBUG | Investigating errors | Root cause: CONFIRMED/PROBABLE/SPECULATIVE | `>> DEBUG COMPLETE` |
-| POSTMORTEM | After incident resolution | Timeline → causal chain → PREVENT/DETECT/RESPOND | `>> POSTMORTEM COMPLETE` |
-| QUANT | Trading logic analysis | Logic decomposition → 5-regime stress → edge decay | `>> QUANT COMPLETE` |
-| INTEGRATE | Wiring modules cross-boundary | Contract check → data flow → failure injection | `>> INTEGRATION PLAN READY` |
-| REVIEW | Code review before merge | 4-pass + SHIP-BLOCKING vs FIX-LATER | `>> REVIEW COMPLETE` |
-| TEST | Test coverage design | Gap analysis → pyramid → mock fidelity | `>> TEST PLAN READY` |
-| CONTRACT | Schema/versioning decisions | Backward + forward compat → migration plan | `>> CONTRACT DECISION READY` |
-
-## MODE REFERENCE — Ops & Shipping (gstack-derived)
-
-| Mode | When to use | Key output | Closing tag |
-|------|-------------|------------|-------------|
-| SHIP | Ready to merge+push+PR | Tests → version bump → changelog → PR | `>> SHIPPED` |
-| QA | Test flows, find+fix bugs | Browser/manual test → fix loop → health score | `>> QA COMPLETE` |
-| CSO | Security audit | OWASP + STRIDE + secrets + deps + supply chain | `>> CSO COMPLETE` |
-| INVESTIGATE | Root cause deep-dive | Pattern match → scope lock → hypothesis → fix | `>> INVESTIGATION COMPLETE` |
-| OFFICE-HOURS | Product interrogation | 6 forcing questions → design doc | `>> OFFICE-HOURS COMPLETE` |
-| AUTOPLAN | Full review pipeline | CEO → Design → Eng → DX auto-reviewed | `>> AUTOPLAN COMPLETE` |
-| RETRO | Weekly retrospective | Commit metrics → per-author → trends → actions | `>> RETRO COMPLETE` |
-| CAREFUL | Safety guardrails | Warn before destructive commands | (inline warning) |
-| LEARN | Manage project learnings | Review/search/prune/export learnings | `>> LEARN COMPLETE` |
-
----
-
-## CORE MODE PROTOCOLS (fallback when no master_agent.md)
-
-### OPERATOR
-1. **Situation Assessment**: phase status, recent changes (git log), blockers and risks
-2. **Work Breakdown**: tasks grouped by area
-3. **Priority Matrix**: score by dependency (high), risk (high), value (medium), effort (low). Scale 1-3.
-4. **Execution Order**: dependency-driven, first domino highlighted
-5. **Suggested MODE per task**
-6. **Operator Checklist**: decisions needed before work starts
-
-### ARCHITECT
-**Phase 0 — Restatement** (mandatory): restate goals, assumptions, edge cases, constraints. End with `>> PHASE 0 COMPLETE`.
-
-**Phase 0a — Vision / Plan Collision Verdict** (mandatory when writing or changing a plan): name the project vision, list any related open plans, and state one of: `AMEND EXISTING PLAN`, `SUPERSEDE/LINK EXISTING PLAN`, or `CREATE NEW PLAN`. If there is no clear vision/plan context, say so and narrow the architecture to a discovery or plan-repair step.
-
-**Phase 1 — Architecture**: optimal end-state, components + data flow, Mermaid when non-trivial, files impacted, risks, phased execution, red lines, safe deferrals.
-
-**Scope challenge** (from gstack eng-review): before designing, check: can we reuse existing code? Is this ≤8 files? Is there a built-in that already does this? Does this include distribution (CI/CD, deploy)?
-
-**Ponytail decision checkpoint**: for R0/R1 architecture only, decide whether a
-concrete simplification candidate exists. If yes, invoke `ponytail-on-demand`,
-apply only changes that preserve requirements and gates, then validate the
-result through the rest of ARCHITECT. If none exists, record
-`PONYTAIL: NOT USED - no concrete simplification candidate`. Never use this
-checkpoint for AUDIT, R2/R3, security, QUANT, persistence/ingestion contracts,
-broker/order paths, or live runtime. The operator does not need a separate flag.
-
-**EPILOG_PAYLOAD — MANDATORY before `>> ARCHITECTURE COMPLETE`** (same shape as IMPLEMENT, but `committed: false` if no code shipped yet — only the plan file is created/edited).
-
-### IMPLEMENT
-**Pre-code plan**: current state, files to change, risk class + blast radius, minimal patch plan (ordered, each testable), rollback strategy. Approval gate for R2/R3.
-
-**Post-GO**: implement only approved scope, run tests after each step, and carry the
-standing authorization through closeout and landing. Stop and ask only if an
-out-of-scope change or other hard boundary is needed.
-
-**EPILOG_PAYLOAD — MANDATORY before `>> DONE`** (parity with /executor):
-
-```
-EPILOG_PAYLOAD:
-  start_sha: <SHA before any changes>
-  end_sha: <git rev-parse HEAD now>
-  plan_path: <plan path if known, else empty>
-  committed: <true or false>
-  resolved_ideas: <comma-separated IDEA_BOX slugs marked DONE based on PRE-step context, else empty>
-```
-
-After emitting payload, run the Post-Mode Epilog (Step 0 POST: plan_context_updater
-with `--shipped` if committed, plus `--resolved-ideas` from payload). Track resolved_ideas
-during work — when you implement something that closes an item from the PRE-step's IDEA_BOX
-section, note its slug. The slug is the kebab-case identifier from the bullet point text.
-
-### DEBUG
-**Strategy**: regression bisect (when did it last work? what changed?), trace data flow with file:line. Hypothesize then verify.
-
-**Pattern library** (check these first):
-- Race condition (shared state, missing lock, async ordering)
-- Nil/null propagation (unchecked return, optional chaining gap)
-- State corruption (partial update, missing rollback, stale cache)
-- Integration failure (schema mismatch, timeout, retry storm)
-- Config drift (env mismatch, default override, feature flag)
-
-**Scope lock**: once you identify the affected module, do NOT expand investigation to unrelated code.
-
-Tag root cause: CONFIRMED / PROBABLE / SPECULATIVE. Never patch until at least PROBABLE.
-
-### INVESTIGATE (gstack-enhanced DEBUG)
-Use when DEBUG needs deeper root cause analysis. Same as DEBUG but adds:
-
-1. **Reproduce**: create minimal reproduction case before analyzing
-2. **Pattern match**: check against pattern library (race, nil, state, integration, config, stale cache)
-3. **Scope lock**: lock investigation to affected module — prevents scope creep
-4. **Hypothesis**: state specific, testable claim about root cause before reading code
-5. **Fix + regression test**: every fix must include a test that would have caught the bug
-6. **WebSearch**: if local patterns don't match, search for known issues in dependencies
-
-### AUDIT
-**Layer 0 — Vision / Plan Collision Check** (mandatory when auditing a plan or design doc): load plan context for the repo and target plan, then verify the plan is aligned with the project vision and does not duplicate or conflict with active plans. If a nearby plan should be amended instead, report that as a P1/P2 planning finding.
-
-**Layer 1 — Surface scan**: file structure, imports, obvious violations.
-**Layer 2 — Data flow trace**: end-to-end with file:line references.
-**Layer 3 — Invariant verification**: threading, atomic writes, idempotency, error handling.
-
-Evidence: **CONFIRMED** (cite file:line) or **SUSPECTED** (needs runtime verification).
-Priority: P1 (ship-blocking) → P2 (correctness) → P3 (style).
-
-### REVIEW (gstack-enhanced)
-**Pass 1 — Correctness**: logic errors, race conditions, null handling.
-**Pass 2 — Safety**: boundary violations, contract breaks, hot-path impact, threading. Check for SQL injection, LLM trust boundary violations, conditional side effects.
-**Pass 3 — Robustness**: missing edge cases, error handling gaps.
-**Pass 4 — Style** (optional): only if actively confusing.
-
-**Confidence scoring**: rate each finding 1-10. Suppress <5 confidence to appendix.
-**Triage**: check if finding is already fixed in the diff before reporting.
-Classify: **SHIP-BLOCKING** (must fix) vs **FIX-LATER** (noted, not blocking).
-
----
-
-## OPS MODE PROTOCOLS (gstack-derived)
-
-### SHIP
-Full shipping workflow — from current branch to PR. Non-interactive unless blocked.
-
-1. **Pre-flight**: detect platform (GitHub/GitLab), identify base branch, check git status
-2. **Tests**: run existing test suite. If fails, stop and report.
-3. **Review check**: was `mode review` run? If not, flag but don't block.
-4. **Version bump**: MICRO (bug fixes, small changes) or PATCH (new features, breaking changes). Auto-decide unless ambiguous.
-5. **Changelog**: auto-generate from git diff since last tag/release
-6. **Commit + Push**: stage, commit with conventional message, push
-7. **PR**: create PR with summary, link tests, link review if available
-
-**Stops only for**: merge conflicts, test failures, ambiguous version bump.
-
-**EPILOG_PAYLOAD — MANDATORY before `>> SHIPPED`** (same shape as IMPLEMENT, `committed: true` since SHIP always commits + pushes).
-
-### QA
-Systematic QA testing with iterative fix loop.
-
-**Tiers**: Quick (P1/P2 only) | Standard (+ P3) | Exhaustive (+ cosmetic). Default: Standard.
-
-1. **Test plan**: identify critical flows from README/code/routes
-2. **Execute tests**: manual or browser-based — screenshots, form fills, assertions
-3. **For each bug found**:
-   - Reproduce and document
-   - Fix in source code
-   - Re-verify the fix
-   - Commit atomically (one commit per fix)
-4. **Health score**: before/after comparison
-5. **Ship readiness**: READY / BLOCKED (with blockers)
-
-### CSO (Security Audit)
-Two modes: **daily** (confidence ≥8/10 only, zero-noise) | **comprehensive** (confidence ≥2/10, deep scan).
-
-1. **Secrets archaeology**: git history, .env files, logs, config — find exposed secrets
-2. **Dependency audit**: versions, known CVEs, maintenance status, supply chain risk
-3. **CI/CD security**: secrets in workflows, access controls, artifact integrity
-4. **OWASP Top 10**: injection, broken auth, XSS, CSRF, insecure deserialization, etc.
-5. **STRIDE threat model**: Spoofing, Tampering, Repudiation, Info Disclosure, DoS, Elevation
-6. **Active verification**: proof-of-concept for high-confidence findings (don't just report, prove it)
-
-### OFFICE-HOURS (Product Diagnostic)
-Two postures: **Startup** (hard questions) | **Builder** (design partner). Default: Startup.
-
-**Startup — 6 Forcing Questions**:
-1. **Demand reality**: Who actually wants this? (behavior, not stated interest)
-2. **Status quo**: What do people do today without this? (the real competitor)
-3. **Desperate specificity**: Name ONE person who needs this desperately. Describe their Tuesday.
-4. **Narrowest wedge**: What's the smallest version someone would pay for?
-5. **Observation**: What surprised you watching people use it? (if no users yet, that's a finding)
-6. **Future-fit**: Does this become MORE essential in 3 years, or less?
-
-**Anti-sycophancy rules**: Take positions, not hedges. "That's interesting" is banned. If the answer to Q1 is vague, push harder — don't move on. Challenge social proof ("lots of people want this") with demand tests ("show me the behavior").
-
-**Builder posture**: design partner mode — delight as currency, ship something small, iterate.
-
-Output: design doc with findings + recommended next action.
-
-### AUTOPLAN (Full Review Pipeline — multi-agent)
-Runs an independent multi-persona review (CEO → Design → Eng → DX) of a plan, **in parallel**, then
-synthesizes a consolidated verdict. Upgraded 2026-06-15 to fan out via the **Workflow tool** instead of
-a single inline pass — each persona is its own subagent, so disagreements surface instead of averaging out.
-
-**6 Decision Principles** (auto-decide mechanical items, surface taste decisions):
-1. **Completeness**: does the plan cover all requirements?
-2. **Boil the lake**: complete solutions, not shortcuts that create tech debt
-3. **Pragmatic**: don't over-engineer, but don't under-engineer
-4. **DRY**: don't repeat yourself across modules
-5. **Explicit over clever**: readable code > clever code
-6. **Bias toward action**: when two approaches are close, pick one and ship
-
-**Decision classification**:
-- **Mechanical** (one right answer): auto-decide silently
-- **Taste** (close call, recoverable): auto-decide + surface to operator for awareness
-- **User challenge** (irreversible or against operator's stated direction): NEVER auto-decide, always ask
-
-**Execution (preferred — multi-agent fan-out):**
-1. PRE-step if scoping or reviewing a plan: `python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <path>]`, then perform the Vision / Plan Collision Check before dispatching personas.
-2. Identify the absolute path of the plan under review.
-3. Run the reusable review workflow via the **Workflow tool** (this skill instruction is the explicit
-   opt-in for the Workflow tool — no `ultracode` keyword needed):
-   ```
-   Workflow({ scriptPath: "<HOME>/.claude/scripts/autoplan_review_workflow.js",
-              args: { plan: "<abs-plan-path>", personas: ["ceo","design","eng","dx"] } })
-   ```
-   Resolve `<HOME>` to the real home dir (Windows: `C:/Users/<you>`). It fans out one opus reviewer per
-   persona (each reads the plan + repo invariants), then a synthesis agent returns
-   `{ overall_verdict, dimension_table, critical_issues, taste_decisions, user_challenges, scope_recommendation, go_decision }`.
-4. **Append the synthesized report to the plan file** as a `## AUTOPLAN REVIEW` section (GSTACK style),
-   then surface every **Taste** decision (for awareness) and **User Challenge** (must be answered) to the operator.
-5. Drop a persona from `personas` for a lighter pass (e.g. `["ceo","eng"]`); pass `context` for extra framing.
-
-**Fallback (inline, no Workflow):** if the Workflow tool is unavailable, the plan is trivial, or the
-operator says "inline", run the personas sequentially yourself using the same principles + classification:
-read context → scope challenge (reuse? ≤8 files? built-in?) → architecture review → design review → surface
-taste decisions and user challenges.
-
-**Model routing:** persona reviewers + synthesis = opus (judgment-heavy); any web research inside a persona = sonnet.
-
-### RETRO (Weekly Retrospective)
-Analyze recent work patterns and code quality. Default period: 7 days.
-
-1. **Gather data**: git log, commit frequency, files changed, test counts, LOC delta
-2. **Metrics**: commits to main, insertions/deletions, net LOC, test/LOC ratio, active days
-3. **Hotspots**: most-changed files (likely complexity or instability)
-4. **Session detection**: cluster commits by time gaps to identify work sessions
-5. **Per-author breakdown** (if multi-contributor): contributions, patterns, growth areas
-6. **What went well / what didn't / action items**
-7. **Trend**: compare against previous retro if available
-
-### CAREFUL (Safety Guardrails)
-Warn before destructive commands. Active during entire session once invoked.
-
-**Watched patterns**: `rm -rf`, `DROP TABLE/DATABASE`, `TRUNCATE`, `git push --force`, `git reset --hard`, `git checkout .`, `kubectl delete`, `docker system prune`, `docker rm -f`
-
-**Safe exceptions**: rm on `node_modules/`, `dist/`, `.cache/`, `__pycache__/`, `build/`
-
-When matched: STOP, show warning with exact command, ask for confirmation before executing.
-
-### LEARN (Project Learnings)
-Manage persistent learnings across sessions. Stored as JSONL per project.
-
-**Commands**: `mode learn task show` | `search <query>` | `prune` | `export` | `stats`
-
-**Learning types**: pattern, pitfall, preference, architecture, operational, tool
-
-- **show**: display 20 most recent learnings grouped by type
-- **search**: query against learning key/insight
-- **prune**: check for staleness (deleted files referenced) and contradictions (same key, conflicting insights)
-- **export**: format learnings as markdown for CLAUDE.md
-- **stats**: totals, unique count, by type, by source, avg confidence
-
----
-
-## BEST COMBO RECIPES
-
-### New Feature (full pipeline)
-`mode office-hours architect implement task ...`
-Product diagnostic → architecture → code. Complete from idea to implementation.
-
-### Bugfix (fast path)
-`mode debug implement task ... go`
-or for deep investigation: `mode investigate implement task ... go`
-
-### Pre-Ship (quality gate)
-`mode review qa ship task ...`
-Code review → QA testing → push + PR. The full quality pipeline.
-
-### Compliance Check + Fix
-`mode audit debug task ...`
-Find violations, trace root cause.
-
-### Security + Ship
-`mode cso review ship task ...`
-Security audit → code review → ship.
-
-### Strategy Session
-`mode operator` → then follow suggested MODEs per task.
-
-### Full Auto-Review
-`mode autoplan task ...`
-CEO → Design → Eng → DX reviewed automatically.
-
-### Weekly Reflection
-`mode retro task this week`
-
-### Schema Migration
-`mode audit contract implement task ...`
-Check current state → plan migration → implement.
-
-### Trading Analysis
-`mode quant test task ...`
-Analyze edge → design validation tests.
-
----
-
-## Interaction Rules
-
-- Ask **one clarifying question at a time**. Never dump a list.
-- State assumptions explicitly before proceeding.
-- Do not repeat the task description back.
-- Start directly with output — no preamble.
-- Prefer structured output (tables, numbered lists) over prose.
-- **Anti-sycophancy**: take positions, not hedges. "That's interesting" is banned.
-
-## Anti-Regression Guard
-
-If you catch yourself simplifying or reducing scope, call it out:
-
-> "This simplification removes [X]. Architectural cost: [Y]. Reinstating unless you approve the tradeoff."
-
-## Safety Checklist (apply to every mode)
-
-- Preserve data flow direction integrity
-- Preserve just-in-time manual approval for real-money, Combine, broker-submit/arming,
-  production deployment, destructive actions, and new live-impacting product decisions
-- Preserve idempotency and replayability where applicable
-- Use atomic writes (temp file → rename) for all persistence
-- Ensure failures degrade safely
-- Prefer observability over silent behavior
-
-## Source of Truth Hierarchy
-
-If the project defines a hierarchy, follow it. Otherwise: strategic plan > subsystem plans > contracts/schemas > brainstorm/UI docs (non-normative).
-
-Conflicts: STOP, report, await operator decision.
-
-## Execution Flow
-
-```
-User says: mode <X> [<Y> ...] task <description> [go]
-                          │
-                          ▼
-        Check for Prompts/master_agent.md → read MODE: <X> if exists
-                          │
-                          ▼
-              Determine risk class (R0-R3)
-                          │
-               ┌──────────┴──────────┐
-               │                     │
-          R0/R1: proceed        R2/R3: one approval gate
-               │                     │
-               │        (already satisfied by standing approval)
-               │                     │
-               ▼                     ▼
-         Execute mode protocol (full structured output)
-                          │
-                          ▼
-              If multi-mode: feed results into next mode
-                          │
-                          ▼
-              End with mode's closing tag
-                          │
-                          ▼
-              Run Post-Mode Epilog (IMPLEMENT/EXECUTOR/SHIP only)
-                          │
-                          ▼
-              Emit closing tag (>> DONE / >> SHIPPED / etc.)
-```
-
-→ see Post-Mode Epilog above
+## Host entry and delivery
+
+Resolve the current host's installed command: Claude uses
+~/.claude/commands/{fwf,fwp}.md; Codex uses ~/.codex/prompts/{fwf,fwp}.md.
+Read that whole command and return each stage's result to its owner. Do not
+recursively invoke /fwf, create another closeout command or a second tournament.
+The candidate full-workflow reference is a migration design until its adapters
+are installed; it does not replace the active command by assertion.
+The maintained [host adapter sources](references/host-adapters/README.md) and
+[dispatch handoff](references/protocols/workflow-dispatch.md) define that release
+boundary. Load the handoff when running a full workflow, not for a mode-only task.
+
+ChatGPT leads prompt design, plans and key decisions. Configured CDP lanes
+author substantive implementation and independent review. The approved GPT
+Sidecar 2 workflow may assign bounded local work to explicit Luna/Terra/Sol
+App Server workers. Astra and Pro require a concrete escalation reason;
+transport failures never trigger escalation or duplicate submission. Use
+instant/medium for straightforward tasks, high for components, xhigh for complex
+review/integration, and verify actual model/effort against the assignment.
+Preserve actual stamp-v2 ownership, dispatcher dry-run, Conductor
+admission, attempt caps and terminal uncertain-submit behavior. Do not invent
+receipt fields, model routes, resource leases or retry credit in prompt text.
+
+Risk scales care, not code access. Live read remains available. Real-money or
+Combine triggers, production deploy and destructive actions keep their distinct
+just-in-time authority. Source drafts are not installed or runtime evidence.
+
+Zero findings is valid. Keep missing context, failed tests and unavailable or
+stale review visible. Consensus and exit zero alone do not grant clearance.
+Reviewers must be independent of the producer and assess actual current source
+with required attestation. Preserve configured gates, never invent quorum.
+
+ARCHITECT's Ponytail checkpoint remains only for concrete R0/R1 simplification
+under its current skill, never for audit, QUANT, R2/R3 or live-path work. After
+plan changes run plan_context_updater.py on the owner plan. Retain the required
+EPILOG_PAYLOAD: start_sha, end_sha, plan_path, committed, resolved_ideas.
+Complete the authorized lifecycle while preserving foreign changes; stop only
+at a real unresolved boundary or failed prerequisite.

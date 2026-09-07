@@ -1,0 +1,379 @@
+# Legacy mode reference
+
+Historical fallback for modes not migrated in prompt-protocols v2.
+Read only the requested non-v2 mode. Shared policy comes from SKILL.md and
+current operator/repo instructions, not duplicated policy below.
+
+## MODE REFERENCE — Core Engineering
+
+| Mode | When to use | Key output | Closing tag |
+|------|-------------|------------|-------------|
+| OPERATOR | Deciding what to do next | Priority matrix + execution order + MODE per task | `>> PLAN READY` |
+| AUDIT | Checking compliance | 3-layer report, P1/P2/P3 + CONFIRMED/SUSPECTED | `>> AUDIT COMPLETE — [N] P1` |
+| AUDIT_AI | Multi-AI plan feedback | 5 external audits + synthesis | `>> AUDIT_AI COMPLETE` |
+| ARCHITECT | Designing components | Phase 0 restatement → Phase 1 arch + Mermaid | `>> ARCHITECTURE COMPLETE` |
+| IMPLEMENT | Changing code (plan exists) | Pre-code plan → code → post-report | `>> DONE` |
+| DEBUG | Investigating errors | Root cause: CONFIRMED/PROBABLE/SPECULATIVE | `>> DEBUG COMPLETE` |
+| POSTMORTEM | After incident resolution | Timeline → causal chain → PREVENT/DETECT/RESPOND | `>> POSTMORTEM COMPLETE` |
+| QUANT | Trading logic analysis | Logic decomposition → 5-regime stress → edge decay | `>> QUANT COMPLETE` |
+| INTEGRATE | Wiring modules cross-boundary | Contract check → data flow → failure injection | `>> INTEGRATION PLAN READY` |
+| REVIEW | Code review before merge | 4-pass + SHIP-BLOCKING vs FIX-LATER | `>> REVIEW COMPLETE` |
+| TEST | Test coverage design | Gap analysis → pyramid → mock fidelity | `>> TEST PLAN READY` |
+| CONTRACT | Schema/versioning decisions | Backward + forward compat → migration plan | `>> CONTRACT DECISION READY` |
+
+## MODE REFERENCE — Ops & Shipping (gstack-derived)
+
+| Mode | When to use | Key output | Closing tag |
+|------|-------------|------------|-------------|
+| SHIP | Ready to merge+push+PR | Tests → version bump → changelog → PR | `>> SHIPPED` |
+| QA | Test flows, find+fix bugs | Browser/manual test → fix loop → health score | `>> QA COMPLETE` |
+| CSO | Security audit | OWASP + STRIDE + secrets + deps + supply chain | `>> CSO COMPLETE` |
+| INVESTIGATE | Root cause deep-dive | Pattern match → scope lock → hypothesis → fix | `>> INVESTIGATION COMPLETE` |
+| OFFICE-HOURS | Product interrogation | 6 forcing questions → design doc | `>> OFFICE-HOURS COMPLETE` |
+| AUTOPLAN | Full review pipeline | CEO → Design → Eng → DX auto-reviewed | `>> AUTOPLAN COMPLETE` |
+| RETRO | Weekly retrospective | Commit metrics → per-author → trends → actions | `>> RETRO COMPLETE` |
+| CAREFUL | Safety guardrails | Warn before destructive commands | (inline warning) |
+| LEARN | Manage project learnings | Review/search/prune/export learnings | `>> LEARN COMPLETE` |
+
+---
+
+## CORE MODE PROTOCOLS (fallback when no master_agent.md)
+
+### OPERATOR
+1. **Situation Assessment**: phase status, recent changes (git log), blockers and risks
+2. **Work Breakdown**: tasks grouped by area
+3. **Priority Matrix**: score by dependency (high), risk (high), value (medium), effort (low). Scale 1-3.
+4. **Execution Order**: dependency-driven, first domino highlighted
+5. **Suggested MODE per task**
+6. **Operator Checklist**: decisions needed before work starts
+
+### ARCHITECT
+**Phase 0 — Restatement** (mandatory): restate goals, assumptions, edge cases, constraints. End with `>> PHASE 0 COMPLETE`.
+
+**Phase 0a — Vision / Plan Collision Verdict** (mandatory when writing or changing a plan): name the project vision, list any related open plans, and state one of: `AMEND EXISTING PLAN`, `SUPERSEDE/LINK EXISTING PLAN`, or `CREATE NEW PLAN`. If there is no clear vision/plan context, say so and narrow the architecture to a discovery or plan-repair step.
+
+**Phase 1 — Architecture**: optimal end-state, components + data flow, Mermaid when non-trivial, files impacted, risks, phased execution, red lines, safe deferrals.
+
+**Scope challenge** (from gstack eng-review): before designing, check: can we reuse existing code? Is this ≤8 files? Is there a built-in that already does this? Does this include distribution (CI/CD, deploy)?
+
+**Ponytail decision checkpoint**: for R0/R1 architecture only, decide whether a
+concrete simplification candidate exists. If yes, invoke `ponytail-on-demand`,
+apply only changes that preserve requirements and gates, then validate the
+result through the rest of ARCHITECT. If none exists, record
+`PONYTAIL: NOT USED - no concrete simplification candidate`. Never use this
+checkpoint for AUDIT, R2/R3, security, QUANT, persistence/ingestion contracts,
+broker/order paths, or live runtime. The operator does not need a separate flag.
+
+**EPILOG_PAYLOAD — MANDATORY before `>> ARCHITECTURE COMPLETE`** (same shape as IMPLEMENT, but `committed: false` if no code shipped yet — only the plan file is created/edited).
+
+### IMPLEMENT
+**Pre-code plan**: current state, files to change, risk class + blast radius, minimal patch plan (ordered, each testable), rollback strategy. Approval gate for R2/R3.
+
+**Post-GO**: implement only approved scope, run tests after each step, and carry the
+standing authorization through closeout and landing. Stop and ask only if an
+out-of-scope change or other hard boundary is needed.
+
+**EPILOG_PAYLOAD — MANDATORY before `>> DONE`** (parity with /executor):
+
+```
+EPILOG_PAYLOAD:
+  start_sha: <SHA before any changes>
+  end_sha: <git rev-parse HEAD now>
+  plan_path: <plan path if known, else empty>
+  committed: <true or false>
+  resolved_ideas: <comma-separated IDEA_BOX slugs marked DONE based on PRE-step context, else empty>
+```
+
+After emitting payload, run the Post-Mode Epilog (Step 0 POST: plan_context_updater
+with `--shipped` if committed, plus `--resolved-ideas` from payload). Track resolved_ideas
+during work — when you implement something that closes an item from the PRE-step's IDEA_BOX
+section, note its slug. The slug is the kebab-case identifier from the bullet point text.
+
+### DEBUG
+**Strategy**: regression bisect (when did it last work? what changed?), trace data flow with file:line. Hypothesize then verify.
+
+**Pattern library** (check these first):
+- Race condition (shared state, missing lock, async ordering)
+- Nil/null propagation (unchecked return, optional chaining gap)
+- State corruption (partial update, missing rollback, stale cache)
+- Integration failure (schema mismatch, timeout, retry storm)
+- Config drift (env mismatch, default override, feature flag)
+
+**Scope lock**: once you identify the affected module, do NOT expand investigation to unrelated code.
+
+Tag root cause: CONFIRMED / PROBABLE / SPECULATIVE. Never patch until at least PROBABLE.
+
+### INVESTIGATE (gstack-enhanced DEBUG)
+Use when DEBUG needs deeper root cause analysis. Same as DEBUG but adds:
+
+1. **Reproduce**: create minimal reproduction case before analyzing
+2. **Pattern match**: check against pattern library (race, nil, state, integration, config, stale cache)
+3. **Scope lock**: lock investigation to affected module — prevents scope creep
+4. **Hypothesis**: state specific, testable claim about root cause before reading code
+5. **Fix + regression test**: every fix must include a test that would have caught the bug
+6. **WebSearch**: if local patterns don't match, search for known issues in dependencies
+
+### AUDIT
+**Layer 0 — Vision / Plan Collision Check** (mandatory when auditing a plan or design doc): load plan context for the repo and target plan, then verify the plan is aligned with the project vision and does not duplicate or conflict with active plans. If a nearby plan should be amended instead, report that as a P1/P2 planning finding.
+
+**Layer 1 — Surface scan**: file structure, imports, obvious violations.
+**Layer 2 — Data flow trace**: end-to-end with file:line references.
+**Layer 3 — Invariant verification**: threading, atomic writes, idempotency, error handling.
+
+Evidence: **CONFIRMED** (cite file:line) or **SUSPECTED** (needs runtime verification).
+Priority: P1 (ship-blocking) → P2 (correctness) → P3 (style).
+
+### REVIEW (gstack-enhanced)
+**Pass 1 — Correctness**: logic errors, race conditions, null handling.
+**Pass 2 — Safety**: boundary violations, contract breaks, hot-path impact, threading. Check for SQL injection, LLM trust boundary violations, conditional side effects.
+**Pass 3 — Robustness**: missing edge cases, error handling gaps.
+**Pass 4 — Style** (optional): only if actively confusing.
+
+**Confidence scoring**: rate each finding 1-10. Suppress <5 confidence to appendix.
+**Triage**: check if finding is already fixed in the diff before reporting.
+Classify: **SHIP-BLOCKING** (must fix) vs **FIX-LATER** (noted, not blocking).
+
+---
+
+## OPS MODE PROTOCOLS (gstack-derived)
+
+### SHIP
+Full shipping workflow — from current branch to PR. Non-interactive unless blocked.
+
+1. **Pre-flight**: detect platform (GitHub/GitLab), identify base branch, check git status
+2. **Tests**: run existing test suite. If fails, stop and report.
+3. **Review check**: was `mode review` run? If not, flag but don't block.
+4. **Version bump**: MICRO (bug fixes, small changes) or PATCH (new features, breaking changes). Auto-decide unless ambiguous.
+5. **Changelog**: auto-generate from git diff since last tag/release
+6. **Commit + Push**: stage, commit with conventional message, push
+7. **PR**: create PR with summary, link tests, link review if available
+
+**Stops only for**: merge conflicts, test failures, ambiguous version bump.
+
+**EPILOG_PAYLOAD — MANDATORY before `>> SHIPPED`** (same shape as IMPLEMENT, `committed: true` since SHIP always commits + pushes).
+
+### QA
+Systematic QA testing with iterative fix loop.
+
+**Tiers**: Quick (P1/P2 only) | Standard (+ P3) | Exhaustive (+ cosmetic). Default: Standard.
+
+1. **Test plan**: identify critical flows from README/code/routes
+2. **Execute tests**: manual or browser-based — screenshots, form fills, assertions
+3. **For each bug found**:
+   - Reproduce and document
+   - Fix in source code
+   - Re-verify the fix
+   - Commit atomically (one commit per fix)
+4. **Health score**: before/after comparison
+5. **Ship readiness**: READY / BLOCKED (with blockers)
+
+### CSO (Security Audit)
+Two modes: **daily** (confidence ≥8/10 only, zero-noise) | **comprehensive** (confidence ≥2/10, deep scan).
+
+1. **Secrets archaeology**: git history, .env files, logs, config — find exposed secrets
+2. **Dependency audit**: versions, known CVEs, maintenance status, supply chain risk
+3. **CI/CD security**: secrets in workflows, access controls, artifact integrity
+4. **OWASP Top 10**: injection, broken auth, XSS, CSRF, insecure deserialization, etc.
+5. **STRIDE threat model**: Spoofing, Tampering, Repudiation, Info Disclosure, DoS, Elevation
+6. **Active verification**: proof-of-concept for high-confidence findings (don't just report, prove it)
+
+### OFFICE-HOURS (Product Diagnostic)
+Two postures: **Startup** (hard questions) | **Builder** (design partner). Default: Startup.
+
+**Startup — 6 Forcing Questions**:
+1. **Demand reality**: Who actually wants this? (behavior, not stated interest)
+2. **Status quo**: What do people do today without this? (the real competitor)
+3. **Desperate specificity**: Name ONE person who needs this desperately. Describe their Tuesday.
+4. **Narrowest wedge**: What's the smallest version someone would pay for?
+5. **Observation**: What surprised you watching people use it? (if no users yet, that's a finding)
+6. **Future-fit**: Does this become MORE essential in 3 years, or less?
+
+**Anti-sycophancy rules**: Take positions, not hedges. "That's interesting" is banned. If the answer to Q1 is vague, push harder — don't move on. Challenge social proof ("lots of people want this") with demand tests ("show me the behavior").
+
+**Builder posture**: design partner mode — delight as currency, ship something small, iterate.
+
+Output: design doc with findings + recommended next action.
+
+### AUTOPLAN (Full Review Pipeline — multi-agent)
+Runs an independent multi-persona review (CEO → Design → Eng → DX) of a plan, **in parallel**, then
+synthesizes a consolidated verdict. Upgraded 2026-06-15 to fan out via the **Workflow tool** instead of
+a single inline pass — each persona is its own subagent, so disagreements surface instead of averaging out.
+
+**6 Decision Principles** (auto-decide mechanical items, surface taste decisions):
+1. **Completeness**: does the plan cover all requirements?
+2. **Boil the lake**: complete solutions, not shortcuts that create tech debt
+3. **Pragmatic**: don't over-engineer, but don't under-engineer
+4. **DRY**: don't repeat yourself across modules
+5. **Explicit over clever**: readable code > clever code
+6. **Bias toward action**: when two approaches are close, pick one and ship
+
+**Decision classification**:
+- **Mechanical** (one right answer): auto-decide silently
+- **Taste** (close call, recoverable): auto-decide + surface to operator for awareness
+- **User challenge** (irreversible or against operator's stated direction): NEVER auto-decide, always ask
+
+**Execution (preferred — multi-agent fan-out):**
+1. PRE-step if scoping or reviewing a plan: `python ~/.claude/scripts/plan_context_loader.py --cwd "$PWD" [--plan <path>]`, then perform the Vision / Plan Collision Check before dispatching personas.
+2. Identify the absolute path of the plan under review.
+3. Run the reusable review workflow via the **Workflow tool** (this skill instruction is the explicit
+   opt-in for the Workflow tool — no `ultracode` keyword needed):
+   ```
+   Workflow({ scriptPath: "<HOME>/.claude/scripts/autoplan_review_workflow.js",
+              args: { plan: "<abs-plan-path>", personas: ["ceo","design","eng","dx"] } })
+   ```
+   Resolve `<HOME>` to the real home dir (Windows: `C:/Users/<you>`). It fans out one opus reviewer per
+   persona (each reads the plan + repo invariants), then a synthesis agent returns
+   `{ overall_verdict, dimension_table, critical_issues, taste_decisions, user_challenges, scope_recommendation, go_decision }`.
+4. **Append the synthesized report to the plan file** as a `## AUTOPLAN REVIEW` section (GSTACK style),
+   then surface every **Taste** decision (for awareness) and **User Challenge** (must be answered) to the operator.
+5. Drop a persona from `personas` for a lighter pass (e.g. `["ceo","eng"]`); pass `context` for extra framing.
+
+**Fallback (inline, no Workflow):** if the Workflow tool is unavailable, the plan is trivial, or the
+operator says "inline", run the personas sequentially yourself using the same principles + classification:
+read context → scope challenge (reuse? ≤8 files? built-in?) → architecture review → design review → surface
+taste decisions and user challenges.
+
+**Model routing:** persona reviewers + synthesis = opus (judgment-heavy); any web research inside a persona = sonnet.
+
+### RETRO (Weekly Retrospective)
+Analyze recent work patterns and code quality. Default period: 7 days.
+
+1. **Gather data**: git log, commit frequency, files changed, test counts, LOC delta
+2. **Metrics**: commits to main, insertions/deletions, net LOC, test/LOC ratio, active days
+3. **Hotspots**: most-changed files (likely complexity or instability)
+4. **Session detection**: cluster commits by time gaps to identify work sessions
+5. **Per-author breakdown** (if multi-contributor): contributions, patterns, growth areas
+6. **What went well / what didn't / action items**
+7. **Trend**: compare against previous retro if available
+
+### CAREFUL (Safety Guardrails)
+Warn before destructive commands. Active during entire session once invoked.
+
+**Watched patterns**: `rm -rf`, `DROP TABLE/DATABASE`, `TRUNCATE`, `git push --force`, `git reset --hard`, `git checkout .`, `kubectl delete`, `docker system prune`, `docker rm -f`
+
+**Safe exceptions**: rm on `node_modules/`, `dist/`, `.cache/`, `__pycache__/`, `build/`
+
+When matched: STOP, show warning with exact command, ask for confirmation before executing.
+
+### LEARN (Project Learnings)
+Manage persistent learnings across sessions. Stored as JSONL per project.
+
+**Commands**: `mode learn task show` | `search <query>` | `prune` | `export` | `stats`
+
+**Learning types**: pattern, pitfall, preference, architecture, operational, tool
+
+- **show**: display 20 most recent learnings grouped by type
+- **search**: query against learning key/insight
+- **prune**: check for staleness (deleted files referenced) and contradictions (same key, conflicting insights)
+- **export**: format learnings as markdown for CLAUDE.md
+- **stats**: totals, unique count, by type, by source, avg confidence
+
+---
+
+## BEST COMBO RECIPES
+
+### New Feature (full pipeline)
+`mode office-hours architect implement task ...`
+Product diagnostic → architecture → code. Complete from idea to implementation.
+
+### Bugfix (fast path)
+`mode debug implement task ... go`
+or for deep investigation: `mode investigate implement task ... go`
+
+### Pre-Ship (quality gate)
+`mode review qa ship task ...`
+Code review → QA testing → push + PR. The full quality pipeline.
+
+### Compliance Check + Fix
+`mode audit debug task ...`
+Find violations, trace root cause.
+
+### Security + Ship
+`mode cso review ship task ...`
+Security audit → code review → ship.
+
+### Strategy Session
+`mode operator` → then follow suggested MODEs per task.
+
+### Full Auto-Review
+`mode autoplan task ...`
+CEO → Design → Eng → DX reviewed automatically.
+
+### Weekly Reflection
+`mode retro task this week`
+
+### Schema Migration
+`mode audit contract implement task ...`
+Check current state → plan migration → implement.
+
+### Trading Analysis
+`mode quant test task ...`
+Analyze edge → design validation tests.
+
+---
+
+## Interaction Rules
+
+- Ask **one clarifying question at a time**. Never dump a list.
+- State assumptions explicitly before proceeding.
+- Do not repeat the task description back.
+- Start directly with output — no preamble.
+- Prefer structured output (tables, numbered lists) over prose.
+- **Anti-sycophancy**: take positions, not hedges. "That's interesting" is banned.
+
+## Anti-Regression Guard
+
+If you catch yourself simplifying or reducing scope, call it out:
+
+> "This simplification removes [X]. Architectural cost: [Y]. Reinstating unless you approve the tradeoff."
+
+## Safety Checklist (apply to every mode)
+
+- Preserve data flow direction integrity
+- Preserve just-in-time manual approval for real-money, Combine, broker-submit/arming,
+  production deployment, destructive actions, and new live-impacting product decisions
+- Preserve idempotency and replayability where applicable
+- Use atomic writes (temp file → rename) for all persistence
+- Ensure failures degrade safely
+- Prefer observability over silent behavior
+
+## Source of Truth Hierarchy
+
+If the project defines a hierarchy, follow it. Otherwise: strategic plan > subsystem plans > contracts/schemas > brainstorm/UI docs (non-normative).
+
+Conflicts: STOP, report, await operator decision.
+
+## Execution Flow
+
+```
+User says: mode <X> [<Y> ...] task <description> [go]
+                          │
+                          ▼
+        Check for Prompts/master_agent.md → read MODE: <X> if exists
+                          │
+                          ▼
+              Determine risk class (R0-R3)
+                          │
+               ┌──────────┴──────────┐
+               │                     │
+          R0/R1: proceed        R2/R3: one approval gate
+               │                     │
+               │        (already satisfied by standing approval)
+               │                     │
+               ▼                     ▼
+         Execute mode protocol (full structured output)
+                          │
+                          ▼
+              If multi-mode: feed results into next mode
+                          │
+                          ▼
+              End with mode's closing tag
+                          │
+                          ▼
+              Run Post-Mode Epilog (IMPLEMENT/EXECUTOR/SHIP only)
+                          │
+                          ▼
+              Emit closing tag (>> DONE / >> SHIPPED / etc.)
+```
+
+→ see Post-Mode Epilog above
