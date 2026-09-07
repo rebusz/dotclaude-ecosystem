@@ -171,3 +171,39 @@ def test_scheduler_surfaces_host_resource_conflict_before_priority(scheduler: Co
         assert selected.work_item_id == item.work_item_id
         assert rejected == []
     scheduler.resources.release(active["request_id"])
+
+
+def test_scheduler_does_not_gate_focused_pytest_on_heavy_pool(scheduler: ConductorScheduler):
+    processor = ConductorCommandProcessor(store=scheduler.store)
+    processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_focused",
+            command_type="enqueue",
+            payload={
+                "idempotency_key": "key_focused",
+                "title": "Focused Test",
+                "repo_id": "dotclaude-ecosystem",
+                "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+                "plan_path": "design/plans/focused.md",
+                "risk_class": "R1",
+                "workflow": "fwf",
+                "requested_terminal_stage": "merged",
+                "job_kind": "pytest_focused",
+                "priority": 100,
+            },
+            idempotency_key="idemp_focused",
+        )
+    )
+    item = scheduler.store.get_work_item_by_idempotency_key("key_focused")
+    scheduler.store.transition_work_item_state(item.work_item_id, WorkItemState.READY, "operator", "TEST_READY")
+    active = scheduler.resources.request(
+        purpose="pytest_heavy",
+        attempt_id="resource-active-focused",
+        agent_instance="resource-agent",
+    )
+
+    selected, rejected = scheduler.select_next_work_item()
+    assert selected is not None
+    assert selected.work_item_id == item.work_item_id
+    assert rejected == []
+    scheduler.resources.release(active["request_id"])

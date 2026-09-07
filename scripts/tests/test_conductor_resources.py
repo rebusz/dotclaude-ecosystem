@@ -1059,6 +1059,11 @@ def test_cdp_tv_purpose_routes_to_cdp_tv_pool():
     assert resolve_resource_key(purpose="cdp_tv") != RESOURCE_KEY
 
 
+def test_focused_pytest_has_no_resource_key_mapping():
+    with pytest.raises(ValueError, match="does not acquire a host resource"):
+        resolve_resource_key(purpose="pytest_focused")
+
+
 def test_cdp_tv_purpose_is_refused_on_host_heavy(tmp_path: pathlib.Path):
     """#90's rule - a cdp_* purpose must not be admitted on host:heavy.
 

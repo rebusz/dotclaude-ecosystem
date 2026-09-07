@@ -51,7 +51,6 @@ ROLE_TO_RESOURCE_KEY = {
 PURPOSE_TO_RESOURCE_KEY = {
     "pytest_full": "host:heavy",
     "pytest_heavy": "host:heavy",
-    "pytest_focused": "host:heavy",
     "cdp_perplexity": "cdp:perplexity",
     "cdp_chatgpt": "cdp:chatgpt",
     "cdp_gemini": "cdp:gemini",
@@ -78,6 +77,8 @@ def resolve_resource_key(
     resource_key: Optional[str] = None,
 ) -> str:
     """Resolve target resource pool from explicit key, CDP role, or purpose."""
+    if purpose == "pytest_focused" and not resource_key and not role:
+        raise ValueError("pytest_focused does not acquire a host resource")
     if resource_key:
         return resource_key
     if role and role in ROLE_TO_RESOURCE_KEY:
