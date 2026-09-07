@@ -935,6 +935,8 @@ def test_cross_contamination_pytest_on_cdp_and_cdp_on_host_heavy(tmp_path: pathl
     manager_cdp = HostResourceManager(store, resource_key="cdp:perplexity")
 
     # Pytest on cdp:* is refused
+    with pytest.raises(ValueError, match="cannot consume 'host:heavy'"):
+        manager_heavy.request(purpose="playwright", attempt_id="at-not-heavy", agent_instance="ag-not-heavy")
     with pytest.raises(ValueError, match="cannot consume CDP pool"):
         manager_cdp.request(purpose="pytest_full", attempt_id="at-cross-1", agent_instance="ag-cross-1")
     with pytest.raises(ValueError, match="cannot consume CDP pool"):
