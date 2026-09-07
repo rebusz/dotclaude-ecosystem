@@ -85,6 +85,9 @@ Read that whole command and return each stage's result to its owner. Do not
 recursively invoke /fwf, create another closeout command or a second tournament.
 The candidate full-workflow reference is a migration design until its adapters
 are installed; it does not replace the active command by assertion.
+The maintained [host adapter sources](references/host-adapters/README.md) and
+[dispatch handoff](references/protocols/workflow-dispatch.md) define that release
+boundary. Load the handoff when running a full workflow, not for a mode-only task.
 
 Astra authors prompt design, plans and key decisions. Configured CDP lanes
 author substantive implementation and independent review. Local Codex extracts

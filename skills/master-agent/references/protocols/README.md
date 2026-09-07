@@ -19,3 +19,8 @@ Install the complete reference tree using the maintained manifest, snapshot
 only owned targets, check hashes and prove discovery in a fresh harmless task.
 
 No behavioral A/B or independent exact-head review has yet qualified this draft.
+
+Maintained [host entry templates](../host-adapters/README.md) contain the CEO,
+eng, review and shared diagnosis adapters. The [plan-audit/v2 contract](plan-audit-v2-contract.md)
+defines the coordinated renderer/consumer boundary. The [dispatch handoff](workflow-dispatch.md)
+documents current commands and their required policy readback; it adds no runner.

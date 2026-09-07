@@ -36,12 +36,19 @@ dowodem ekspertyzy, a płynny opis nie zastępuje źródeł.
 
 Zwróć w tej kolejności:
 
+Dla pakietu `plan-audit/v2` poprzedź treść metadanymi odpowiedzi z dołączonego
+[kontraktu wersji](plan-audit-v2-contract.md). To format dostarczony przez
+renderer; lokalny odnośnik nie zastępuje jego pełnej treści w pakiecie CDP.
+
 1. `REVIEW TARGET`: odebrana tożsamość materiału, dostęp i ograniczenia.
 2. `FINDINGS`: zero lub więcej ustaleń we wspólnym formacie; najpierw blokery.
 3. `COVERAGE AND GAPS`: warunki faktycznie sprawdzone, niewiadome oraz
    rozstrzygające probe. Nie dopisuj ogólnej checklisty dla samej kompletności.
 4. `VERDICT`: `READY_FOR_ENGINEERING`, `REVISE_PLAN` lub `INSUFFICIENT_CONTEXT`.
    READY_FOR_ENGINEERING nie oznacza implementation-review PASS ani operator GO.
+
+W wersji v2 VERDICT występuje raz w metadanych na początku; nie powtarzaj
+sprzecznego ani drugiego pola po treści. Sekcje treści oznacz nagłówkami `##`.
 
 Jeśli nie znalazłeś naruszenia, napisz `NO FINDINGS` i wyjaśnij zakres sprawdzenia.
 Nie wymyślaj trzech zmian. Ostatnią linią zwróć dokładnie marker zakończenia
