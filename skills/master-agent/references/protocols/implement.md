@@ -30,8 +30,9 @@ przejęcia autorstwa po awarii CDP.
    produkcyjny mechanizm, nie gotowej fixture stanu po restarcie. Zapisz komendę,
    kod wyjścia, cel, wersję i artefakt. Timeout, skip krytycznego celu i
    przerwany suite pozostają brakiem wyniku. Szerzej testuj tylko z nowego
-   powodu albo zgodnie z wymaganą bramką. Heavy work korzysta z istniejącego
-   protokołu Conductor.
+   powodu albo zgodnie z wymaganą bramką. Tylko ciężkie pytesty zajmują
+   `host:heavy`; focused pytest zachowuje lekką ścieżkę. CDP, Playwright,
+   buildy, replay, dokumenty, Git i odczyty nie czekają na tę pulę.
 5. **Przekaż do review i zamknij cykl.** Commituj wyłącznie własne pliki,
    opublikuj exact head i przygotuj pakiet dla niezależnego recenzenta.
    Po ship blockerze popraw zakresowe błędy, ponownie zweryfikuj i zrecenzuj
