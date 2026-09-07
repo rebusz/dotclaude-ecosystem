@@ -1,0 +1,21 @@
+# Prompt protocols v2 — maintained role source candidate
+
+Source draft; NOT_INSTALLED. Owner release specification:
+D:/APPS/_shared/design/visions/astra-instructions-v1/protocols-v2/ACTIVATION.md.
+Initial content is from apps-shared PR72, commit
+c9ee38db3258e806bc72db23108c1dd5cc2f60f6. Future maintained edits belong here;
+that document package remains the historical comparison baseline.
+
+Load 00-contract.md once plus the requested role. Local core modes are audit,
+architect, quant, debug and implement. Workflow roles are ceo-review,
+cdp-plan-audit, synthesis, eng-review and implementation-review. full-workflow.md
+is the integration design until the installed command/renderer supports it.
+
+The source router improves core fallback loading. It does not install gstack
+adapters, change repo Prompts/master_agent.md, change a model roster or make
+plan-audit/v2 callable through the existing legacy parser. CDP integration must
+change its producer and parser together; retain implementation-review/v1.
+Install the complete reference tree using the maintained manifest, snapshot
+only owned targets, check hashes and prove discovery in a fresh harmless task.
+
+No behavioral A/B or independent exact-head review has yet qualified this draft.
