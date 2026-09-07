@@ -33,8 +33,14 @@ Wdrożony renderer ma dołączyć kontrakt i rolę v2; dopóki go nie ma, powyż
 komenda używa aktualnych promptów v1. Nie twierdź, że samo istnienie tego pliku
 zmieniło runtime.
 
-Zachowaj ChatGPT CDP Sol/Pro z potwierdzonym pre-submit fallback,
-Antigravity Gemini 3.7 Flash z istniejącym fallback Gemini CDP oraz pięć
+Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: low/medium dla
+prostych odczytów i zmian, high dla ograniczonej implementacji, xhigh dla
+złożonego audytu/integracji. Bez klasyfikacji użyj xhigh. Pro wymaga zapisanego
+powodu eskalacji: konkretnego nierozwiązanego problemu i oczekiwanego rezultatu.
+Timeout, awaria transportu i niepewny submit nie uzasadniają eskalacji ani resend.
+Sprawdź rzeczywisty model i effort; niższy effort zgodny ze zleceniem jest poprawny.
+Nie utożsamiaj etykiety Pro z identyfikatorem Astry bez odczytu providera.
+Zachowaj Antigravity Gemini 3.8 Flash z istniejącym fallback Gemini CDP oraz pięć
 obecnych modeli Perplexity: GLM 5.3, Kimi 3, Grok 4.6, Sonnet 5, GPT Terra.
 Zweryfikuj wartości w aktualnym źródle rosteru; ten zapis dokumentuje
 zamierzone zachowanie z 2026-09-07, nie uprawnia do samodzielnej zmiany modeli.
@@ -65,10 +71,13 @@ zmiany znaczenia nie wymaga udawania nowej decyzji produktowej.
 **4. Implementacja.** R1 kontynuuje bez nowego GO. R2/R3 wymaga jednej ważnej
 zgody na znany zakres. Zgoda obejmuje zakresowe poprawki, review, CI i landing;
 osobne granice trigger/deploy/destrukcji pozostają. Wykonaj rolę
-[IMPLEMENT](implement.md) przez zatwierdzone przypisania. Astra planuje
-i rozstrzyga, CDP tworzą istotny kod i niezależne review, lokalny Codex
-przekazuje pliki, stosuje zmiany, testuje i prowadzi Git zgodnie z obecną
-polityką pracy. Awaria CDP nie daje automatycznie zgody na autorstwo Astry.
+[IMPLEMENT](implement.md) przez zatwierdzone przypisania. ChatGPT prowadzi plan
+i integrację, CDP tworzą istotny kod i niezależne review. W zatwierdzonym workflow
+GPT Sidecar 2 lokalny Codex wykonuje ograniczone zadania przez App Server:
+Luna dla małych zmian, Terra dla komponentów, Sol dla trudniejszej integracji.
+Astra wymaga konkretnego uzasadnienia; nie jest stałym właścicielem każdej roli.
+Każde przypisanie zapisuje model, effort, zakres i wynik. Native LOCAL worker
+nie zastępuje niezależnego panelu review. Awaria CDP nie uruchamia automatycznie Astry.
 **Równoległość i postęp.** Blokujący warunek dotyczy zależnego etapu i jego
 zasobu, nie całego zadania. Gdy jedna lane jest zajęta albo odpowiedź pozostaje
 niepewna, kontynuuj niezależne, już autoryzowane prace: prompt/specyfikację,
