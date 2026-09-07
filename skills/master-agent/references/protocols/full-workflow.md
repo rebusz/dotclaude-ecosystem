@@ -22,16 +22,21 @@ plan, a dopiero ustalony zakres przechodzi dalej.
 i dowodów oraz manifest dostępności. Przekaż role [audytu CDP](cdp-plan-audit.md)
 i [syntezy](synthesis.md) przez **obecny** jedyny runner `audit/fuse.py`.
 Codex przekazuje `--synthesizer gpt`, Claude `--synthesizer claude`; to zapis
-pochodzenia, nie selektor panelu. Podstawowa komenda nadal ma postać:
+pochodzenia, nie selektor panelu. Ustal pełną ścieżkę katalogu `references/protocols`
+obok faktycznie wczytanego skilla master-agent; użyj jej jako `<protocol-root>`.
+Po skoordynowanej instalacji renderera i wszystkich konsumentów użyj:
 
 ```text
-D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode free --synthesizer gpt "@<plan>"
+D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode free --synthesizer gpt --plan-audit-schema plan-audit/v2 --source-completeness complete --protocol-root "<protocol-root>" --gpt-reasoning-effort xhigh "@<plan>"
 ```
 
-W `/fwp` zmienia się `free` na `paid`. Nie dopisuj nieobsługiwanych flag.
-Wdrożony renderer ma dołączyć kontrakt i rolę v2; dopóki go nie ma, powyższa
-komenda używa aktualnych promptów v1. Nie twierdź, że samo istnienie tego pliku
-zmieniło runtime.
+W `/fwp` zmienia się `free` na `paid`. `complete` oznacza rzeczywiście pełny
+materiał; dla wycinka użyj `partial`, przy niepewności `unknown`. Dobierz effort
+według zadania zamiast mechanicznie kopiować `xhigh` z przykładu. Jawne `pro`
+wymaga dodatkowo `--gpt-escalation-reason` z konkretnym uzasadnieniem.
+Sprawdź lokalne `--help` i obecność kontraktu v2 przed panelem. Brak wdrożonego
+renderera/konsumenta jest brakiem kompatybilności; nie zgłaszaj wykonania v2
+po cichym uruchomieniu starej komendy. Sam tekst tego pliku nie instaluje kodu.
 
 Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: instant/medium dla
 prostych odczytów i zmian, high dla ograniczonej implementacji, xhigh dla
