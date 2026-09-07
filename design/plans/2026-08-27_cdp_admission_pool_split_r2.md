@@ -295,7 +295,7 @@ Pools already exist (`host:heavy=1`, `cdp:perplexity=3`, `cdp:chatgpt=3`,
 `cdp:gemini=1`, `cdp:tv=1`). This continuation does **not** re-implement the
 split.
 
-Shipped here (dotclaude-ecosystem):
+Candidate changes here (dotclaude-ecosystem; not yet landed or installed):
 
 1. `resolve_resource_key` never falls through `cdp_provider` to `host:heavy`.
    A stale explicit `host:heavy` key with a CDP purpose is ignored so `--role`
@@ -339,3 +339,37 @@ Gemini: `--resource-key cdp:gemini --role chrome_gemini`. CCTV is already
 Continuation CP-7 is authorized by the 2026-09-06 named-pool decision. Do not
 re-request `GO CDP POOL SPLIT R2`. WatchF/`_shared` CP-3 adapters still need
 their own PRs.
+
+## 2026-09-07 local continuation evidence
+
+Full DOM program GO through coderpxG retains this existing CP-7 scope. The
+Cursor patch from Tsignal PR #1742 was mechanically applied onto ecosystem
+`origin/main` `1b0a908d9a1e83d0c883222c16f652ee77f3b24c` in isolated worktree
+`D:/APPS/_worktrees/dom-h0-ecosystem-20260907`. Code authorship remains Cursor
+Agent. Current Codex supplied local application, validation and this status.
+
+Validation through the existing Conductor bounded pytest adapter:
+`scripts/tests/test_conductor_resources.py`, `test_conductor_cli.py`,
+`test_conductor_scheduler.py`: **57 passed**, process exit 0, receipt
+`rcp_b21f581f225b`, request `rr_b0c4c6f83b14`. The adapter classified the
+three-file run `pytest_full`; it occupied heavy legitimately. This result is
+not evidence that every named CDP caller is admitted or that installation ran.
+
+Before landing/installation, resolve compatibility with the current WatchF
+adapter: it passes `--owner-pid` and `--owner-start-time`. The installed primary
+checkout has uncommitted parser-only additions for those flags; this candidate
+does not contain them. Ecosystem PR #102 separately owns durable owner identity
+and orphan recovery. Do not overwrite primary edits, silently discard owner
+identity, or absorb the entire unrelated recovery feature into H0. Freeze a
+compatible narrow seam or order landing with the existing owner before rollout.
+
+Current Perplexity `coderpx.py` explicitly admits `cdp:perplexity`, and its
+2026-09-07 picker probe succeeded. ChatGPT `auditgpt.py` and
+`cdp_chatgpt_code.py` lack equivalent host-resource admission at their entry
+points; browser lifecycle/profile locks alone do not close CP-3. Parent-owned
+admission is acceptable only with one explicit owner, retained lifetime and
+recorded request/heartbeat/release; no duplicate parent/child leases.
+
+Review and final integration are PENDING. None of the above changes the live
+ledger, capacities, installed scripts, rules or runtime. The program conductor
+will finish configured review before treating this candidate as shipped.
