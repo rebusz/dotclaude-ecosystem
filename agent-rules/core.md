@@ -31,9 +31,9 @@
 
 ## Conductor Host-Resource Gate
 
-- TruthDeck Conductor owns the durable `host:heavy` capacity-one lease for
-  cooperative heavy pytest, Playwright, and CDP-provider work; adapters must
-  request it before launch and remain visible in Conductor readback.
+- Only heavy pytest runs use Conductor's capacity-one `host:heavy` lease.
+- CDP uses its independent `cdp:*` pools and never waits for `host:heavy`.
+- Playwright/browser work, builds, replays, docs, Git and readback are not heavy tasks; focused pytest keeps its existing lightweight classification.
 - A bounded child may inherit an active attempt-scoped
   `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
   stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There
