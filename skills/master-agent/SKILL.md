@@ -64,15 +64,16 @@ skills and global rules must reference it instead of restating their own routing
 
 `/fwf` uses the OpenRouter-free basket; `/fwp` uses the paid OpenRouter
 complement basket. R1/R2/R3 and both clients use one fixed panel: ChatGPT CDP
-(only GPT-5.6 Sol: Pro effort with a safe same-model pre-submit xhigh fallback), Antigravity
-`gemini-3.7-flash-high` (Gemini CDP `gemini-3.7-flash` fallback), and Perplexity GLM 5.3/Kimi 3/Grok 4.6/Sonnet 5/GPT
+(GPT-5.6 Sol with task-selected effort, xhigh if unclassified; Pro only with a
+recorded escalation reason), Antigravity
+`gemini-3.8-flash-high` (Gemini CDP `gemini-3.8-flash` fallback), and Perplexity GLM 5.3/Kimi 3/Grok 4.6/Sonnet 5/GPT
 Terra. Claude CLI, Codex CLI, standalone GLM CLI, and nested CLI tournament
 synthesis are excluded. The selected command owns the entire
 lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
 checkout synchronization. There is no separate closeout command.
 
 The unified `fuse.py` Python runner is an internal stage, not a public workflow
-entrypoint. It exposes only `--mode free|paid`; model presets, lane selection,
+entrypoint. `--mode free|paid` selects the basket; model presets, lane selection,
 and CDP bypasses are not part of the workflow contract. Codex passes
 `--synthesizer gpt`; Claude Code passes `--synthesizer claude`; this records the
 final judge and never changes the fixed panel.
@@ -89,10 +90,14 @@ The maintained [host adapter sources](references/host-adapters/README.md) and
 [dispatch handoff](references/protocols/workflow-dispatch.md) define that release
 boundary. Load the handoff when running a full workflow, not for a mode-only task.
 
-Astra authors prompt design, plans and key decisions. Configured CDP lanes
-author substantive implementation and independent review. Local Codex extracts
-context, applies, tests and handles Git; failed CDP is not a local authoring
-exception. Preserve actual stamp-v2 ownership, dispatcher dry-run, Conductor
+ChatGPT leads prompt design, plans and key decisions. Configured CDP lanes
+author substantive implementation and independent review. The approved GPT
+Sidecar 2 workflow may assign bounded local work to explicit Luna/Terra/Sol
+App Server workers. Astra and Pro require a concrete escalation reason;
+transport failures never trigger escalation or duplicate submission. Use
+low/medium for straightforward tasks, high for components, xhigh for complex
+review/integration, and verify actual model/effort against the assignment.
+Preserve actual stamp-v2 ownership, dispatcher dry-run, Conductor
 admission, attempt caps and terminal uncertain-submit behavior. Do not invent
 receipt fields, model routes, resource leases or retry credit in prompt text.
 
