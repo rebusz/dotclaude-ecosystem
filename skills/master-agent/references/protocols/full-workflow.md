@@ -69,7 +69,9 @@ osobne granice trigger/deploy/destrukcji pozostają. Wykonaj rolę
 i rozstrzyga, CDP tworzą istotny kod i niezależne review, lokalny Codex
 przekazuje pliki, stosuje zmiany, testuje i prowadzi Git zgodnie z obecną
 polityką pracy. Awaria CDP nie daje automatycznie zgody na autorstwo Astry.
-Oddaj lease audytu przed nową pracą heavy; zachowaj limity i ownership.
+Tylko ciężkie pytesty używają `host:heavy`. CDP korzysta z niezależnych pul
+`cdp:*` i nie czeka na lease pytestów ani recovery `host:heavy`. Przeglądarka
+i Playwright nie są heavy. Zachowaj ownership i zwalniaj każdą pulę po jej pracy.
 
 **5. Exact-head review.** Po lokalnej walidacji przygotuj commit, push,
 draft PR i canonical packet. Rola [review](implementation-review.md) działa
