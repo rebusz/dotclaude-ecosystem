@@ -1,7 +1,9 @@
 # Prompt protocols v2 — maintained role source candidate
 
 Source draft; NOT_INSTALLED. Owner release specification:
-D:/APPS/_shared/design/visions/astra-instructions-v1/protocols-v2/ACTIVATION.md.
+[authorized activation appendix](https://github.com/rebusz/apps-shared/blob/fb485e5/design/visions/astra-instructions-v1/protocols-v2/ACTIVATION.md).
+This committed reference remains readable before the release reaches the primary
+checkout. Current delivery status is maintained in apps-shared PR73.
 Initial content is from apps-shared PR72, commit
 c9ee38db3258e806bc72db23108c1dd5cc2f60f6. Future maintained edits belong here;
 that document package remains the historical comparison baseline.
