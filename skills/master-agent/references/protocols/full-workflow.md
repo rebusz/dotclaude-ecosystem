@@ -1,0 +1,129 @@
+# /fwf i /fwp — jeden workflow v2
+
+## Prompt
+
+Prowadź jeden pełny cykl dla wskazanego planu. `/fwf` wybiera istniejący koszyk
+OpenRouter free, `/fwp` paid. Pozostały panel i obowiązujące trasy autorstwa
+pozostają bez zmian. Samo wspomnienie komendy podczas analizy jej tekstu nie
+jest uruchomieniem workflow.
+
+**Przyjęcie.** Przyjmij jeden plan zgodnie z publiczną składnią komendy.
+Uruchom wymagany plan-context pre-step, sprawdź aktualne repo/HEAD/worktree,
+Why/DoD, kolizje planów i risk class. Odczytaj istniejącą zgodę oraz zapis
+poprzednich etapów. Nie zeruj prób, receiptu ani decyzji po wznowieniu.
+R0 obsłuż dokumentacyjną ścieżką; R1–R3 prowadź przez etapy poniżej.
+
+**1. CEO.** Uruchom rolę [CEO review](ceo-review.md) na tym planie. Rozstrzygaj
+pytania według istniejącej polityki R-class; R3 kieruje do operatora materialne
+decyzje produktowe/ryzyka. KILL/DEFER kończy zależny cykl. REFRAME aktualizuje
+plan, a dopiero ustalony zakres przechodzi dalej.
+
+**2. Audyt i synteza.** Przygotuj zamrożony pakiet planu, aktualnych kontraktów
+i dowodów oraz manifest dostępności. Przekaż role [audytu CDP](cdp-plan-audit.md)
+i [syntezy](synthesis.md) przez **obecny** jedyny runner `audit/fuse.py`.
+Codex przekazuje `--synthesizer gpt`, Claude `--synthesizer claude`; to zapis
+pochodzenia, nie selektor panelu. Ustal pełną ścieżkę katalogu `references/protocols`
+obok faktycznie wczytanego skilla master-agent; użyj jej jako `<protocol-root>`.
+Po skoordynowanej instalacji renderera i wszystkich konsumentów użyj:
+
+```text
+D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode free --synthesizer gpt --plan-audit-schema plan-audit/v2 --source-completeness complete --protocol-root "<protocol-root>" --gpt-reasoning-effort xhigh "@<plan>"
+```
+
+W `/fwp` zmienia się `free` na `paid`. `complete` oznacza rzeczywiście pełny
+materiał; dla wycinka użyj `partial`, przy niepewności `unknown`. Dobierz effort
+według zadania zamiast mechanicznie kopiować `xhigh` z przykładu. Jawne `pro`
+wymaga dodatkowo `--gpt-escalation-reason` z konkretnym uzasadnieniem.
+Sprawdź lokalne `--help` i obecność kontraktu v2 przed panelem. Brak wdrożonego
+renderera/konsumenta jest brakiem kompatybilności; nie zgłaszaj wykonania v2
+po cichym uruchomieniu starej komendy. Sam tekst tego pliku nie instaluje kodu.
+
+Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: instant/medium dla
+prostych odczytów i zmian, high dla ograniczonej implementacji, xhigh dla
+złożonego audytu/integracji. Bez klasyfikacji użyj xhigh. Pro wymaga zapisanego
+powodu eskalacji: konkretnego nierozwiązanego problemu i oczekiwanego rezultatu.
+Timeout, awaria transportu i niepewny submit nie uzasadniają eskalacji ani resend.
+Sprawdź rzeczywisty model i effort; niższy effort zgodny ze zleceniem jest poprawny.
+Nie utożsamiaj etykiety Pro z identyfikatorem Astry bez odczytu providera.
+Zachowaj Antigravity Gemini 3.8 Flash z istniejącym fallback Gemini CDP oraz pięć
+obecnych modeli Perplexity: GLM 5.3, Kimi 3, Grok 4.6, Sonnet 5, GPT Terra.
+Zweryfikuj wartości w aktualnym źródle rosteru; ten zapis dokumentuje
+zamierzone zachowanie z 2026-09-07, nie uprawnia do samodzielnej zmiany modeli.
+CLI wykluczone przez aktualną politykę nie wracają jako nowa lane.
+
+Użyj Conductor i zatwierdzonych adapterów. Wysyłaj tylko materiał dozwolony
+dla danego odbiorcy po wymaganym secret preflight. Dostęp connectora potwierdź
+dla konkretnego repo i rewizji. Nie obcinaj kontraktów; brak pełnego materiału
+oznacz przed werdyktem. Rejestruj każdy oczekiwany model, próbę, błąd oraz
+faktyczny wynik. Częściowa kolekcja służy analizie, ale clearance wynika z
+obowiązującej polityki reviewerów, nie z exit 0 ani własnego progu quorum.
+Jeśli brak jawnej polityki dopuszczalnej degradacji, rozstrzygnij ją w planie
+przed wdrożeniem; nie twórz wyjątku w trakcie nieudanego runu.
+
+Przeprowadź syntezę, sprawdź ACCEPT i popraw plan w zakresie. Niepewny submit
+jest terminalny dla automatycznego retry/resubmission/fallback. Pewna odmowa
+przed submit może użyć tylko fallbacku dopuszczonego aktywną polityką.
+
+**3. Eng.** Uruchom [eng review](eng-review.md). Przygotuj aktualne, obsługiwane
+stampy i dry-run dispatchu. Zapisz zależności, dokładne pliki, testy i
+niezależne review. Wymagany dry-run musi zakończyć się 0 na planie przeznaczonym
+do wykonania. Zmiana celu/ryzyka wraca do CEO; zmiana istotnego kontraktu lub
+założenia unieważnia zależny audyt i wraca do etapu 2 w tym samym workflow.
+Wtedy ponownie obowiązuje pełna skonfigurowana polityka panelu; nie wprowadzaj
+samowolnego „delta-only reviewer”. Korekta redakcyjna z udokumentowanym brakiem
+zmiany znaczenia nie wymaga udawania nowej decyzji produktowej.
+
+**4. Implementacja.** R1 kontynuuje bez nowego GO. R2/R3 wymaga jednej ważnej
+zgody na znany zakres. Zgoda obejmuje zakresowe poprawki, review, CI i landing;
+osobne granice trigger/deploy/destrukcji pozostają. Wykonaj rolę
+[IMPLEMENT](implement.md) przez zatwierdzone przypisania. ChatGPT prowadzi plan
+i integrację, CDP tworzą istotny kod i niezależne review. W zatwierdzonym workflow
+GPT Sidecar 2 lokalny Codex wykonuje ograniczone zadania przez App Server:
+Luna dla małych zmian, Terra dla komponentów, Sol dla trudniejszej integracji.
+Astra wymaga konkretnego uzasadnienia; nie jest stałym właścicielem każdej roli.
+Każde przypisanie zapisuje model, effort, zakres i wynik. Native LOCAL worker
+nie zastępuje niezależnego panelu review. Awaria CDP nie uruchamia automatycznie Astry.
+**Równoległość i postęp.** Blokujący warunek dotyczy zależnego etapu i jego
+zasobu, nie całego zadania. Gdy jedna lane jest zajęta albo odpowiedź pozostaje
+niepewna, kontynuuj niezależne, już autoryzowane prace: prompt/specyfikację,
+przygotowanie pakietu, walidację zakończonego wycinka i niekolidujące przypisania.
+Nie ponawiaj niepewnego wysłania. Brak wymaganego review blokuje clearance i
+landing, ale nie jest nową prośbą o GO dla przygotowania ani naprawy w zakresie.
+
+Kilka promptów CDP może działać równolegle, jeśli adapter przypisuje każdemu
+własną kartę/target i odczytuje odpowiedź z tego samego targetu. Nie traktuj
+całego profilu Chrome jak pojedynczego zadania obliczeniowego. Współdzielone
+operacje uruchomienia/odzyskiwania profilu muszą respektować wszystkich aktywnych
+właścicieli; wejście i odpowiedź wymagają izolacji per zlecenie. Jeżeli obecny
+adapter używa dowolnej gotowej karty albo serializuje cały profil, zapisz to
+jako ograniczenie implementacji. Nie usuwaj samego locka przed izolacją kart
+i nie przedstawiaj zajętego profilu jako braku możliwości równoległości CDP.
+
+Tylko ciężkie pytesty używają `host:heavy`. CDP korzysta z niezależnych pul
+`cdp:*` i nie czeka na lease pytestów ani recovery `host:heavy`. Przeglądarka
+i Playwright nie są heavy. Zachowaj ownership i zwalniaj każdą pulę po jej pracy.
+
+**5. Exact-head review.** Po lokalnej walidacji przygotuj commit, push,
+draft PR i canonical packet. Rola [review](implementation-review.md) działa
+na zatwierdzonej niezależnej lane/modelu. Weryfikuj full SHA, źródło,
+kompletność oraz poświadczenia. NO_REVIEW, nieaktualny head i brak wymaganej
+lane nie są PASS. Napraw zakresowe blokery, zweryfikuj i zrecenzuj nowy head.
+Nie dodawaj drugiego pełnego lokalnego review udającego niezależność.
+
+**6. Dostarczenie.** Właściciel workflow wykonuje Ready raz, wymagane CI,
+squash merge i bezpieczny fast-forward faktycznej gałęzi domyślnej. Zachowaj
+cudze zmiany. Uruchom post-hook planu. Raport zawiera zachowanie, ważne
+dowody, authorship/applier/reviewer, PR/SHA, stan instalacji/runtime i pozostały
+gate. Zatrzymaj się tylko na rzeczywistym blokującym warunku; nie po samym
+napisaniu kodu.
+
+## Projekt przekazywania stanu
+
+Każdy etap przekazuje dalej istniejący task/plan, referencję materiału,
+decyzje, ustalenia, ważność dowodów i status autoryzacji. To wymaganie projektu,
+nie nowy plik receipt ani zmiana schema w tym R0. Nie dopisuj pól do
+produkcyjnego parsera przez samo wykonanie instrukcji tekstowej.
+
+Nie dodawać osobnego full workflow, nowego executor CLI, obowiązkowego
+ARCHITECT/QUANT/TDD do każdej zmiany ani niezależnego cyklu `/autoplan` wewnątrz
+`/fwf`. Pomocnicze role zwracają wynik do właściciela aktualnego etapu.

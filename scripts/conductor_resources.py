@@ -51,8 +51,6 @@ ROLE_TO_RESOURCE_KEY = {
 PURPOSE_TO_RESOURCE_KEY = {
     "pytest_full": "host:heavy",
     "pytest_heavy": "host:heavy",
-    "pytest_focused": "host:heavy",
-    "playwright": "host:heavy",
     "cdp_perplexity": "cdp:perplexity",
     "cdp_chatgpt": "cdp:chatgpt",
     "cdp_gemini": "cdp:gemini",
@@ -97,6 +95,8 @@ def resolve_resource_key(
     ``cdp:*`` key can route. A CDP purpose without a chrome_* role or ``cdp:*``
     key is refused rather than falling through to ``host:heavy``.
     """
+    if purpose == "pytest_focused" and not resource_key and not role:
+        raise ValueError("pytest_focused does not acquire a host resource")
     if resource_key == RESOURCE_KEY and _is_cdp_purpose(purpose):
         resource_key = None
     if resource_key:
@@ -910,9 +910,9 @@ class HostResourceManager:
         if (purpose.startswith("pytest_") or purpose == "playwright") and resource_key.startswith("cdp:"):
             raise ValueError(f"pytest purpose '{purpose}' cannot consume CDP pool '{resource_key}'")
 
-        # A cdp_provider or cdp_* purpose must NEVER consume host:heavy
-        if (purpose == "cdp_provider" or purpose.startswith("cdp_")) and resource_key == "host:heavy":
-            raise ValueError(f"CDP purpose '{purpose}' cannot consume '{resource_key}'")
+        # Only pytest may consume host:heavy; browser/provider work is independent.
+        if not purpose.startswith("pytest_") and resource_key == "host:heavy":
+            raise ValueError(f"non-pytest purpose '{purpose}' cannot consume '{resource_key}'")
 
         # Specific purpose to pool alignment
         if purpose == "cdp_perplexity" and resource_key != "cdp:perplexity":
