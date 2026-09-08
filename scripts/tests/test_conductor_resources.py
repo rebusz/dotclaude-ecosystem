@@ -1078,3 +1078,47 @@ def test_cdp_tv_purpose_is_refused_on_host_heavy(tmp_path: pathlib.Path):
             attempt_id="cctv-wrong-pool",
             agent_instance="tsignal-cctv:9999",
         )
+
+
+def test_cdp_provider_does_not_fall_through_to_host_heavy():
+    """Generic cdp_provider is not a pool; the old default was a trap (DOM-Q1)."""
+    with pytest.raises(ValueError, match="host:heavy is not a CDP pool"):
+        resolve_resource_key(purpose="cdp_provider")
+    with pytest.raises(ValueError, match="host:heavy is not a CDP pool"):
+        resolve_resource_key(purpose="cdp_provider", resource_key="host:heavy")
+
+
+@pytest.mark.parametrize(
+    "role,pool",
+    [
+        ("chrome_gpt", "cdp:chatgpt"),
+        ("chrome_ppl", "cdp:perplexity"),
+        ("chrome_gemini", "cdp:gemini"),
+        ("chrome_tv", "cdp:tv"),
+    ],
+)
+def test_stale_host_heavy_key_yields_to_cdp_role(role: str, pool: str):
+    assert (
+        resolve_resource_key(purpose="cdp_provider", resource_key="host:heavy", role=role)
+        == pool
+    )
+
+
+def test_named_cdp_key_is_kept_for_generic_provider():
+    assert resolve_resource_key(purpose="cdp_provider", resource_key="cdp:chatgpt") == "cdp:chatgpt"
+
+
+def test_occupied_heavy_does_not_block_resolved_cdp_chatgpt(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    heavy = HostResourceManager(store, resource_key="host:heavy")
+    heavy.request(purpose="pytest_full", attempt_id="heavy-1", agent_instance="pytest")
+    key = resolve_resource_key(purpose="cdp_provider", role="chrome_gpt")
+    assert key == "cdp:chatgpt"
+    admitted = HostResourceManager(store, resource_key=key).request(
+        purpose="cdp_provider",
+        attempt_id="fwf-gpt-1",
+        agent_instance="codex-dom-q1",
+    )
+    assert admitted["state"] == "ACTIVE"
+    assert admitted["resource_key"] == "cdp:chatgpt"
+    assert heavy.status()["active_units"] == 1

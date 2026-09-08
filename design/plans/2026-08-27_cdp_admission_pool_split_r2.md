@@ -1,13 +1,15 @@
 ---
 title: CDP admission pools - stop serialising prompts behind pytest
 date: 2026-08-27
-status: draft-awaiting-go
+status: active-continuation
 risk: R2
 repos: [dotclaude-ecosystem, WatchF]
 tags: [conductor, host-resource, cdp, admission, concurrency, fwf, coderpx]
 related:
   - design/plans/2026-07-22_truthdeck_conductor_cross_repo_work_queue_r2.md
   - design/plans/2026-08-27_conductor_operator_gui_r1.md
+continuation_of: CP-1/CP-2 shipped; CP-3 adapters remaining
+operator_go: GO named CDP pools 2026-09-06 (DOM H0); original token GO CDP POOL SPLIT R2 already exercised by #90/#91
 ---
 
 # CDP admission pools - stop serialising prompts behind pytest
@@ -278,13 +280,50 @@ Consequence, stated so the two plans do not drift:
 
 ## Definition of Done
 
-- [ ] More than one pool exists and each maps to one physical resource.
-- [ ] A fence in one CDP pool provably does not block another pool or pytest.
-- [ ] Perplexity admits 3 concurrent submissions with at most one per model.
-- [ ] `/fwf` and CoderPX share each CDP pool and are separated by priority, not by pool.
-- [ ] No consumer reaches a browser without admission; no CDP request consumes a CPU slot.
-- [ ] `host:heavy` semantics and tests are unchanged.
-- [ ] The Gate Panel renders every pool, and CP-5 is reflected in the GUI plan when it lands.
+- [x] More than one pool exists and each maps to one physical resource. (CP-1, #90/#91)
+- [x] A fence in one CDP pool provably does not block another pool or pytest.
+- [x] Perplexity admits 3 concurrent submissions with at most one per model.
+- [x] `/fwf` and CoderPX share each CDP pool and are separated by priority, not by pool. (scheduler no longer fences CDP behind `host:heavy`; adapters still must request the named pool)
+- [ ] No consumer reaches a browser without admission; no CDP request consumes a CPU slot. (CP-3: WatchF `HostHeavyLease` / `fuse.py` / `auditgpt.py` / `auditpx.py` / `cdp_chatgpt_code.py` remain the consumer owners; not in this continuation)
+- [x] `host:heavy` semantics and tests are unchanged. (capacity still 1; CDP purposes still refused on that pool)
+- [x] The Gate Panel renders every pool, and CP-5 is reflected in the GUI plan when it lands.
+
+## Continuation CP-7 — 2026-09-06 H0 (named pools, stale routing)
+
+Operator, 2026-09-06: CDP and ordinary work leave `host:heavy`. Do not re-ask.
+Pools already exist (`host:heavy=1`, `cdp:perplexity=3`, `cdp:chatgpt=3`,
+`cdp:gemini=1`, `cdp:tv=1`). This continuation does **not** re-implement the
+split.
+
+Candidate changes here (dotclaude-ecosystem; not yet landed or installed):
+
+1. `resolve_resource_key` never falls through `cdp_provider` to `host:heavy`.
+   A stale explicit `host:heavy` key with a CDP purpose is ignored so `--role`
+   or a named `cdp:*` key can route. Missing both is a `ValueError`, not a
+   silent heavy admit.
+2. `conductorctl` resource-request/release/recover/pytest return non-zero when
+   the receipt status is not `SUCCESS` (`ERROR` at exit 0 was the DOM-Q1 miss).
+3. Scheduler WorkItems with `job_kind=cdp_provider` are not blocked by an
+   occupied `host:heavy` slot.
+4. Source-of-truth rules (`agent-rules/core.md`, `skills/conductor/SKILL.md`,
+   `/fwf` `/fwp`) match the pool table. Capacities are not raised.
+
+Still WatchF / `_shared` (separate PRs, not this repo):
+
+- `HostHeavyLease.acquire` default pair `cdp_provider + host:heavy`
+- `fuse.py` / dispatcher callers that pass `--resource-key host:heavy` for panel
+  audit (DOM-Q1 receipt `rcp_3991e8ed796d`)
+- `auditgpt.py`, `auditpx.py`, Gemini/Antigravity, `cdp_chatgpt_code.py`
+
+Required argv for DOM-Q1 `/fwf` Stage 2 ChatGPT lane:
+
+```text
+resource-request --purpose cdp_provider --resource-key cdp:chatgpt --role chrome_gpt --priority 50
+```
+
+Perplexity: `--resource-key cdp:perplexity --role chrome_ppl --slot-key <model>`.
+Gemini: `--resource-key cdp:gemini --role chrome_gemini`. CCTV is already
+`--resource-key cdp:tv --role chrome_tv` in Tsignal.
 
 ## Open questions for review
 
@@ -297,4 +336,40 @@ Consequence, stated so the two plans do not drift:
    are chosen for the same reason HRL-R2 fixed capacity at 1: a measured, environment-derived
    capacity drifts per session and cannot be reasoned about from a readback.
 
->> APPROVAL NEEDED - reply `GO CDP POOL SPLIT R2` to authorize implementation
+Continuation CP-7 is authorized by the 2026-09-06 named-pool decision. Do not
+re-request `GO CDP POOL SPLIT R2`. WatchF/`_shared` CP-3 adapters still need
+their own PRs.
+
+## 2026-09-07 local continuation evidence
+
+Full DOM program GO through coderpxG retains this existing CP-7 scope. The
+Cursor patch from Tsignal PR #1742 was mechanically applied onto ecosystem
+`origin/main` `1b0a908d9a1e83d0c883222c16f652ee77f3b24c` in isolated worktree
+`D:/APPS/_worktrees/dom-h0-ecosystem-20260907`. Code authorship remains Cursor
+Agent. Current Codex supplied local application, validation and this status.
+
+Validation through the existing Conductor bounded pytest adapter:
+`scripts/tests/test_conductor_resources.py`, `test_conductor_cli.py`,
+`test_conductor_scheduler.py`: **57 passed**, process exit 0, receipt
+`rcp_b21f581f225b`, request `rr_b0c4c6f83b14`. The adapter classified the
+three-file run `pytest_full`; it occupied heavy legitimately. This result is
+not evidence that every named CDP caller is admitted or that installation ran.
+
+Before landing/installation, resolve compatibility with the current WatchF
+adapter: it passes `--owner-pid` and `--owner-start-time`. The installed primary
+checkout has uncommitted parser-only additions for those flags; this candidate
+does not contain them. Ecosystem PR #102 separately owns durable owner identity
+and orphan recovery. Do not overwrite primary edits, silently discard owner
+identity, or absorb the entire unrelated recovery feature into H0. Freeze a
+compatible narrow seam or order landing with the existing owner before rollout.
+
+Current Perplexity `coderpx.py` explicitly admits `cdp:perplexity`, and its
+2026-09-07 picker probe succeeded. ChatGPT `auditgpt.py` and
+`cdp_chatgpt_code.py` lack equivalent host-resource admission at their entry
+points; browser lifecycle/profile locks alone do not close CP-3. Parent-owned
+admission is acceptable only with one explicit owner, retained lifetime and
+recorded request/heartbeat/release; no duplicate parent/child leases.
+
+Review and final integration are PENDING. None of the above changes the live
+ledger, capacities, installed scripts, rules or runtime. The program conductor
+will finish configured review before treating this candidate as shipped.

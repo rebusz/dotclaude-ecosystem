@@ -207,3 +207,38 @@ def test_scheduler_does_not_gate_focused_pytest_on_heavy_pool(scheduler: Conduct
     assert selected.work_item_id == item.work_item_id
     assert rejected == []
     scheduler.resources.release(active["request_id"])
+
+
+def test_scheduler_cdp_provider_is_not_blocked_by_host_heavy(scheduler: ConductorScheduler):
+    processor = ConductorCommandProcessor(store=scheduler.store)
+    processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_cdp",
+            command_type="enqueue",
+            payload={
+                "idempotency_key": "key_cdp",
+                "title": "CDP panel",
+                "repo_id": "dotclaude-ecosystem",
+                "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+                "plan_path": "design/plans/cdp.md",
+                "risk_class": "R1",
+                "workflow": "fwf",
+                "requested_terminal_stage": "merged",
+                "job_kind": "cdp_provider",
+                "priority": 50,
+            },
+            idempotency_key="idemp_cdp",
+        )
+    )
+    item = scheduler.store.get_work_item_by_idempotency_key("key_cdp")
+    scheduler.store.transition_work_item_state(item.work_item_id, WorkItemState.READY, "operator", "TEST_READY")
+    scheduler.resources.request(
+        purpose="pytest_heavy",
+        attempt_id="resource-active-cdp",
+        agent_instance="resource-agent",
+    )
+
+    selected, rejected = scheduler.select_next_work_item()
+    assert selected is not None
+    assert selected.work_item_id == item.work_item_id
+    assert not any(entry.get("reason_code") == "HOST_RESOURCE_BUSY" for entry in rejected)
