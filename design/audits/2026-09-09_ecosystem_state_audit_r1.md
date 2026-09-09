@@ -103,7 +103,7 @@ three times: *"modules present, hooks absent, operator believes it is live."*
 The `2026-08-04_installer_managed_hook_block_r2.md` plan is marked **shipped**;
 the managed block is **absent**.
 
-### 2b. Plan lifecycle PRE-step is a silent no-op for this repo and all worktrees
+### 2b. The plan lifecycle is broken at both ends
 
 `scripts/plan_context_loader.py:32,49-55`:
 
@@ -116,7 +116,7 @@ def _detect_repo(cwd):
     return None
 ```
 
-A repo is only recognised when its parent is *exactly* `d:/APPS`. Measured:
+**PRE-step.** A repo is only recognised when its parent is *exactly* `d:/APPS`. Measured:
 
 | cwd | result |
 |---|---|
@@ -130,6 +130,14 @@ Exit code is 0 in every case. So the headline feature of this repo — the
 mandatory PRE-step for ARCHITECT / IMPLEMENT / EXECUTOR / AUTOPLAN — is dead for
 the ecosystem repo itself and for **every agent working in a worktree**, which
 the global rules name as the normal working mode. It fails open and silently.
+
+**POST-step.** Reproduced in this session: `plan_context_updater --plan <p>` printed
+`PLANS.md regen: FAIL — plan_catalog.py timed out after 60 seconds` and exited **0**.
+The catalog it maintains has grown to 20.7 MB / 113,308 lines and no longer
+regenerates inside its own timeout. The SIGKILL lands between `tmp.write_text()`
+and `os.replace()` at `plan_catalog.py:274-276`, which has no `finally` — that is
+where the six orphaned `PLANS.md.tmp.<pid>` files (27.8 MB, oldest 2026-05-18)
+come from. Both ends of the repo's headline feature are down, and both fail open.
 
 ### 2c. Verdict delivery is dead; state grows to the 90-day bound
 
@@ -192,7 +200,8 @@ values. `install.ps1 -Check` reports **53 drift items**, 22 of them missing
 | P1-17 | `agent-rules/core.md` contradicts itself on the Gemini pin and on the Codex-lane exclusion; `sync_agent_rules --write` is frozen (163/162 lines) so no target can be re-converged | CONFIRMED `core.md:28` vs `:30`; measured render |
 | P1-18 | Repo v2 `master-agent` never installed; agents run the v1 monolith whose authoritative routing table is duplicated inside itself with divergent content | CONFIRMED 32,900 B vs 7,161 B; `install.ps1 -Check` 53 drift items |
 | P1-19 | `skills/whatnext/SKILL.md:57` and `overlays/codex-global.md:30` forbid agents from touching the broker API / order path — the exact prohibition `core.md:18` names as the cause of the paper/live divergence | CONFIRMED both file:line |
-| P1-20 | 0 of 1,601 session verdicts ever consumed; state grows to the 90-day bound while the reaper pays O(N) JSON reads per hook fire against a 0.15 s budget | CONFIRMED measured + `state_reaper.py:183-230` |
+| P1-20 | The plan-lifecycle **POST**-step is broken too: `plan_context_updater` reports `PLANS.md regen: FAIL — plan_catalog.py timed out after 60 seconds` and **still exits 0**. `~/.claude/PLANS.md` is 20.7 MB / 113k lines, so the catalog can no longer regenerate inside its own timeout. This is also the root cause of P2-2: the kill lands mid-write, orphaning `PLANS.md.tmp.<pid>` | CONFIRMED — reproduced in this audit session |
+| P1-21 | 0 of 1,601 session verdicts ever consumed; state grows to the 90-day bound while the reaper pays O(N) JSON reads per hook fire against a 0.15 s budget | CONFIRMED measured + `state_reaper.py:183-230` |
 
 ### P2 — correctness / hardening
 
