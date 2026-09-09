@@ -1,0 +1,51 @@
+name: CI
+
+# One workflow, whole suite, no path filters.
+#
+# This replaces hooks-ci, session-lifecycle-ci and truthdeck-ci, which between
+# them named 27 of 72 scripts in hand-maintained argument lists. Everything else
+# — the entire Conductor subsystem, ~9k lines with ten real test files — was
+# checked by nothing, ever, and `main` sat red for two days on two contract
+# tests no workflow ran (audit 2026-09-09, P1-5 / P1-6).
+#
+# Path filters are gone on purpose. They were the mechanism of the blind spot:
+# `truthctl.py` was exercised by truthdeck-ci's own pytest step yet excluded
+# from its trigger glob, so editing the CLI entrypoint ran nothing. The suite
+# takes ~2 minutes; that is cheaper than a filter nobody can keep correct.
+#
+# `ready_for_review` is listed because the draft gate below skips draft pushes,
+# and a PR taken draft -> ready without a further push would otherwise merge
+# with `completed/skipped` checks and zero executed tests (P1-22).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+jobs:
+  suite:
+    # Draft PRs stay uncheckedly cheap; the operator's documented policy is to
+    # batch pushes while drafting and mark ready once.
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the floor the code targets; 3.14 is what the operator's box
+        # actually runs. Testing only one of them is how "local green" and "CI
+        # green" stopped meaning the same thing.
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: python -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+      - name: Lint
+        run: python -m ruff check scripts
+      - name: Compile
+        run: python -m compileall -q scripts
+      - name: Tests
+        run: python -m pytest -q

@@ -15,9 +15,29 @@ from truthdeck_install import InstallError, _register_codex, _shim_spec, install
 
 class InstallerTests(unittest.TestCase):
     def test_ci_runs_once_when_draft_becomes_ready(self):
-        workflow = (ROOT / ".github" / "workflows" / "truthdeck-ci.yml").read_text(encoding="utf-8")
+        """The draft-batching contract, asserted against whatever workflow owns it.
+
+        This used to name `truthdeck-ci.yml`, one of three path-filtered
+        workflows that between them checked 27 of 72 scripts. They were
+        consolidated into a single `ci.yml` that runs the whole suite, so the
+        contract moved but did not change: batch pushes while drafting, and the
+        ready transition must still produce a run.
+
+        The `paths` assertion is new and is the other half of P1-22. Filters
+        were the mechanism of the blind spot — `truthctl.py` was exercised by
+        this very workflow's pytest step yet excluded from its trigger glob, so
+        editing the CLI entrypoint ran nothing at all.
+        """
+        workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        self.assertEqual(
+            [p.name for p in workflows], ["ci.yml"],
+            "one workflow: scope lives in pyproject.toml, not in per-file argument lists",
+        )
+        workflow = workflows[0].read_text(encoding="utf-8")
+
         self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", workflow)
-        self.assertIn("if: github.event.pull_request.draft == false", workflow)
+        self.assertIn("github.event.pull_request.draft == false", workflow)
+        self.assertNotIn("paths:", workflow)
 
     def test_install_status_idempotency_and_uninstall_preserve_state(self):
         with tempfile.TemporaryDirectory() as tmp:

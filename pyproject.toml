@@ -1,0 +1,33 @@
+# Repository-level tool configuration.
+#
+# Before this file, "what gets checked" was defined by hand-maintained argument
+# lists inside three workflow YAMLs. That is how a 45-script blind spot
+# accumulated unnoticed: adding a module and its test changed nothing unless
+# someone also remembered to add both to the right lists, and nobody did — the
+# entire Conductor subsystem (~9k lines, 10 test files) had no CI at all, and
+# `main` sat red for two days on two contract tests no workflow ran
+# (audit 2026-09-09, P1-5 and P1-6).
+#
+# Scope now lives here, once, and CI runs the whole suite.
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Ruff's defaults (E4/E7/E9 + F). Deliberately not a bigger set: this repo has
+# 42 pre-existing violations under the defaults alone, and a wider net would
+# have meant either a mass reformat or a wall of noise nobody reads — which is
+# the failure mode this whole audit is about.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import sibling modules from scripts/ and must extend sys.path first, so
+# their imports legitimately follow a statement. The pattern is deliberate, not
+# an oversight to be contorted around.
+"scripts/tests/*" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["scripts/tests"]
+# So a bare `pytest` works from the repo root without PYTHONPATH ceremony, in
+# CI and on a developer box alike.
+pythonpath = ["scripts"]
