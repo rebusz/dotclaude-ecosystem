@@ -155,7 +155,26 @@ Polish trigger.
 **Rollback.** `hooks_install` already writes a timestamped `settings.json`
 backup; restore it. All other changes are single-file reverts.
 
-#### Slice B — the delivery seam (R1)
+#### Slice B — the delivery seam (R1) — **SHIPPED 2026-09-09**
+
+`scripts/ecosystem_doctor.py` folds `hooks_install status`, the verdict backlog,
+orphaned atomic-write temp files and the cached `git_hygiene` report into one
+bounded line plus an exit code. It owns no checks of its own — that is the
+point. 50 ms against the live home; on it today:
+
+    [  ok  ] hooks      OK
+    [ FAIL ] verdicts   1601 unreaped (>400)
+    [ FAIL ] temp       11 orphaned .tmp files
+    [ FAIL ] janitor    14 alarms
+
+Wired into `session_router`'s existing SessionStart context (one line, no new
+hook, silent when clean) and into both CI workflows. The Codex and Cursor
+doctors gained the `is_file()` check Claude's has always had.
+
+One finding surfaced while landing Slice A and is recorded as audit P1-22: on
+PR #114 every draft-time push produced `completed/skipped` checks, `gh pr ready`
+created no run at all, and `mergeStateStatus` read `CLEAN` — a PR that looks
+fully gated with zero tests executed. Slice C owns the fix.
 
 1. `scripts/ecosystem_doctor.py` — runs `hooks_install status`,
    `install.ps1 -Check`, `git_hygiene` (dry-run, cached), a state-growth read,
