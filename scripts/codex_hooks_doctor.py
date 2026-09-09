@@ -25,7 +25,9 @@ REQUIRED_EVENTS = ("SessionStart", "SessionEnd")
 _ENC_RE = re.compile(r"-Enc(?:odedCommand)?\s+([A-Za-z0-9+/=]{8,})", re.IGNORECASE)
 
 # Verdicts that mean the Codex block is absent/broken on a host where Codex is deployed.
-_BLOCK_INVALIDATING = frozenset({"MISSING", "NEVER_INSTALLED", "MALFORMED"})
+_BLOCK_INVALIDATING = frozenset(
+    {"MISSING", "NEVER_INSTALLED", "MALFORMED", "UNRESOLVED_PATH"}
+)
 
 
 def _last_quoted_token(text: str) -> str | None:
@@ -39,25 +41,46 @@ def _last_quoted_token(text: str) -> str | None:
     return single or double or None
 
 
-def _references_adapter(command: object) -> bool:
+def _adapter_token(command: object) -> str | None:
     """Anchored check (mirrors the Cursor/Claude fix): a bare substring match would
     false-report a handler as owned if it merely mentions the filename without
     invoking it. Require the exact basename of the extracted path token to equal
     the adapter filename, whether the command is plain or -EncodedCommand-wrapped."""
     if not isinstance(command, str) or not command:
-        return False
+        return None
     m = _ENC_RE.search(command)
     if m:
         try:
             decoded = base64.b64decode(m.group(1)).decode("utf-16-le", errors="replace")
         except (ValueError, UnicodeDecodeError):
-            return False
+            return None
         token = _last_quoted_token(decoded)
     else:
         token = _last_quoted_token(command)
     if token is None:
-        return False
-    return Path(token.replace("\\", "/")).name == ADAPTER
+        return None
+    normalized = token.replace("\\", "/")
+    return normalized if Path(normalized).name == ADAPTER else None
+
+
+def _references_adapter(command: object) -> bool:
+    return _adapter_token(command) is not None
+
+
+def _event_adapter_token(hooks: dict, event: str) -> str | None:
+    """The path this event's adapter handler actually invokes, if any."""
+    for group in hooks.get(event, []) or []:
+        if not isinstance(group, dict):
+            continue
+        for handler in group.get("hooks", []) or []:
+            if not isinstance(handler, dict):
+                continue
+            token = _adapter_token(handler.get("command")) or _adapter_token(
+                handler.get("commandWindows")
+            )
+            if token is not None:
+                return token
+    return None
 
 
 def _event_has_adapter(hooks: dict, event: str) -> bool:
@@ -93,6 +116,18 @@ def codex_hooks_status(home: Path) -> tuple[str, str]:
     missing = [e for e in REQUIRED_EVENTS if not _event_has_adapter(hooks, e)]
     if missing:
         return ("MISSING", f"required event(s) lack the {ADAPTER} handler: {', '.join(missing)}")
+    # A handler naming the adapter is not a handler that runs it. Claude's
+    # doctor has verified the file exists since the beginning; these two only
+    # matched the basename, so a hooks.json pointing at a deleted adapter read
+    # as OK -- the "hooks present, nothing runs, nothing complains" death the
+    # IDEA_BOX describes, still open on two of three runtimes (audit P2-24).
+    unresolved = [
+        e for e in REQUIRED_EVENTS
+        if (token := _event_adapter_token(hooks, e)) and not Path(token).is_file()
+    ]
+    if unresolved:
+        return ("UNRESOLVED_PATH",
+                f"handler(s) point at a missing {ADAPTER}: {', '.join(unresolved)}")
     return ("OK", "")
 
 

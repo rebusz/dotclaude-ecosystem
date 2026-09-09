@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/session_state.py"
       - "scripts/session_router.py"
+      - "scripts/ecosystem_doctor.py"
       - "scripts/session_lifecycle.py"
       - "scripts/worktree_lifecycle.py"
       - "scripts/state_reaper.py"
@@ -19,6 +20,7 @@ on:
       - "scripts/cursor_hooks_doctor.py"
       - "scripts/tests/test_session_state.py"
       - "scripts/tests/test_session_router.py"
+      - "scripts/tests/test_ecosystem_doctor.py"
       - "scripts/tests/test_session_lifecycle.py"
       - "scripts/tests/test_worktree_lifecycle.py"
       - "scripts/tests/test_state_reaper.py"
@@ -53,6 +55,7 @@ jobs:
           python -m pytest -q
           scripts/tests/test_session_state.py
           scripts/tests/test_session_router.py
+          scripts/tests/test_ecosystem_doctor.py
           scripts/tests/test_session_lifecycle.py
           scripts/tests/test_worktree_lifecycle.py
           scripts/tests/test_state_reaper.py
@@ -68,6 +71,7 @@ jobs:
           python -m ruff check
           scripts/session_state.py
           scripts/session_router.py
+          scripts/ecosystem_doctor.py
           scripts/session_lifecycle.py
           scripts/worktree_lifecycle.py
           scripts/state_reaper.py
@@ -94,6 +98,7 @@ jobs:
           scripts/tests/test_cursor_hooks_doctor.py
       - run: >-
           python -m compileall -q
+          scripts/ecosystem_doctor.py
           scripts/session_state.py
           scripts/session_router.py
           scripts/session_lifecycle.py

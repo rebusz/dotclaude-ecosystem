@@ -30,26 +30,40 @@ from hooks_install import _command_path_token  # noqa: E402 - reuse the proven t
 ADAPTER = "cursor_session_adapter.py"
 REQUIRED_EVENTS = ("sessionStart", "sessionEnd")
 
-_BLOCK_INVALIDATING = frozenset({"MISSING", "NEVER_INSTALLED", "MALFORMED"})
+_BLOCK_INVALIDATING = frozenset(
+    {"MISSING", "NEVER_INSTALLED", "MALFORMED", "UNRESOLVED_PATH"}
+)
 
 
-def _references_adapter(command: object) -> bool:
+def _adapter_token(command: object) -> str | None:
     """Anchored check: a bare substring match would false-report OK for a handler
     that merely mentions the filename without invoking it. Require the quote-aware
     path token's exact basename to equal the adapter filename."""
     if not isinstance(command, str):
-        return False
+        return None
     token = _command_path_token(command)
     if token is None:
-        return False
-    return Path(token.replace("\\", "/")).name == ADAPTER
+        return None
+    normalized = token.replace("\\", "/")
+    return normalized if Path(normalized).name == ADAPTER else None
+
+
+def _references_adapter(command: object) -> bool:
+    return _adapter_token(command) is not None
+
+
+def _event_adapter_token(hooks: dict, event: str) -> str | None:
+    """The path this event's adapter handler actually invokes, if any."""
+    for handler in hooks.get(event, []) or []:
+        if isinstance(handler, dict):
+            token = _adapter_token(handler.get("command"))
+            if token is not None:
+                return token
+    return None
 
 
 def _event_has_adapter(hooks: dict, event: str) -> bool:
-    for handler in hooks.get(event, []) or []:
-        if isinstance(handler, dict) and _references_adapter(handler.get("command")):
-            return True
-    return False
+    return _event_adapter_token(hooks, event) is not None
 
 
 def cursor_hooks_status(home: Path) -> tuple[str, str]:
@@ -74,6 +88,14 @@ def cursor_hooks_status(home: Path) -> tuple[str, str]:
     missing = [e for e in REQUIRED_EVENTS if not _event_has_adapter(hooks, e)]
     if missing:
         return ("MISSING", f"required event(s) lack the {ADAPTER} handler: {', '.join(missing)}")
+    # A handler naming the adapter is not a handler that runs it (audit P2-24).
+    unresolved = [
+        e for e in REQUIRED_EVENTS
+        if (token := _event_adapter_token(hooks, e)) and not Path(token).is_file()
+    ]
+    if unresolved:
+        return ("UNRESOLVED_PATH",
+                f"handler(s) point at a missing {ADAPTER}: {', '.join(unresolved)}")
     return ("OK", "")
 
 
