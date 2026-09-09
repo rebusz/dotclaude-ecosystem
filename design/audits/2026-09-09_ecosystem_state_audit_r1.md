@@ -59,6 +59,19 @@ rewrote `skills/master-agent/SKILL.md`. Neither test file appears in any
 workflow's `paths:` or `run:` list, so nothing could have caught it — and the
 `if: draft == false` gate means a PR merged while titled Draft ran no CI at all.
 
+**P1-22 — a skipped job is indistinguishable from a passing one.**
+Observed directly on PR #114 while landing Slice A. Every push made while the
+PR was a draft produced `Hooks Installer CI … completed/skipped` and
+`Session Lifecycle CI … completed/skipped`. `gh pr ready` then created **no new
+run at all**, despite `ready_for_review` being listed in the workflow's
+`types:`. Net state: `gh pr view --json mergeStateStatus` reports `CLEAN`, the
+checks list reads "completed", and **not one test had executed**. The operator's
+documented batching policy — keep implementation PRs draft, `gh pr ready` once —
+therefore produces a PR that looks fully gated and is not gated at all. This is
+the same defect class as the rest of this audit: the signal is correct
+(`skipped` really is what happened) and nothing consumes the difference between
+"skipped" and "passed".
+
 ---
 
 ## Layer 2 — data flow
