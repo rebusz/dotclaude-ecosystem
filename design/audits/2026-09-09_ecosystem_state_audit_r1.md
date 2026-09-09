@@ -59,18 +59,29 @@ rewrote `skills/master-agent/SKILL.md`. Neither test file appears in any
 workflow's `paths:` or `run:` list, so nothing could have caught it — and the
 `if: draft == false` gate means a PR merged while titled Draft ran no CI at all.
 
-**P1-22 — a skipped job is indistinguishable from a passing one.**
-Observed directly on PR #114 while landing Slice A. Every push made while the
-PR was a draft produced `Hooks Installer CI … completed/skipped` and
-`Session Lifecycle CI … completed/skipped`. `gh pr ready` then created **no new
-run at all**, despite `ready_for_review` being listed in the workflow's
-`types:`. Net state: `gh pr view --json mergeStateStatus` reports `CLEAN`, the
-checks list reads "completed", and **not one test had executed**. The operator's
-documented batching policy — keep implementation PRs draft, `gh pr ready` once —
-therefore produces a PR that looks fully gated and is not gated at all. This is
-the same defect class as the rest of this audit: the signal is correct
-(`skipped` really is what happened) and nothing consumes the difference between
-"skipped" and "passed".
+**P1-22 — the `ready_for_review` transition runs nothing, and a skipped job
+reads as a passing one.** Observed directly on PR #114 while landing Slices A
+and B, and narrowed by a subsequent push:
+
+| Event | Result |
+|---|---|
+| `synchronize` while the PR is a **draft** | job `completed/skipped` |
+| `ready_for_review` (`gh pr ready`) | **no run created at all**, despite `ready_for_review` being in the workflow's `types:` |
+| `synchronize` after the PR is **ready** | job runs for real — and immediately caught a genuine bug |
+
+So the gate itself works; the hole is the transition. A PR taken from draft to
+ready and merged without a further push carries only `completed/skipped` checks,
+`mergeStateStatus: CLEAN`, and **zero executed tests** — which is exactly the
+operator's documented batching policy (keep it draft, `gh pr ready` once).
+Same defect class as the rest of this audit: the signal is correct (`skipped`
+really is what happened) and nothing consumes the difference between "skipped"
+and "passed".
+
+The value of closing it is not theoretical. The first real run on this branch
+failed on something no local run could reproduce: the GitHub runner's TEMP is an
+8.3 short path (`C:/Users/RUNNER~1/…`), which broke a string comparison of two
+spellings of the same directory in the new ownership record. Slice C owns the
+gate; the bug itself is fixed in `ca05725`.
 
 ---
 
