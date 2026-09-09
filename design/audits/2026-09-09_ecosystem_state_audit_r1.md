@@ -49,7 +49,7 @@ collision check was done by hand over `design/plans/` (14 plans) and
 | Local Python | 3.14.3 | CI pins 3.12 — local green ≠ CI green |
 | Worktrees, this repo | 26 (12 older than 30 days) | |
 | Worktrees, Tsignal 5.0 | **504**, 1361 local branches | growing ~25/day; janitor ALARM daily since June |
-| `~/.claude` on disk | 4.5 GB | `skills/gstack` 1.7 GB, `projects` 1.4 GB, `state` 384 MB |
+| `~/.claude` on disk | 4.5 GB live **+ 16.9 GB of installer backups** | `skills/gstack` 1.7 GB, `projects` 1.4 GB, `state` 384 MB |
 | Hook errors logged | 2,035 lines, 50–150/day, trend up | |
 
 The two `main` failures are `test_implementation_review_packet.py::test_master_agent_owns_risk_aware_review_routing`
@@ -58,6 +58,19 @@ Both broke when PR #112 (`0ea895d`, titled "**Draft:** v2 prompt roles…")
 rewrote `skills/master-agent/SKILL.md`. Neither test file appears in any
 workflow's `paths:` or `run:` list, so nothing could have caught it — and the
 `if: draft == false` gate means a PR merged while titled Draft ran no CI at all.
+
+**P1-22 — a skipped job is indistinguishable from a passing one.**
+Observed directly on PR #114 while landing Slice A. Every push made while the
+PR was a draft produced `Hooks Installer CI … completed/skipped` and
+`Session Lifecycle CI … completed/skipped`. `gh pr ready` then created **no new
+run at all**, despite `ready_for_review` being listed in the workflow's
+`types:`. Net state: `gh pr view --json mergeStateStatus` reports `CLEAN`, the
+checks list reads "completed", and **not one test had executed**. The operator's
+documented batching policy — keep implementation PRs draft, `gh pr ready` once —
+therefore produces a PR that looks fully gated and is not gated at all. This is
+the same defect class as the rest of this audit: the signal is correct
+(`skipped` really is what happened) and nothing consumes the difference between
+"skipped" and "passed".
 
 ---
 
@@ -103,7 +116,7 @@ three times: *"modules present, hooks absent, operator believes it is live."*
 The `2026-08-04_installer_managed_hook_block_r2.md` plan is marked **shipped**;
 the managed block is **absent**.
 
-### 2b. Plan lifecycle PRE-step is a silent no-op for this repo and all worktrees
+### 2b. The plan lifecycle is broken at both ends
 
 `scripts/plan_context_loader.py:32,49-55`:
 
@@ -116,7 +129,7 @@ def _detect_repo(cwd):
     return None
 ```
 
-A repo is only recognised when its parent is *exactly* `d:/APPS`. Measured:
+**PRE-step.** A repo is only recognised when its parent is *exactly* `d:/APPS`. Measured:
 
 | cwd | result |
 |---|---|
@@ -130,6 +143,14 @@ Exit code is 0 in every case. So the headline feature of this repo — the
 mandatory PRE-step for ARCHITECT / IMPLEMENT / EXECUTOR / AUTOPLAN — is dead for
 the ecosystem repo itself and for **every agent working in a worktree**, which
 the global rules name as the normal working mode. It fails open and silently.
+
+**POST-step.** Reproduced in this session: `plan_context_updater --plan <p>` printed
+`PLANS.md regen: FAIL — plan_catalog.py timed out after 60 seconds` and exited **0**.
+The catalog it maintains has grown to 20.7 MB / 113,308 lines and no longer
+regenerates inside its own timeout. The SIGKILL lands between `tmp.write_text()`
+and `os.replace()` at `plan_catalog.py:274-276`, which has no `finally` — that is
+where the six orphaned `PLANS.md.tmp.<pid>` files (27.8 MB, oldest 2026-05-18)
+come from. Both ends of the repo's headline feature are down, and both fail open.
 
 ### 2c. Verdict delivery is dead; state grows to the 90-day bound
 
@@ -188,11 +209,12 @@ values. `install.ps1 -Check` reports **53 drift items**, 22 of them missing
 | P1-13 | `--validation` / `--validation-file` bypasses the review packet's fail-closed secret rejection entirely | CONFIRMED `implementation_review_packet.py:137,159,210,263` |
 | P1-14 | Hook stdin decodes as **cp1252**; every non-ASCII trigger silently never fires. `nowy moduł` → `nowy moduÅ‚`, regex misses | CONFIRMED reproduced: `sys.stdin.encoding = cp1252`, match `True`→`False` |
 | P1-15 | `install.ps1` ignores `hooks_install.py`'s exit code and prints "Install complete" on total failure (`$ErrorActionPreference` does not trap native exit codes) | CONFIRMED `install/install.ps1:229-231` |
-| P1-16 | Installer copies `~/.claude` wholesale — including `.credentials.json`, `.env` and the whole transcript store — into unrotated plaintext `~/.claude.bak.<stamp>` trees (3 present) | CONFIRMED `install.ps1:151-154` + files on disk |
+| P1-16 | Installer clones `~/.claude` wholesale on **every** run, no rotation, no exclusions. **16.9 GB of stale backups against a 4.5 GB live home** (7.8 + 4.6 + 4.5 GB), each future run adds ~4.5 GB. All three trees carry `.credentials.json`, `.env` and `mcp-needs-auth-cache.json` in plaintext at default ACLs — and the July tree holds a *different* 471-byte credentials file, so a rotated token still sits on disk. The copy also runs for minutes before any install work, on the box running the live trading stack | CONFIRMED `install.ps1:151-154`; sizes measured; credential files verified present in all three |
 | P1-17 | `agent-rules/core.md` contradicts itself on the Gemini pin and on the Codex-lane exclusion; `sync_agent_rules --write` is frozen (163/162 lines) so no target can be re-converged | CONFIRMED `core.md:28` vs `:30`; measured render |
 | P1-18 | Repo v2 `master-agent` never installed; agents run the v1 monolith whose authoritative routing table is duplicated inside itself with divergent content | CONFIRMED 32,900 B vs 7,161 B; `install.ps1 -Check` 53 drift items |
 | P1-19 | `skills/whatnext/SKILL.md:57` and `overlays/codex-global.md:30` forbid agents from touching the broker API / order path — the exact prohibition `core.md:18` names as the cause of the paper/live divergence | CONFIRMED both file:line |
-| P1-20 | 0 of 1,601 session verdicts ever consumed; state grows to the 90-day bound while the reaper pays O(N) JSON reads per hook fire against a 0.15 s budget | CONFIRMED measured + `state_reaper.py:183-230` |
+| P1-20 | The plan-lifecycle **POST**-step is broken too: `plan_context_updater` reports `PLANS.md regen: FAIL — plan_catalog.py timed out after 60 seconds` and **still exits 0**. `~/.claude/PLANS.md` is 20.7 MB / 113k lines, so the catalog can no longer regenerate inside its own timeout. This is also the root cause of P2-2: the kill lands mid-write, orphaning `PLANS.md.tmp.<pid>` | CONFIRMED — reproduced in this audit session |
+| P1-21 | 0 of 1,601 session verdicts ever consumed; state grows to the 90-day bound while the reaper pays O(N) JSON reads per hook fire against a 0.15 s budget | CONFIRMED measured + `state_reaper.py:183-230` |
 
 ### P2 — correctness / hardening
 
