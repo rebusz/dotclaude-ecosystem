@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any
+
+from hook_stdio import read_stdin_text
 
 import session_lifecycle
 import session_router
@@ -106,7 +107,7 @@ def handle_event(
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         parsed = json.loads(raw) if raw.strip() else {}
         event = parsed if isinstance(parsed, dict) else {}
     except (OSError, json.JSONDecodeError):

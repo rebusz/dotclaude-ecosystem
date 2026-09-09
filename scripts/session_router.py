@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hook_stdio import read_stdin_text
+
 from _catalog_common import parse_yaml_block
 from session_state import (
     RepositoryRegistration,
@@ -603,7 +605,7 @@ def handle_event(
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         event = json.loads(raw) if raw.strip() else {}
     except (OSError, json.JSONDecodeError):
         event = {}

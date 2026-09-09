@@ -75,15 +75,14 @@ class TestCursorSessionAdapter(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), '{"additional_context":"context"}\n')
         handle.assert_called_once_with(json.loads(payload))
 
-    def test_main_treats_stdin_decode_failure_as_clean_noop(self):
+    def test_main_treats_undecodable_stdin_as_clean_noop(self):
+        # Stdin is now read as bytes and decoded UTF-8 with errors="replace"
+        # (hook_stdio.read_stdin_text), so a lone \xff can no longer raise on
+        # decode — it becomes U+FFFD and fails at json.loads instead. Same
+        # observable contract, driven through the real decode path rather than
+        # a mocked exception: one clean no-op call with an empty event.
         stdin = mock.Mock()
-        stdin.read.side_effect = UnicodeDecodeError(
-            "utf-8",
-            b"\xff",
-            0,
-            1,
-            "invalid start byte",
-        )
+        stdin.buffer = io.BytesIO(b"\xff")
         with (
             mock.patch.object(sys, "stdin", stdin),
             mock.patch.object(adapter, "handle_event", return_value={}) as handle,
@@ -92,6 +91,32 @@ class TestCursorSessionAdapter(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         handle.assert_called_once_with({})
+
+    def test_main_treats_unreadable_stdin_as_clean_noop(self):
+        stdin = mock.Mock()
+        stdin.buffer.read.side_effect = OSError("broken pipe")
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(adapter, "handle_event", return_value={}) as handle,
+        ):
+            exit_code = adapter.main()
+
+        self.assertEqual(exit_code, 0)
+        handle.assert_called_once_with({})
+
+    def test_main_reads_utf8_stdin_regardless_of_console_codepage(self):
+        # The cp1252 default on Windows used to mojibake this payload silently.
+        payload = json.dumps({"cwd": "D:/APPS/moduł", "hook_event_name": "beforeSubmitPrompt"})
+        stdin = mock.Mock()
+        stdin.buffer = io.BytesIO(payload.encode("utf-8"))
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(adapter, "handle_event", return_value={}) as handle,
+        ):
+            exit_code = adapter.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(handle.call_args.args[0].get("cwd"), "D:/APPS/moduł")
 
     def test_valid_cli_start_delegates_normalized_event_and_emits_context_only(self):
         with tempfile.TemporaryDirectory() as tmp:
