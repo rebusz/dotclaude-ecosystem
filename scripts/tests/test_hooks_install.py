@@ -103,8 +103,9 @@ class InstallTests(unittest.TestCase):
         hi.install(home=self.home, checkout=second, apply=True)
 
         self.assertEqual(self._handler_count(), 10, "second checkout must not double the block")
-        self.assertTrue(all(second.as_posix() in c for c in self._commands()))
-        self.assertIn(ROOT.as_posix().lower(), hi.read_sidecar(self.home)["previous_roots"])
+        resolved = second.resolve(strict=False).as_posix()
+        self.assertTrue(all(resolved in c for c in self._commands()))
+        self.assertIn(hi._canonical_root(str(ROOT)), hi.read_sidecar(self.home)["previous_roots"])
         self.assertEqual(hi.status(home=self.home, checkout=second).overall, "OK")
 
     def test_third_checkout_reconciles_using_the_recorded_root_history(self) -> None:
@@ -116,7 +117,19 @@ class InstallTests(unittest.TestCase):
 
         self.assertEqual(self._handler_count(), 10)
         self.assertEqual(sorted(hi.read_sidecar(self.home)["previous_roots"]),
-                         sorted([ROOT.as_posix().lower(), second.as_posix().lower()]))
+                         sorted([hi._canonical_root(str(ROOT)), hi._canonical_root(str(second))]))
+
+    def test_a_short_path_spelling_resolves_to_the_same_root(self) -> None:
+        """CI caught this: the GitHub runner's TEMP is an 8.3 short path
+        (C:/Users/RUNNER~1/...) while the sidecar records the resolved form, so
+        a plain string comparison failed to recognise our own handlers — the
+        exact duplication this ownership record exists to prevent."""
+        if sys.platform != "win32":
+            self.skipTest("8.3 short names are a Windows filesystem feature")
+        long_form = Path("C:/Program Files")
+        if not long_form.is_dir():
+            self.skipTest("no directory with a known 8.3 alias on this host")
+        self.assertEqual(hi._canonical_root("C:/PROGRA~1"), hi._canonical_root(str(long_form)))
 
     def test_a_recorded_root_that_no_longer_exists_is_not_claimed(self) -> None:
         """Ownership expires with the checkout. Once the directory is gone the
@@ -125,13 +138,13 @@ class InstallTests(unittest.TestCase):
         second = self._fake_checkout("checkout-b")
         hi.install(home=self.home, checkout=second, apply=True)
         hi.install(home=self.home, checkout=ROOT, apply=True)
-        self.assertIn(second.as_posix().lower(), hi.read_sidecar(self.home)["previous_roots"])
+        self.assertIn(hi._canonical_root(str(second)), hi.read_sidecar(self.home)["previous_roots"])
 
         shutil.rmtree(second)
         ownership = hi.sidecar_ownership(self.home)
 
-        self.assertNotIn(second.as_posix().lower(), ownership.roots)
-        self.assertIn(ROOT.as_posix().lower(), ownership.roots)
+        self.assertNotIn(hi._canonical_root(str(second)), ownership.roots)
+        self.assertIn(hi._canonical_root(str(ROOT)), ownership.roots)
 
     def test_unrecorded_root_stays_a_collision_until_reconcile(self) -> None:
         """Ownership is proof, not a guess: a managed basename under a root we

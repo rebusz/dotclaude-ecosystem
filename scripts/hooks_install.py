@@ -237,6 +237,22 @@ class Ownership:
 _NO_OWNERSHIP = Ownership()
 
 
+def _canonical_root(value: str) -> str:
+    """One spelling for a directory, whatever spelling was recorded.
+
+    `resolve_checkout` resolves before recording, but a sidecar written by an
+    older build -- or on a host where TEMP is an 8.3 short path such as
+    C:/Users/RUNNER~1 -- can hold the unresolved form. Comparing those two
+    spellings as strings silently fails to recognise our own handlers, which is
+    the duplication this ownership record exists to prevent.
+    """
+    try:
+        resolved = Path(value).resolve(strict=False).as_posix()
+    except (OSError, ValueError):
+        resolved = value.replace("\\", "/")
+    return resolved.rstrip("/").lower()
+
+
 def sidecar_ownership(home: Path, *, claim_any_root: bool = False) -> Ownership:
     """Roots and exact commands recorded by previous installs, current one last."""
     sidecar = read_sidecar(home) or {}
@@ -244,7 +260,7 @@ def sidecar_ownership(home: Path, *, claim_any_root: bool = False) -> Ownership:
     for value in [sidecar.get("checkout_root"), *(sidecar.get("previous_roots") or [])]:
         if not isinstance(value, str) or not value.strip():
             continue
-        normalized = value.replace("\\", "/").rstrip("/").lower()
+        normalized = _canonical_root(value)
         # A recorded root only proves ownership while it is still a checkout. If
         # the directory is gone, the path can be reused by something unrelated,
         # and claiming a handler under it would delete a hook we never wrote.
@@ -500,7 +516,7 @@ def install(*, home: Path, checkout: Path | None, apply: bool,
     # Carry the roots we have ever installed from. Without this history a third
     # install cannot recognise the first one's handlers, and they accumulate.
     previous_roots = sorted(
-        r for r in ownership.roots if r != root.as_posix().lower()
+        r for r in ownership.roots if r != _canonical_root(root.as_posix())
     )
     pending = {"schema_version": SIDECAR_SCHEMA, "state": "pending",
                "checkout_root": root.as_posix(), "previous_roots": previous_roots,
