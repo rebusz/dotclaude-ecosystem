@@ -223,6 +223,20 @@ values. `install.ps1 -Check` reports **53 drift items**, 22 of them missing
 | P2-1 | Worktree sprawl: 504 worktrees / 1361 branches on Tsignal (sampled one at 148 MB → order of tens of GB), 26 here with 12 stale >30d. `git_hygiene` ALARMs daily; `--apply` is manual and never run | CONFIRMED `git worktree list` + `summary.log` |
 | P2-2 | Leaked atomic-write temp files: 6 × `~/.claude/PLANS.md.tmp.<pid>` (27.8 MB, oldest 2026-05-18) because `plan_catalog.py:274-276` has no `try/finally` cleanup; 6 more in `~/.claude/state` from hooks killed at their harness timeout mid-`atomic_write_bytes` | CONFIRMED file:line + files on disk |
 | P2-3 | `append_hook_error` records only the **exception class name** — 514 bare `ValueError` and 271 `LIFECYCLE_FAILED ValueError` with no message, session id, or site. 18 distinct `raise ValueError` sites are indistinguishable. The error channel is unactionable by construction | CONFIRMED `session_state.py` `append_hook_error`; log histogram |
+
+**P2-3, worked example (2026-09-09, while landing Slice B).** A probe that fed
+`session_router.py` a SessionStart event reproduced `ROUTER_INVALID_INPUT
+ValueError` — the single most common line in the operator's log. Recovering the
+cause required patching `append_hook_error` at runtime to print the traceback,
+because the log had discarded it. The site is
+[`session_router.py:573`](../../scripts/session_router.py:573),
+`raise ValueError("missing SessionStart fields")`, reached when `session_id`,
+`cwd`, `source` or **`transcript_path`** is absent or the wrong type.
+
+That is a lead, not a diagnosis: it cannot be confirmed against the 514
+production entries precisely because the message was thrown away. Which is the
+finding. One `f"{type(exc).__name__}: {exc}"` would have turned five hundred
+unactionable lines into a one-line answer, and the fix belongs in Slice F.
 | P2-4 | `append_hook_error` rewrites the **entire** log (read 128 KB → concat → fsync → replace) per line, inside a 2–10 s hook. That is what orphans the `.hook_errors.log.*.tmp` files at exactly full-log size | CONFIRMED same function |
 | P2-5 | `LIFECYCLE_TRANSCRIPT_INCOMPLETE` is logged at error severity for a condition the adjacent comment calls expected — 722 of 2,035 lines (35%) is designed-in noise burying real errors | CONFIRMED `session_lifecycle.py:640-655` |
 | P2-6 | `heartbeat()` never checks `expires_at_utc` — an expired lease is resurrected with a fresh window; `request()` does check, so the fail-closed boundary is asymmetric | CONFIRMED (runtime) `conductor_resources.py:447-475` |
