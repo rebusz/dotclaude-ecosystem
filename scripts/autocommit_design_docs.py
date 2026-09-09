@@ -76,6 +76,18 @@ def _remaining(deadline: float | None) -> float:
     return deadline - time.monotonic()
 
 
+# The detached push this module used to run passed CREATE_NO_WINDOW so a
+# console-less parent would not flash a window. Every other git call already
+# lacked it; keep the suppression and apply it to all of them, in one place.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def _timed_out(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        ["git"] + args, returncode=124, stdout="", stderr="timed out inside the hook budget"
+    )
+
+
 def _git(
     args: list[str],
     cwd: str,
@@ -83,14 +95,27 @@ def _git(
     deadline: float | None = None,
     cap: float = GIT_CALL_CAP_S,
 ) -> subprocess.CompletedProcess:
+    """Run git, bounded. A timeout is a failed call, never a raised exception.
+
+    Letting TimeoutExpired escape would abort main() wherever it happened to be
+    — and the module-level `except Exception: pass` would swallow it. After
+    `git add` has run that leaves the document STAGED in the operator's index
+    with no commit and no message, which is the state this hook exists to avoid.
+    Returning a non-zero result instead lets the callers' existing failure
+    reporting handle it.
+    """
     timeout = min(cap, max(0.5, _remaining(deadline)))
-    return subprocess.run(
-        ["git"] + args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            ["git"] + args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        return _timed_out(args)
 
 
 def _current_branch(git_root: str, deadline: float | None = None) -> str:
@@ -112,7 +137,8 @@ def _branch_accepts_backup_commit(branch: str) -> bool:
     return bool(branch) and branch != "HEAD" and branch not in PROTECTED_BRANCHES
 
 
-def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
+def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str,
+               deadline: float | None = None) -> bool:
     """True when HEAD is this hook's own backup commit for this same file.
 
     Collapsing consecutive backups keeps a session's plan history at ONE commit
@@ -123,23 +149,23 @@ def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
       * HEAD is not already reachable from a remote base ref (never rewrite
         something that has been merged or that another ref builds on).
     """
-    if not _branch_accepts_backup_commit(_current_branch(git_root)):
+    if not _branch_accepts_backup_commit(_current_branch(git_root, deadline)):
         return False
 
-    head_subject = _git(["log", "-1", "--format=%s"], cwd=git_root).stdout.strip()
+    head_subject = _git(["log", "-1", "--format=%s"], cwd=git_root, deadline=deadline).stdout.strip()
     if head_subject != commit_msg_subject:
         return False
 
     touched = _git(
         ["show", "--pretty=format:", "--name-only", "HEAD"], cwd=git_root
-    ).stdout.split()
-    if touched != [rel_path.replace("\\", "/")]:
+    , deadline=deadline).stdout.split()
+    if touched != [rel_path]:  # caller normalized it
         return False
 
     for base in ("origin/main", "origin/master"):
-        if _git(["rev-parse", "--verify", "--quiet", base], cwd=git_root).returncode != 0:
+        if _git(["rev-parse", "--verify", "--quiet", base], cwd=git_root, deadline=deadline).returncode != 0:
             continue
-        if _git(["merge-base", "--is-ancestor", "HEAD", base], cwd=git_root).returncode == 0:
+        if _git(["merge-base", "--is-ancestor", "HEAD", base], cwd=git_root, deadline=deadline).returncode == 0:
             return False  # already on base — amending would rewrite shared history
 
     return True
@@ -179,11 +205,8 @@ def _mirror_to_docs_branch(
     if os.environ.get("AUTOCOMMIT_DESIGN_NO_MAIN"):
         return "mirror off"
 
-    # Plumbing takes repo-relative paths with forward slashes on every platform.
-    # `rel_path` arrives from pathlib and is backslashed on Windows; `git add`
-    # tolerates that, `update-index --cacheinfo` does not.
-    rel_path = rel_path.replace(chr(92), "/")
-
+    # `rel_path` is already posix-normalized by the caller; `update-index
+    # --cacheinfo` would reject the Windows form.
     tmp_index = os.path.join(
         tempfile.gettempdir(), f"autocommit-idx-{os.getpid()}-{abs(hash(rel_path)) % 10**8}"
     )
@@ -193,6 +216,7 @@ def _mirror_to_docs_branch(
         return subprocess.run(
             ["git"] + args, cwd=git_root, capture_output=True, text=True,
             timeout=min(cap, max(0.5, _remaining(deadline))), env=env,
+            creationflags=_NO_WINDOW,
         )
 
     try:
@@ -387,7 +411,7 @@ def main() -> None:
     # Collapse consecutive backups of the same file into a single commit instead
     # of one per edit — a long planning session used to leave 15+ identical
     # commits on the branch, which is noise the operator later has to untangle.
-    amended = _can_amend(git_root, rel_path, subject)
+    amended = _can_amend(git_root, rel_path, subject, deadline)
     # `--` scopes the commit to this one path (implying --only), so whatever
     # else sits in the index stays there instead of riding along.
     args = ["commit", "-m", commit_msg] + (["--amend"] if amended else []) + ["--", rel_path]

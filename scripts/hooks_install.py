@@ -9,6 +9,12 @@ from seven sources); every negative verdict is scoped to settings.json and refer
 operator to `/hooks` for the authoritative merged view. See
 design/plans/2026-08-04_installer_managed_hook_block_r2.md (Invariant 5).
 
+Exit codes: 0 success; 2 fail-closed (bad manifest, missing managed script,
+unparseable settings.json) -- the block was NOT wired; 3 the block is (or, in a
+dry run, would remain) dirty: collisions or unclassified handlers survive, which
+`--reconcile` can claim. A caller that treats any non-zero as fatal will abort on
+3, so `install.sh` guards its dry-run call.
+
 Merge is at handler granularity (Matrix B1): a foreign handler sharing a matcher group
 with a managed one is preserved in place. Validation precedes any disk mutation (B4);
 dry-run is the default. The settings/sidecar pair is crash-recoverable (B3).
@@ -236,8 +242,14 @@ def sidecar_ownership(home: Path, *, claim_any_root: bool = False) -> Ownership:
     sidecar = read_sidecar(home) or {}
     roots: set[str] = set()
     for value in [sidecar.get("checkout_root"), *(sidecar.get("previous_roots") or [])]:
-        if isinstance(value, str) and value.strip():
-            roots.add(value.replace("\\", "/").rstrip("/").lower())
+        if not isinstance(value, str) or not value.strip():
+            continue
+        normalized = value.replace("\\", "/").rstrip("/").lower()
+        # A recorded root only proves ownership while it is still a checkout. If
+        # the directory is gone, the path can be reused by something unrelated,
+        # and claiming a handler under it would delete a hook we never wrote.
+        if (Path(normalized) / "templates" / "hooks.manifest.json").is_file():
+            roots.add(normalized)
     commands = {
         e["command"] for e in (sidecar.get("entries") or [])
         if isinstance(e, dict) and isinstance(e.get("command"), str)

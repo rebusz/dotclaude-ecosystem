@@ -35,12 +35,32 @@ if [ -d "$CLAUDE_HOME" ]; then
     done
     printf 'Installer-scope backup taken by install.sh at %s.\nContains only: %s\n' \
         "$STAMP" "${BACKUP_SCOPE[*]}" > "$backup/README.txt"
-    # Rotate: keep the newest $BACKUP_KEEP.
-    { ls -1d "$CLAUDE_HOME".bak.* 2>/dev/null || true; } | sort -r | tail -n "+$((BACKUP_KEEP + 1))" |
+    # Rotate, but ONLY over backups this scheme created -- the README.txt marker
+    # tells them apart from legacy whole-home trees, which share the name, are
+    # multi-gigabyte and hold credentials. Those are reported, never deleted as
+    # a side effect of running the installer.
+    scoped=""
+    legacy=""
+    for candidate in $({ ls -1d "$CLAUDE_HOME".bak.* 2>/dev/null || true; } | sort -r); do
+        if [ -f "$candidate/README.txt" ]; then
+            scoped="$scoped$candidate
+"
+        else
+            legacy="$legacy$candidate
+"
+        fi
+    done
+    printf '%b' "$scoped" | grep -v '^$' | tail -n "+$((BACKUP_KEEP + 1))" |
         while IFS= read -r old; do
             echo "  rotating out $old"
             rm -rf -- "$old"
         done
+    legacy_count=$(printf '%b' "$legacy" | grep -c '[^[:space:]]' || true)
+    if [ "${legacy_count:-0}" -gt 0 ]; then
+        echo "  $legacy_count legacy whole-home backup(s) left in place -- they predate this"
+        echo "  scheme, are large, and contain credentials. Remove them deliberately:"
+        printf '%b' "$legacy" | grep -v '^$' | sed 's/^/    /'
+    fi
 else
     echo "[1/6] No existing ~/.claude to back up"
     mkdir -p "$CLAUDE_HOME"

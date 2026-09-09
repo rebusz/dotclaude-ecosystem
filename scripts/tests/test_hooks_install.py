@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,21 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self._handler_count(), 10)
         self.assertEqual(sorted(hi.read_sidecar(self.home)["previous_roots"]),
                          sorted([ROOT.as_posix().lower(), second.as_posix().lower()]))
+
+    def test_a_recorded_root_that_no_longer_exists_is_not_claimed(self) -> None:
+        """Ownership expires with the checkout. Once the directory is gone the
+        path can be reused by something unrelated, and claiming a handler under
+        it would delete a hook we never wrote."""
+        second = self._fake_checkout("checkout-b")
+        hi.install(home=self.home, checkout=second, apply=True)
+        hi.install(home=self.home, checkout=ROOT, apply=True)
+        self.assertIn(second.as_posix().lower(), hi.read_sidecar(self.home)["previous_roots"])
+
+        shutil.rmtree(second)
+        ownership = hi.sidecar_ownership(self.home)
+
+        self.assertNotIn(second.as_posix().lower(), ownership.roots)
+        self.assertIn(ROOT.as_posix().lower(), ownership.roots)
 
     def test_unrecorded_root_stays_a_collision_until_reconcile(self) -> None:
         """Ownership is proof, not a guess: a managed basename under a root we

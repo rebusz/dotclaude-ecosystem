@@ -195,12 +195,23 @@ carried credentials in plaintext and grew without bound; everything omitted is
 either untouched by the installer or re-derivable from the repository.
 "@
 
-    # Rotate: keep the newest $BackupKeep, delete older ones.
-    $stale = @(Get-ChildItem -Path (Split-Path -Parent $ClaudeHome) -Directory -Filter ".claude.bak.*" -Force |
-               Sort-Object Name -Descending | Select-Object -Skip $BackupKeep)
-    foreach ($old in $stale) {
+    # Rotate, but ONLY over backups this scheme created -- the README.txt marker
+    # tells them apart. Legacy whole-home trees share the .claude.bak.* name and
+    # are a different thing entirely: multi-gigabyte, and holding credentials.
+    # Deleting one as a side effect of running the installer is not this
+    # command's business, so they are reported for the operator to remove.
+    $allBackups = @(Get-ChildItem -Path (Split-Path -Parent $ClaudeHome) -Directory -Filter ".claude.bak.*" -Force |
+                    Sort-Object Name -Descending)
+    $scoped = @($allBackups | Where-Object { Test-Path (Join-Path $_.FullName "README.txt") })
+    $legacy = @($allBackups | Where-Object { -not (Test-Path (Join-Path $_.FullName "README.txt")) })
+    foreach ($old in ($scoped | Select-Object -Skip $BackupKeep)) {
         Write-Host "  rotating out $($old.FullName)" -ForegroundColor DarkGray
         Remove-Item -Path $old.FullName -Recurse -Force -Confirm:$false
+    }
+    if ($legacy.Count -gt 0) {
+        Write-Host "  $($legacy.Count) legacy whole-home backup(s) left in place -- they predate this" -ForegroundColor Yellow
+        Write-Host "  scheme, are large, and contain credentials. Remove them deliberately:" -ForegroundColor Yellow
+        foreach ($old in $legacy) { Write-Host "    $($old.FullName)" -ForegroundColor Yellow }
     }
 } else {
     Write-Host "[1/7] No existing ~/.claude to back up" -ForegroundColor Green

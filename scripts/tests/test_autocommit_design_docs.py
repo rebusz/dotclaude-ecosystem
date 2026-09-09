@@ -164,6 +164,22 @@ class CommitScopeTests(unittest.TestCase):
         self.assertEqual(self.r.count(), after_first, "second backup should amend")
         self.assertEqual(self.r.head_paths(), ["design/plans/p.md"])
 
+    def test_amend_does_not_swallow_the_index_either(self) -> None:
+        """`commit --amend -- <path>` rebuilds from HEAD's parent plus the named
+        paths, which is different enough from the plain form to need its own
+        guard: this is the branch that rewrites history."""
+        doc = self.r.repo / "design" / "plans" / "p.md"
+        doc.write_text("# v1\n", encoding="utf-8")
+        _run_hook(self.r.repo, doc)
+
+        (self.r.repo / "secrets.env").write_text("TOKEN=must-not-leak\n", encoding="utf-8")
+        _git(self.r.repo, "add", "secrets.env")
+        doc.write_text("# v2\n", encoding="utf-8")
+        _run_hook(self.r.repo, doc)
+
+        self.assertEqual(self.r.head_paths(), ["design/plans/p.md"])
+        self.assertEqual(self.r.staged(), ["secrets.env"])
+
 
 class ProtectedBranchTests(unittest.TestCase):
     """P1-3 — never commit or push onto a shared trunk from a tool-call hook."""
@@ -280,6 +296,28 @@ class PushReportingTests(unittest.TestCase):
         # The local backup — the whole point of the hook — still happened.
         self.assertEqual(self.r.head_paths(), ["design/plans/p.md"])
 
+    def test_amended_push_uses_force_with_lease_not_force(self) -> None:
+        doc = self.r.repo / "design" / "plans" / "p.md"
+        doc.write_text("# v1\n", encoding="utf-8")
+        first = _run_hook(self.r.repo, doc)
+        self.assertIn("pushed", first.stderr.decode("utf-8", "replace"))
+
+        # The amend rewrites the already-pushed tip, so the plain push is
+        # rejected and the lease-guarded fallback is what actually lands it.
+        doc.write_text("# v2\n", encoding="utf-8")
+        second = _run_hook(self.r.repo, doc)
+
+        self.assertIn("pushed (lease)", second.stderr.decode("utf-8", "replace"))
+        self.assertEqual(
+            _git(self.r.repo, "rev-parse", "HEAD").stdout.strip(),
+            _git(self.r.repo, "rev-parse", "origin/work").stdout.strip(),
+        )
+        source = (_SCRIPTS / "autocommit_design_docs.py").read_text(encoding="utf-8")
+        self.assertNotIn(
+            '"--force"', source,
+            "a bare --force would discard a parallel session's work",
+        )
+
     def test_successful_push_reaches_the_remote(self) -> None:
         doc = self.r.repo / "design" / "plans" / "p.md"
         doc.write_text("# plan\n", encoding="utf-8")
@@ -315,6 +353,28 @@ class DeadlineTests(unittest.TestCase):
         )
 
         self.assertEqual(status, "mirror deadline")
+
+    def test_a_git_timeout_is_a_failed_call_not_an_exception(self) -> None:
+        """Letting TimeoutExpired escape would abort main() wherever it landed,
+        and the module-level `except Exception: pass` would hide it — leaving
+        the document staged with no commit and no message."""
+        stack = tempfile.TemporaryDirectory()
+        self.addCleanup(stack.cleanup)
+        r = _Repo(stack)
+        # cap=0 floors the timeout at 0.5s. `git log -S` with a regex over the
+        # whole history is slow enough to trip it and cannot mutate anything.
+        result = hook._git(
+            ["log", "--all", "-S", "x", "--pickaxe-regex", "--", "."],
+            cwd=str(r.repo),
+            cap=0.0,
+        )
+        self.assertIsInstance(result, subprocess.CompletedProcess)
+        self.assertIn(result.returncode, (0, 124))
+
+    def test_timeout_result_is_reported_as_a_failure(self) -> None:
+        timed_out = hook._timed_out(["commit", "-m", "x"])
+        self.assertNotEqual(timed_out.returncode, 0)
+        self.assertIn("timed out", timed_out.stderr)
 
     def test_remaining_is_unbounded_for_callers_that_pass_no_deadline(self) -> None:
         self.assertEqual(hook._remaining(None), hook.GIT_CALL_CAP_S)
