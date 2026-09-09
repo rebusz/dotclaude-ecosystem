@@ -7,13 +7,14 @@ import json
 import heapq
 import os
 import subprocess
-import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
+
+from hook_stdio import read_stdin_text
 
 from session_state import (
     RepositoryRegistration,
@@ -853,7 +854,7 @@ def handle_event(
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         event = json.loads(raw) if raw.strip() else {}
     except (OSError, json.JSONDecodeError):
         event = {}

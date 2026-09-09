@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,127 @@ class InstallTests(unittest.TestCase):
         settings = json.loads(first)
         total = sum(len(g["hooks"]) for groups in settings["hooks"].values() for g in groups)
         self.assertEqual(total, 10)  # not 20
+
+    # ── audit P1-1: a SECOND checkout must reconcile, not duplicate ───
+    def _fake_checkout(self, name: str) -> Path:
+        """A directory that satisfies resolve_checkout + _validated_context."""
+        root = Path(self._tmp.name) / name
+        (root / "templates").mkdir(parents=True)
+        (root / "scripts").mkdir(parents=True)
+        (root / "templates" / "hooks.manifest.json").write_bytes(
+            (ROOT / "templates" / "hooks.manifest.json").read_bytes()
+        )
+        for entry in hi.load_manifest(ROOT):
+            (root / "scripts" / entry.script).write_text("# stub", encoding="utf-8")
+        return root
+
+    def _handler_count(self) -> int:
+        settings = json.loads(_settings(self.home).read_text(encoding="utf-8"))
+        return sum(len(g["hooks"]) for groups in settings["hooks"].values() for g in groups)
+
+    def _commands(self) -> list[str]:
+        settings = json.loads(_settings(self.home).read_text(encoding="utf-8"))
+        return [h["command"] for groups in settings["hooks"].values()
+                for g in groups for h in g["hooks"]]
+
+    def test_install_from_a_second_checkout_reconciles_instead_of_duplicating(self) -> None:
+        """The live box reached 20 handlers exactly this way: the previous
+        checkout's handlers were classified `collision`, kept in place, and the
+        new canonical group was appended on top of them."""
+        hi.install(home=self.home, checkout=ROOT, apply=True)
+        self.assertEqual(self._handler_count(), 10)
+
+        second = self._fake_checkout("checkout-b")
+        hi.install(home=self.home, checkout=second, apply=True)
+
+        self.assertEqual(self._handler_count(), 10, "second checkout must not double the block")
+        resolved = second.resolve(strict=False).as_posix()
+        self.assertTrue(all(resolved in c for c in self._commands()))
+        self.assertIn(hi._canonical_root(str(ROOT)), hi.read_sidecar(self.home)["previous_roots"])
+        self.assertEqual(hi.status(home=self.home, checkout=second).overall, "OK")
+
+    def test_third_checkout_reconciles_using_the_recorded_root_history(self) -> None:
+        second = self._fake_checkout("checkout-b")
+        third = self._fake_checkout("checkout-c")
+        hi.install(home=self.home, checkout=ROOT, apply=True)
+        hi.install(home=self.home, checkout=second, apply=True)
+        hi.install(home=self.home, checkout=third, apply=True)
+
+        self.assertEqual(self._handler_count(), 10)
+        self.assertEqual(sorted(hi.read_sidecar(self.home)["previous_roots"]),
+                         sorted([hi._canonical_root(str(ROOT)), hi._canonical_root(str(second))]))
+
+    def test_a_short_path_spelling_resolves_to_the_same_root(self) -> None:
+        """CI caught this: the GitHub runner's TEMP is an 8.3 short path
+        (C:/Users/RUNNER~1/...) while the sidecar records the resolved form, so
+        a plain string comparison failed to recognise our own handlers — the
+        exact duplication this ownership record exists to prevent."""
+        if sys.platform != "win32":
+            self.skipTest("8.3 short names are a Windows filesystem feature")
+        long_form = Path("C:/Program Files")
+        if not long_form.is_dir():
+            self.skipTest("no directory with a known 8.3 alias on this host")
+        self.assertEqual(hi._canonical_root("C:/PROGRA~1"), hi._canonical_root(str(long_form)))
+
+    def test_a_recorded_root_that_no_longer_exists_is_not_claimed(self) -> None:
+        """Ownership expires with the checkout. Once the directory is gone the
+        path can be reused by something unrelated, and claiming a handler under
+        it would delete a hook we never wrote."""
+        second = self._fake_checkout("checkout-b")
+        hi.install(home=self.home, checkout=second, apply=True)
+        hi.install(home=self.home, checkout=ROOT, apply=True)
+        self.assertIn(hi._canonical_root(str(second)), hi.read_sidecar(self.home)["previous_roots"])
+
+        shutil.rmtree(second)
+        ownership = hi.sidecar_ownership(self.home)
+
+        self.assertNotIn(hi._canonical_root(str(second)), ownership.roots)
+        self.assertIn(hi._canonical_root(str(ROOT)), ownership.roots)
+
+    def test_unrecorded_root_stays_a_collision_until_reconcile(self) -> None:
+        """Ownership is proof, not a guess: a managed basename under a root we
+        never recorded is surfaced, never silently deleted."""
+        interp = hi.resolve_interpreter()
+        stranger = f'{interp} "D:/somewhere/else/scripts/session_router.py"'
+        _write_settings(self.home, {"hooks": {"SessionStart": [
+            {"matcher": "startup|resume|clear|compact",
+             "hooks": [{"type": "command", "command": stranger}]}]}})
+
+        res = hi.install(home=self.home, checkout=ROOT, apply=True)
+        self.assertEqual(len(res["collisions"]), 1)
+        self.assertEqual(self._handler_count(), 11, "the stranger is kept, not deleted")
+        self.assertIn(stranger, self._commands())
+
+        res2 = hi.install(home=self.home, checkout=ROOT, apply=True, reconcile=True)
+        self.assertEqual(res2["collisions"], [])
+        self.assertEqual(self._handler_count(), 10)
+        self.assertNotIn(stranger, self._commands())
+
+    def test_reconcile_never_touches_a_foreign_basename(self) -> None:
+        interp = hi.resolve_interpreter()
+        foreign = f'{interp} "D:/somewhere/else/scripts/not_ours.py"'
+        _write_settings(self.home, {"hooks": {"SessionStart": [
+            {"matcher": "startup|resume|clear|compact",
+             "hooks": [{"type": "command", "command": foreign}]}]}})
+
+        hi.install(home=self.home, checkout=ROOT, apply=True, reconcile=True)
+
+        self.assertIn(foreign, self._commands())
+        self.assertEqual(self._handler_count(), 11)
+
+    def test_cli_install_exits_3_while_a_collision_remains(self) -> None:
+        interp = hi.resolve_interpreter()
+        stranger = f'{interp} "D:/somewhere/else/scripts/session_router.py"'
+        _write_settings(self.home, {"hooks": {"SessionStart": [
+            {"matcher": "startup|resume|clear|compact",
+             "hooks": [{"type": "command", "command": stranger}]}]}})
+
+        dirty = hi.main(["install", "--apply", "--home", str(self.home), "--checkout", str(ROOT)])
+        self.assertEqual(dirty, 3, "a dirty block must not report success")
+
+        clean = hi.main(["install", "--apply", "--reconcile",
+                         "--home", str(self.home), "--checkout", str(ROOT)])
+        self.assertEqual(clean, 0)
 
     # ── Matrix B1: foreign handler in a shared group survives ─────────
     def test_foreign_handler_in_shared_group_preserved(self) -> None:

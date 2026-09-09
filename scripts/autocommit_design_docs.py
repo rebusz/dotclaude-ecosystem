@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse hook — back a design doc up to the branch AND land it on main.
+"""PostToolUse hook — back a design doc up to the branch AND mirror it for everyone.
 
 Two failure modes, two mechanisms.
 
@@ -22,6 +22,12 @@ written trunk with a live trading bot running from it, and an earlier attempt to
 land docs by editing main's working tree had a parallel session swallow the
 half-finished edit into an unrelated commit.
 
+Both mechanisms are scoped to the one document being written. The commit carries
+an explicit pathspec, so nothing else the operator had staged rides along, and a
+protected trunk or a detached HEAD gets the mirror only — never a local commit
+and never a push. Everything that touches the network runs inside one wall-clock
+budget set at entry, and a failed push is reported rather than discarded.
+
 Fail silently — never break the session. Set AUTOCOMMIT_DESIGN_NO_MAIN=1 to keep
 the branch backup and skip the mirror.
 """
@@ -32,7 +38,16 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+# The PostToolUse harness kills this hook at 30s (templates/hooks.manifest.json).
+# A SIGKILL skips `finally`, which is how the throwaway index used to be left
+# behind. Everything that touches the network is therefore bounded by one
+# wall-clock deadline set at entry, comfortably inside the harness ceiling.
+HOOK_BUDGET_S = 20.0
+GIT_CALL_CAP_S = 30.0
+NETWORK_CALL_CAP_S = 10.0
 
 # `design/handoffs/` was missing until 2026-09-01, which is why handoffs were the
 # largest stranded category (19 of 27 rescued in #1577): the hook never saw them
@@ -54,17 +69,76 @@ def _normalize(p: str) -> str:
     return p.replace("\\", "/")
 
 
-def _git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git"] + args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=30,
+def _remaining(deadline: float | None) -> float:
+    """Seconds left on the hook budget. `None` means an unbounded caller (tests)."""
+    if deadline is None:
+        return GIT_CALL_CAP_S
+    return deadline - time.monotonic()
+
+
+# The detached push this module used to run passed CREATE_NO_WINDOW so a
+# console-less parent would not flash a window. Every other git call already
+# lacked it; keep the suppression and apply it to all of them, in one place.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def _timed_out(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        ["git"] + args, returncode=124, stdout="", stderr="timed out inside the hook budget"
     )
 
 
-def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
+def _git(
+    args: list[str],
+    cwd: str,
+    *,
+    deadline: float | None = None,
+    cap: float = GIT_CALL_CAP_S,
+) -> subprocess.CompletedProcess:
+    """Run git, bounded. A timeout is a failed call, never a raised exception.
+
+    Letting TimeoutExpired escape would abort main() wherever it happened to be
+    — and the module-level `except Exception: pass` would swallow it. After
+    `git add` has run that leaves the document STAGED in the operator's index
+    with no commit and no message, which is the state this hook exists to avoid.
+    Returning a non-zero result instead lets the callers' existing failure
+    reporting handle it.
+    """
+    timeout = min(cap, max(0.5, _remaining(deadline)))
+    try:
+        return subprocess.run(
+            ["git"] + args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        return _timed_out(args)
+
+
+def _current_branch(git_root: str, deadline: float | None = None) -> str:
+    return _git(
+        ["rev-parse", "--abbrev-ref", "HEAD"], cwd=git_root, deadline=deadline
+    ).stdout.strip()
+
+
+def _branch_accepts_backup_commit(branch: str) -> bool:
+    """False when committing here would rewrite a shared trunk or go nowhere.
+
+    A protected branch is the trunk a live trading stack runs from; an earlier
+    version of this hook had no guard on the commit path at all (only on the
+    amend path), so a design-doc write while on `main` produced a commit and a
+    `git push origin HEAD` straight to the trunk. Detached HEAD is refused for a
+    different reason: the commit would be unreferenced and the push errors out.
+    In both cases the docs-branch mirror still runs and is the durable backup.
+    """
+    return bool(branch) and branch != "HEAD" and branch not in PROTECTED_BRANCHES
+
+
+def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str,
+               deadline: float | None = None) -> bool:
     """True when HEAD is this hook's own backup commit for this same file.
 
     Collapsing consecutive backups keeps a session's plan history at ONE commit
@@ -75,24 +149,23 @@ def _can_amend(git_root: str, rel_path: str, commit_msg_subject: str) -> bool:
       * HEAD is not already reachable from a remote base ref (never rewrite
         something that has been merged or that another ref builds on).
     """
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=git_root).stdout.strip()
-    if not branch or branch == "HEAD" or branch in PROTECTED_BRANCHES:
+    if not _branch_accepts_backup_commit(_current_branch(git_root, deadline)):
         return False
 
-    head_subject = _git(["log", "-1", "--format=%s"], cwd=git_root).stdout.strip()
+    head_subject = _git(["log", "-1", "--format=%s"], cwd=git_root, deadline=deadline).stdout.strip()
     if head_subject != commit_msg_subject:
         return False
 
     touched = _git(
         ["show", "--pretty=format:", "--name-only", "HEAD"], cwd=git_root
-    ).stdout.split()
-    if touched != [rel_path.replace("\\", "/")]:
+    , deadline=deadline).stdout.split()
+    if touched != [rel_path]:  # caller normalized it
         return False
 
     for base in ("origin/main", "origin/master"):
-        if _git(["rev-parse", "--verify", "--quiet", base], cwd=git_root).returncode != 0:
+        if _git(["rev-parse", "--verify", "--quiet", base], cwd=git_root, deadline=deadline).returncode != 0:
             continue
-        if _git(["merge-base", "--is-ancestor", "HEAD", base], cwd=git_root).returncode == 0:
+        if _git(["merge-base", "--is-ancestor", "HEAD", base], cwd=git_root, deadline=deadline).returncode == 0:
             return False  # already on base — amending would rewrite shared history
 
     return True
@@ -111,7 +184,13 @@ def _base_ref(git_root: str) -> str | None:
     return None
 
 
-def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject: str) -> str:
+def _mirror_to_docs_branch(
+    git_root: str,
+    rel_path: str,
+    abs_path: str,
+    subject: str,
+    deadline: float | None = None,
+) -> str:
     """Land this one file on the trunk as its own commit, touching nothing else.
 
     Plumbing only. The tree is built in a throwaway index (GIT_INDEX_FILE), so
@@ -126,20 +205,18 @@ def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject:
     if os.environ.get("AUTOCOMMIT_DESIGN_NO_MAIN"):
         return "mirror off"
 
-    # Plumbing takes repo-relative paths with forward slashes on every platform.
-    # `rel_path` arrives from pathlib and is backslashed on Windows; `git add`
-    # tolerates that, `update-index --cacheinfo` does not.
-    rel_path = rel_path.replace(chr(92), "/")
-
+    # `rel_path` is already posix-normalized by the caller; `update-index
+    # --cacheinfo` would reject the Windows form.
     tmp_index = os.path.join(
         tempfile.gettempdir(), f"autocommit-idx-{os.getpid()}-{abs(hash(rel_path)) % 10**8}"
     )
     env = dict(os.environ, GIT_INDEX_FILE=tmp_index)
 
-    def g(args):
+    def g(args, cap: float = GIT_CALL_CAP_S):
         return subprocess.run(
             ["git"] + args, cwd=git_root, capture_output=True, text=True,
-            timeout=60, env=env,
+            timeout=min(cap, max(0.5, _remaining(deadline))), env=env,
+            creationflags=_NO_WINDOW,
         )
 
     try:
@@ -151,7 +228,12 @@ def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject:
         # under us, and a rejected fast-forward is the expected outcome, not an
         # error worth surfacing.
         for _ in range(3):
-            g(["fetch", "origin", "--quiet"])
+            # The retry exists for a trunk that moves under us, not for a remote
+            # that is down. Stop retrying once the budget is spent so the harness
+            # never has to SIGKILL us mid-plumbing.
+            if _remaining(deadline) <= 1.0:
+                return "mirror deadline"
+            g(["fetch", "origin", "--quiet"], cap=NETWORK_CALL_CAP_S)
             # Collect onto the docs branch; fall back to the trunk only as the
             # PARENT for the branch's very first commit. `branch` is always the
             # docs branch, so the trunk is never the push target.
@@ -188,7 +270,11 @@ def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject:
             if not commit:
                 return "mirror failed: commit-tree"
 
-            if g(["push", "origin", f"{commit}:refs/heads/{branch}"]).returncode == 0:
+            push = g(
+                ["push", "origin", f"{commit}:refs/heads/{branch}"],
+                cap=NETWORK_CALL_CAP_S,
+            )
+            if push.returncode == 0:
                 return f"mirrored -> {branch}"
 
         return "mirror refused: docs branch moved"
@@ -202,24 +288,46 @@ def _mirror_to_docs_branch(git_root: str, rel_path: str, abs_path: str, subject:
             pass
 
 
-def _push(git_root: str, amended: bool) -> None:
-    """Best-effort push, DETACHED — network must not block the tool-call loop
-    (a slow remote used to hold PostToolUse for up to 8s). An amend rewrites
-    the tip, so the lease-guarded force fallback keeps the remote in sync."""
-    cmd = "git push origin HEAD"
-    if amended:
-        cmd += " || git push --force-with-lease origin HEAD"
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    subprocess.Popen(
-        cmd, shell=True, cwd=git_root,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=flags,
+def _push(git_root: str, amended: bool, deadline: float | None = None) -> str:
+    """Bounded push whose failure is visible.
+
+    This used to be a detached `shell=True` fire-and-forget with output sent to
+    DEVNULL, so a rejected push, an auth prompt or a hung remote still reported
+    "commit + push". It was detached because a slow remote once held PostToolUse
+    for 8s — but the docs mirror below already does synchronous network work, so
+    the honest fix is a short timeout inside one shared budget rather than
+    hiding the result. An amend rewrites the tip, hence the lease-guarded
+    fallback; `--force-with-lease` still refuses to clobber someone else's work.
+    """
+    if _remaining(deadline) <= 1.0:
+        return "push skipped: deadline"
+    result = _git(
+        ["push", "origin", "HEAD"], cwd=git_root, deadline=deadline, cap=NETWORK_CALL_CAP_S
     )
+    if result.returncode == 0:
+        return "pushed"
+    if amended and _remaining(deadline) > 1.0:
+        lease = _git(
+            ["push", "--force-with-lease", "origin", "HEAD"],
+            cwd=git_root,
+            deadline=deadline,
+            cap=NETWORK_CALL_CAP_S,
+        )
+        if lease.returncode == 0:
+            return "pushed (lease)"
+        result = lease
+    detail = (result.stderr or result.stdout or "").strip().splitlines()
+    return f"push FAILED: {detail[-1][:120]}" if detail else "push FAILED"
 
 
 def main() -> None:
+    deadline = time.monotonic() + HOOK_BUDGET_S
     try:
-        raw = sys.stdin.read()
+        # Read bytes, not text. `sys.stdin` is cp1252 with surrogateescape on a
+        # default Windows Python, so a UTF-8 payload is silently mojibaked
+        # rather than raising — which is how non-ASCII file paths stopped
+        # resolving on disk without a single diagnostic.
+        raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
         return
@@ -254,23 +362,47 @@ def main() -> None:
     except Exception:
         return
 
-    rel_path = str(abs_path.relative_to(git_root))
+    # Forward slashes everywhere: git pathspecs treat a backslash as an escape
+    # character, and every path below is passed as a pathspec now, not just to
+    # `git add` (which tolerated the Windows form).
+    rel_path = _normalize(str(abs_path.relative_to(git_root)))
 
     fname = abs_path.name
     subject = f"docs: auto-backup {fname}"
 
-    # Stage the file
-    _git(["add", rel_path], cwd=git_root)
+    # A protected trunk or a detached HEAD never gets a local commit or a push;
+    # the mirror below is the durable backup in that case.
+    branch = _current_branch(git_root, deadline)
+    if not _branch_accepts_backup_commit(branch):
+        mirror = _mirror_to_docs_branch(
+            git_root, rel_path, str(abs_path), subject, deadline
+        )
+        where = branch or "unknown"
+        print(
+            f"[autocommit] {fname} → no branch commit on '{where}', {mirror} ({git_root})",
+            file=sys.stderr,
+        )
+        return
 
-    # Check if there is anything staged
-    diff = _git(["diff", "--cached", "--quiet"], cwd=git_root)
+    # Stage the file
+    _git(["add", "--", rel_path], cwd=git_root, deadline=deadline)
+
+    # Is THIS path staged? The old check asked whether *anything* was staged,
+    # and the commit below carried no pathspec, so an unrelated file the
+    # operator had staged was swallowed into a "docs: auto-backup" commit and
+    # pushed with it.
+    diff = _git(
+        ["diff", "--cached", "--quiet", "--", rel_path], cwd=git_root, deadline=deadline
+    )
     if diff.returncode == 0:
         # Nothing new for the branch — but the trunk may still be missing this
         # file from an earlier run whose mirror was refused. Retrying here is
         # what makes the mirror self-healing: any later touch of the document
         # gets it another chance, instead of stranding it permanently on the
         # first bad race. A no-op when the trunk already has the blob.
-        mirror = _mirror_to_docs_branch(git_root, rel_path, str(abs_path), subject)
+        mirror = _mirror_to_docs_branch(
+            git_root, rel_path, str(abs_path), subject, deadline
+        )
         if mirror not in ("already on trunk", "mirror off"):
             print(f"[autocommit] {fname} → {mirror} ({git_root})", file=sys.stderr)
         return
@@ -279,19 +411,29 @@ def main() -> None:
     # Collapse consecutive backups of the same file into a single commit instead
     # of one per edit — a long planning session used to leave 15+ identical
     # commits on the branch, which is noise the operator later has to untangle.
-    amended = _can_amend(git_root, rel_path, subject)
-    args = ["commit", "-m", commit_msg] + (["--amend"] if amended else [])
-    _git(args, cwd=git_root)
+    amended = _can_amend(git_root, rel_path, subject, deadline)
+    # `--` scopes the commit to this one path (implying --only), so whatever
+    # else sits in the index stays there instead of riding along.
+    args = ["commit", "-m", commit_msg] + (["--amend"] if amended else []) + ["--", rel_path]
+    committed = _git(args, cwd=git_root, deadline=deadline)
+    if committed.returncode != 0:
+        detail = (committed.stderr or "").strip().splitlines()
+        print(
+            f"[autocommit] {fname} → commit FAILED: "
+            f"{detail[-1][:120] if detail else 'unknown'} ({git_root})",
+            file=sys.stderr,
+        )
+        return
 
-    _push(git_root, amended)
+    push = _push(git_root, amended, deadline)
 
     # The branch backup above is the crash guard and must stay first: if the
     # mirror fails for any reason the document is still safe on a pushed branch.
-    mirror = _mirror_to_docs_branch(git_root, rel_path, str(abs_path), subject)
+    mirror = _mirror_to_docs_branch(git_root, rel_path, str(abs_path), subject, deadline)
 
     # Print to stderr so Claude Code shows it as a system note
-    verb = "amend + push" if amended else "commit + push"
-    print(f"[autocommit] {fname} → git {verb}, {mirror} ({git_root})", file=sys.stderr)
+    verb = "amend" if amended else "commit"
+    print(f"[autocommit] {fname} → git {verb}, {push}, {mirror} ({git_root})", file=sys.stderr)
 
 
 if __name__ == "__main__":

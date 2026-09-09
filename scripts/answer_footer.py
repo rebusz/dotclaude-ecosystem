@@ -22,6 +22,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from hook_stdio import read_stdin_text
+
 STATE_DIR = Path.home() / ".claude" / "state"
 
 # Pricing table: (input, output, cache_creation, cache_read) per 1M tokens, USD.
@@ -195,7 +197,7 @@ def _fmt_tokens(n: int) -> str:
 
 
 def main() -> int:
-    raw = sys.stdin.read()
+    raw = read_stdin_text()
     try:
         data = json.loads(raw) if raw.strip() else {}
     except Exception:

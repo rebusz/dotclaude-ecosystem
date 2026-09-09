@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hook_stdio import read_stdin_text
+
 from _catalog_common import parse_yaml_block
 from session_state import (
     RepositoryRegistration,
@@ -418,6 +420,39 @@ def _maintenance(
         return None
 
 
+# SessionStart is capped at 5s by templates/hooks.manifest.json and git work
+# comes first, so the health fold gets a small explicit slice of the rest.
+_HEALTH_BUDGET_S = 0.8
+
+
+def _ecosystem_health_line(state_dir: Path, home: Path | None = None) -> str:
+    """The delivery seam: surface the existing detectors, or say nothing.
+
+    Every detector this folds already worked and already exited non-zero. What
+    was missing was a place the operator would see it: `hooks_install status`
+    reported the hook block MISSING with twenty collisions for weeks, and
+    `git_hygiene` wrote the same alarm to disk daily, while sessions started
+    normally and said nothing (audit 2026-09-09).
+
+    Silent when everything is clean, so it costs nothing on a healthy box, and
+    fail-open on anything unexpected: a diagnostic must never be the reason a
+    session fails to start.
+    """
+    try:
+        from ecosystem_doctor import build_report
+
+        report = build_report(
+            home=home if home is not None else Path.home(),
+            state_dir=state_dir,
+            budget_s=_HEALTH_BUDGET_S,
+        )
+    except Exception:  # noqa: BLE001 - never break SessionStart over a diagnostic
+        return ""
+    if report.exit_code() == 0:
+        return ""
+    return report.line()
+
+
 def _full_context(
     *,
     registration: RepositoryRegistration,
@@ -464,6 +499,10 @@ def _full_context(
         f"HEAD={facts.head[:12] or '?'}; dirty={len(facts.dirty_paths)}; "
         f"origin/main divergence=+{facts.ahead}/-{facts.behind}."
     )
+
+    health = _ecosystem_health_line(state_dir)
+    if health:
+        lines.append(health)
 
     plans = _active_plans(registration)
     if plans:
@@ -603,7 +642,7 @@ def handle_event(
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         event = json.loads(raw) if raw.strip() else {}
     except (OSError, json.JSONDecodeError):
         event = {}

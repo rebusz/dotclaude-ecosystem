@@ -5,10 +5,16 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "scripts/hooks_install.py"
+      - "scripts/autocommit_design_docs.py"
+      - "scripts/hook_stdio.py"
+      - "scripts/ecosystem_doctor.py"
       - "scripts/git_hygiene.py"
       - "scripts/codex_hooks_doctor.py"
       - "scripts/cursor_hooks_doctor.py"
       - "scripts/tests/test_hooks_install.py"
+      - "scripts/tests/test_autocommit_design_docs.py"
+      - "scripts/tests/test_hook_stdio.py"
+      - "scripts/tests/test_ecosystem_doctor.py"
       - "scripts/tests/test_hooks_janitor.py"
       - "scripts/tests/test_codex_hooks_doctor.py"
       - "scripts/tests/test_cursor_hooks_doctor.py"
@@ -29,21 +35,32 @@ jobs:
           python -m pytest -q
           scripts/tests/test_hooks_install.py
           scripts/tests/test_hooks_janitor.py
+          scripts/tests/test_autocommit_design_docs.py
+          scripts/tests/test_hook_stdio.py
+          scripts/tests/test_ecosystem_doctor.py
           scripts/tests/test_codex_hooks_doctor.py
           scripts/tests/test_cursor_hooks_doctor.py
       - run: >-
           python -m ruff check
           scripts/hooks_install.py
+          scripts/autocommit_design_docs.py
+          scripts/hook_stdio.py
+          scripts/ecosystem_doctor.py
           scripts/git_hygiene.py
           scripts/codex_hooks_doctor.py
           scripts/cursor_hooks_doctor.py
           scripts/tests/test_hooks_install.py
           scripts/tests/test_hooks_janitor.py
+          scripts/tests/test_autocommit_design_docs.py
+          scripts/tests/test_hook_stdio.py
           scripts/tests/test_codex_hooks_doctor.py
           scripts/tests/test_cursor_hooks_doctor.py
       - run: >-
           python -m compileall -q
+          scripts/ecosystem_doctor.py
           scripts/hooks_install.py
+          scripts/autocommit_design_docs.py
+          scripts/hook_stdio.py
           scripts/git_hygiene.py
           scripts/codex_hooks_doctor.py
           scripts/cursor_hooks_doctor.py

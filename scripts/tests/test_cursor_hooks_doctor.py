@@ -13,9 +13,24 @@ import cursor_hooks_doctor as chd  # noqa: E402
 import git_hygiene  # noqa: E402
 
 
-def _adapter_handler() -> dict:
-    return {"command": 'C:\\Python314\\python.exe "D:/dotclaude/dotclaude-ecosystem/'
-                       'scripts/cursor_session_adapter.py"', "timeout": 5}
+def _adapter_path(home: Path) -> str:
+    """A real adapter file inside the fixture.
+
+    The hard-coded D:/dotclaude/... path this replaced exists on the
+    maintainer's box and nowhere else; the doctor now checks the handler
+    resolves to a file (audit P2-24), so it has to be a real one.
+    """
+    scripts = home / ".cursor" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    adapter = scripts / "cursor_session_adapter.py"
+    if not adapter.exists():
+        adapter.write_text("# fixture", encoding="utf-8")
+    return adapter.as_posix()
+
+
+def _adapter_handler(home: Path | None = None) -> dict:
+    target = _adapter_path(home) if home is not None else "cursor_session_adapter.py"
+    return {"command": f'python "{target}"', "timeout": 5}
 
 
 def _write_cursor_hooks(home: Path, hooks: dict, version: int = 1) -> None:
@@ -26,6 +41,7 @@ def _write_cursor_hooks(home: Path, hooks: dict, version: int = 1) -> None:
 
 class ReferenceTests(unittest.TestCase):
     def test_plain_reference_detected(self) -> None:
+        # Reference detection is about the command string, not the filesystem.
         self.assertTrue(chd._references_adapter(_adapter_handler()["command"]))
 
     def test_unrelated_command_not_detected(self) -> None:
@@ -62,8 +78,8 @@ class StatusTests(unittest.TestCase):
 
     def test_ok_when_both_events_reference_adapter(self) -> None:
         _write_cursor_hooks(self.home, {
-            "sessionStart": [_adapter_handler()],
-            "sessionEnd": [_adapter_handler()],
+            "sessionStart": [_adapter_handler(self.home)],
+            "sessionEnd": [_adapter_handler(self.home)],
         })
         v, _ = chd.cursor_hooks_status(self.home)
         self.assertEqual(v, "OK")
@@ -71,7 +87,7 @@ class StatusTests(unittest.TestCase):
 
     def test_missing_when_one_event_lacks_adapter(self) -> None:
         _write_cursor_hooks(self.home, {
-            "sessionStart": [_adapter_handler()],
+            "sessionStart": [_adapter_handler(self.home)],
             "sessionEnd": [{"command": "py other.py"}],
         })
         v, detail = chd.cursor_hooks_status(self.home)
@@ -82,17 +98,34 @@ class StatusTests(unittest.TestCase):
     def test_missing_not_falsely_ok_on_coincidental_substring(self) -> None:
         _write_cursor_hooks(self.home, {
             "sessionStart": [{"command": 'echo "see cursor_session_adapter.py"'}],
-            "sessionEnd": [_adapter_handler()],
+            "sessionEnd": [_adapter_handler(self.home)],
         })
         v, detail = chd.cursor_hooks_status(self.home)
         self.assertEqual(v, "MISSING")
         self.assertIn("sessionStart", detail)
 
     def test_missing_when_sessionend_event_absent_entirely(self) -> None:
-        _write_cursor_hooks(self.home, {"sessionStart": [_adapter_handler()]})
+        _write_cursor_hooks(self.home, {"sessionStart": [_adapter_handler(self.home)]})
         v, detail = chd.cursor_hooks_status(self.home)
         self.assertEqual(v, "MISSING")
         self.assertIn("sessionEnd", detail)
+
+    def test_a_handler_pointing_at_a_deleted_adapter_is_not_ok(self) -> None:
+        """Audit P2-24: this doctor matched the basename and stopped there, so a
+        hooks.json pointing at an adapter that no longer exists read as OK —
+        hooks present, nothing runs, nothing complains."""
+        _write_cursor_hooks(self.home, {
+            "sessionStart": [_adapter_handler(self.home)],
+            "sessionEnd": [_adapter_handler(self.home)],
+        })
+        self.assertEqual(chd.cursor_hooks_status(self.home)[0], "OK", "precondition")
+
+        (self.home / ".cursor" / "scripts" / "cursor_session_adapter.py").unlink()
+
+        v, detail = chd.cursor_hooks_status(self.home)
+        self.assertEqual(v, "UNRESOLVED_PATH")
+        self.assertIn("sessionStart", detail)
+        self.assertTrue(chd.block_invalidated(v))
 
     def test_malformed_hooks_json(self) -> None:
         (self.home / ".cursor").mkdir()
@@ -103,15 +136,15 @@ class StatusTests(unittest.TestCase):
 
     def test_wrong_version_is_malformed(self) -> None:
         _write_cursor_hooks(self.home, {
-            "sessionStart": [_adapter_handler()], "sessionEnd": [_adapter_handler()],
+            "sessionStart": [_adapter_handler(self.home)], "sessionEnd": [_adapter_handler(self.home)],
         }, version=2)
         v, _ = chd.cursor_hooks_status(self.home)
         self.assertEqual(v, "MALFORMED")
 
     def test_foreign_handlers_alongside_adapter_still_ok(self) -> None:
         _write_cursor_hooks(self.home, {
-            "sessionStart": [{"command": "py foreign.py"}, _adapter_handler()],
-            "sessionEnd": [_adapter_handler()],
+            "sessionStart": [{"command": "py foreign.py"}, _adapter_handler(self.home)],
+            "sessionEnd": [_adapter_handler(self.home)],
             "beforeShellExecution": [{"command": "unrelated.sh", "matcher": "curl"}],
         })
         v, _ = chd.cursor_hooks_status(self.home)
@@ -144,7 +177,7 @@ class JanitorCursorAlarmTests(unittest.TestCase):
 
     def test_no_alarm_when_healthy(self) -> None:
         _write_cursor_hooks(self.home, {
-            "sessionStart": [_adapter_handler()], "sessionEnd": [_adapter_handler()],
+            "sessionStart": [_adapter_handler(self.home)], "sessionEnd": [_adapter_handler(self.home)],
         })
         alarms: list[str] = []
         git_hygiene.check_cursor_hooks(alarms)

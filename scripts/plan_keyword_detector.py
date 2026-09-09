@@ -24,6 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hook_stdio import read_stdin_text
+
 # Emit utf-8 so injected Polish / em-dashes survive (the harness reads utf-8).
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
@@ -166,7 +168,7 @@ def _emit_steer(cwd: str) -> None:
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         if raw and ord(raw[0]) == 0xFEFF:  # strip a leading BOM some shells prepend
             raw = raw[1:]
         data = json.loads(raw) if raw.strip() else {}

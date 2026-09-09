@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from hook_stdio import read_stdin_text
+
 HOME = Path.home() / ".claude"
 TARGET = Path("D:/dotclaude/ecosystem-context")
 STATE_FILE = HOME / ".auto_sync_context_state.json"
@@ -33,7 +35,7 @@ def _normalize(p: str) -> str:
 
 def main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = read_stdin_text()
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
         return

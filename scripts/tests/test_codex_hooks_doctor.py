@@ -20,8 +20,25 @@ def _encoded_command(target: str) -> str:
     return f"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -EncodedCommand {b64}"
 
 
-def _adapter_group(matcher: str | None = None) -> dict:
-    cmd = _encoded_command("D:\\dotclaude\\dotclaude-ecosystem\\scripts\\codex_session_adapter.py")
+def _adapter_path(home: Path) -> str:
+    """A real adapter file inside the fixture.
+
+    This used to hard-code D:\\dotclaude\\...\\codex_session_adapter.py, which
+    exists on the maintainer's box and nowhere else. Now that the doctor checks
+    the handler actually resolves to a file (audit P2-24), a hard-coded path
+    would pass here and fail on every other machine, CI included.
+    """
+    scripts = home / ".codex" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    adapter = scripts / "codex_session_adapter.py"
+    if not adapter.exists():
+        adapter.write_text("# fixture", encoding="utf-8")
+    return str(adapter)
+
+
+def _adapter_group(matcher: str | None = None, home: Path | None = None) -> dict:
+    target = _adapter_path(home) if home is not None else "codex_session_adapter.py"
+    cmd = _encoded_command(target)
     group: dict = {"hooks": [{"type": "command", "command": cmd, "commandWindows": cmd, "timeout": 2}]}
     if matcher is not None:
         group["matcher"] = matcher
@@ -82,8 +99,8 @@ class StatusTests(unittest.TestCase):
 
     def test_ok_when_both_events_reference_adapter(self) -> None:
         _write_codex_hooks(self.home, {
-            "SessionStart": [_adapter_group("startup|resume|clear|compact")],
-            "SessionEnd": [_adapter_group()],
+            "SessionStart": [_adapter_group("startup|resume|clear|compact", self.home)],
+            "SessionEnd": [_adapter_group(None, self.home)],
         })
         v, _ = chd.codex_hooks_status(self.home)
         self.assertEqual(v, "OK")
@@ -92,12 +109,29 @@ class StatusTests(unittest.TestCase):
     def test_missing_when_one_event_lacks_adapter(self) -> None:
         foreign = {"hooks": [{"type": "command", "command": "py other.py"}]}
         _write_codex_hooks(self.home, {
-            "SessionStart": [_adapter_group("startup|resume|clear|compact")],
+            "SessionStart": [_adapter_group("startup|resume|clear|compact", self.home)],
             "SessionEnd": [foreign],
         })
         v, detail = chd.codex_hooks_status(self.home)
         self.assertEqual(v, "MISSING")
         self.assertIn("SessionEnd", detail)
+        self.assertTrue(chd.block_invalidated(v))
+
+    def test_a_handler_pointing_at_a_deleted_adapter_is_not_ok(self) -> None:
+        """Audit P2-24: this doctor matched the basename and stopped there, so a
+        hooks.json pointing at an adapter that no longer exists read as OK —
+        hooks present, nothing runs, nothing complains."""
+        _write_codex_hooks(self.home, {
+            "SessionStart": [_adapter_group("startup|resume|clear|compact", self.home)],
+            "SessionEnd": [_adapter_group(None, self.home)],
+        })
+        self.assertEqual(chd.codex_hooks_status(self.home)[0], "OK", "precondition")
+
+        (self.home / ".codex" / "scripts" / "codex_session_adapter.py").unlink()
+
+        v, detail = chd.codex_hooks_status(self.home)
+        self.assertEqual(v, "UNRESOLVED_PATH")
+        self.assertIn("SessionStart", detail)
         self.assertTrue(chd.block_invalidated(v))
 
     def test_malformed_hooks_json(self) -> None:
@@ -134,8 +168,8 @@ class JanitorCodexAlarmTests(unittest.TestCase):
 
     def test_no_alarm_when_healthy(self) -> None:
         _write_codex_hooks(self.home, {
-            "SessionStart": [_adapter_group("startup|resume|clear|compact")],
-            "SessionEnd": [_adapter_group()],
+            "SessionStart": [_adapter_group("startup|resume|clear|compact", self.home)],
+            "SessionEnd": [_adapter_group(None, self.home)],
         })
         alarms: list[str] = []
         git_hygiene.check_codex_hooks(alarms)
