@@ -69,6 +69,33 @@ class ReportVerdictTests(unittest.TestCase):
         self.assertLessEqual(len(line), doc.LINE_BUDGET)
         self.assertIn("more", line, "the overflow must be counted, not dropped silently")
 
+    def test_the_budget_holds_for_every_shape_not_just_a_lucky_one(self) -> None:
+        """The first version appended the `+N more` marker without checking it
+        fit, so a report whose parts filled the line to just under the limit
+        overflowed. The fixed-width case above happened not to hit it."""
+        import random
+
+        random.seed(7)
+        worst = 0
+        for _ in range(2000):
+            checks = [
+                doc.Check(f"c{i}", False, "x" * random.randint(1, 80))
+                for i in range(random.randint(1, 8))
+            ]
+            worst = max(worst, len(doc.Report(checks).line()))
+        self.assertLessEqual(worst, doc.LINE_BUDGET)
+
+    def test_a_skipped_check_is_not_summarised_as_clean(self) -> None:
+        report = doc.Report([
+            doc.Check("hooks", True, "not installed here", checked=False),
+            doc.Check("verdicts", True, "3"),
+            doc.Check("temp", True, "0"),
+        ])
+        line = report.line()
+        self.assertIn("2 checks clean", line)
+        self.assertIn("skipped (hooks)", line)
+        self.assertNotIn("3 checks clean", line)
+
     def test_json_shape_carries_the_exit_code(self) -> None:
         payload = doc.Report([doc.Check("x", False, "bad")]).to_dict()
         self.assertEqual(payload["exit_code"], 3)
@@ -127,6 +154,21 @@ class LeakedTempTests(unittest.TestCase):
             self._leak(f".thing{i}.json.abc.tmp", age_hours=1)
         self.assertTrue(doc._check_leaked_temp(self.home, _state(self.home), self.now).ok)
 
+    def test_the_same_directory_twice_is_not_counted_twice(self) -> None:
+        """CLAUDE_SESSION_STATE_DIR is operator-settable and can point at
+        ~/.claude itself, which would trip the ceiling at half the real count."""
+        import os
+
+        claude = self.home / ".claude"
+        for i in range(doc.LEAKED_TMP_CEILING):
+            path = claude / f".thing{i}.json.abc.tmp"
+            path.write_text("x", encoding="utf-8")
+            stamp = self.now - 48 * _HOUR
+            os.utime(path, (stamp, stamp))
+        check = doc._check_leaked_temp(self.home, claude, self.now)
+        self.assertEqual(check.detail, str(doc.LEAKED_TMP_CEILING))
+        self.assertTrue(check.ok)
+
     def test_a_pile_of_old_temp_files_fails(self) -> None:
         for i in range(doc.LEAKED_TMP_CEILING + 2):
             self._leak(f".thing{i}.json.abc.tmp", age_hours=48)
@@ -171,6 +213,22 @@ class JanitorTests(unittest.TestCase):
         self.assertFalse(check.ok)
         self.assertIn("old", check.detail)
 
+    def test_a_stale_report_does_not_republish_its_alarms_as_current(self) -> None:
+        """Two repos write here. One janitor stopping while the other keeps
+        running would otherwise republish the dead repo's frozen alarms as
+        today's, forever, because staleness only looked at the newest file."""
+        self._report("report-latest_live.txt", "no alarms\n", age_hours=1)
+        self._report(
+            "report-latest_dead.txt",
+            "ALARMS:\n  ! PRIMARY off main\n  ! MANAGED HOOKS: COLLISION\n",
+            age_hours=doc.JANITOR_STALE_HOURS + 10,
+        )
+
+        check = doc._check_janitor(_state(self.home), self.now)
+
+        self.assertNotIn("2 alarms", check.detail)
+        self.assertIn("stale", check.detail)
+
     def test_no_janitor_deployed_is_unchecked_not_clean(self) -> None:
         check = doc._check_janitor(Path(self._tmp.name) / "nowhere", self.now)
         self.assertFalse(check.checked)
@@ -195,6 +253,19 @@ class BuildReportTests(unittest.TestCase):
         self.assertFalse(verdicts.checked)
         self.assertFalse(verdicts.ok)
         self.assertIn("RuntimeError", verdicts.detail)
+
+    def test_the_full_drift_check_declines_a_budget_it_cannot_finish_in(self) -> None:
+        """It shells out to install.ps1 -Check. Skipping only when the budget is
+        already spent was not enough: a caller arriving with two seconds left
+        still stalled for minutes."""
+        for budget in (0.0, 1.5):
+            with self.subTest(budget=budget):
+                report = doc.build_report(
+                    home=self.home, state_dir=_state(self.home), full=True, budget_s=budget
+                )
+                drift = next(c for c in report.checks if c.name == "drift")
+                self.assertFalse(drift.checked)
+                self.assertIn("budget left", drift.detail)
 
     def test_the_cli_exit_code_matches_the_report(self) -> None:
         for i in range(doc.VERDICT_BACKLOG_CEILING + 2):

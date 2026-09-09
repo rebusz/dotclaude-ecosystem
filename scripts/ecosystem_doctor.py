@@ -26,9 +26,14 @@ Modes
 Exit codes: 0 clean; 2 could not check (no ecosystem deployed here, or the
 manifest is unreadable); 3 dirty -- at least one detector is unhappy.
 
-Everything on the default path is bounded by `--budget-s` (default 1.5s) and
-reads cached state only, because the SessionStart hook that consumes it has a
-5s ceiling. `--full` is for a terminal or CI, never for the hook.
+The default path reads cached state only and consults `--budget-s` (default
+1.5s) BETWEEN checks: a check that has already started runs to completion, so
+the budget bounds how many checks run, not how long one of them may block. That
+is deliberate -- every check here is a bounded local read -- but it means a
+stalled filesystem can still outlast the SessionStart ceiling, and the caller
+keeps its own fail-open guard for that. `--full` adds a subprocess measured in
+minutes and is for a terminal or CI, never for the hook; it is skipped outright
+when the budget is already spent.
 """
 
 from __future__ import annotations
@@ -99,11 +104,21 @@ class Report:
 
     def line(self) -> str:
         """One bounded line. Names what is wrong, never what is right."""
-        if not [c for c in self.checks if c.checked]:
+        checked = [c for c in self.checks if c.checked]
+        if not checked:
             return "[ecosystem] no checks could run; see: python scripts/ecosystem_doctor.py --report"
         bad = self.dirty
         if not bad:
-            return f"[ecosystem] {len(self.checks)} checks clean."
+            # Count only what actually ran. Reporting skipped checks as clean is
+            # the same miscount this module exists to end: a check that could
+            # not run must never be summarised as a verified pass.
+            skipped = [c.name for c in self.checks if not c.checked]
+            if skipped:
+                return (
+                    f"[ecosystem] {len(checked)} checks clean, "
+                    f"{len(skipped)} skipped ({', '.join(skipped)})."
+                )
+            return f"[ecosystem] {len(checked)} checks clean."
         head = "[ecosystem] NEEDS ATTENTION: "
         tail = " -- python scripts/ecosystem_doctor.py --report"
         room = LINE_BUDGET - len(head) - len(tail)
@@ -111,10 +126,17 @@ class Report:
         for check in bad:
             candidate = f"{check.name}={check.detail}"
             if len("; ".join(parts + [candidate])) > room:
-                parts.append(f"+{len(bad) - len(parts)} more")
                 break
             parts.append(candidate)
-        return head + "; ".join(parts) + tail
+        if len(parts) < len(bad):
+            # The overflow marker has to fit too. Appending it unconditionally
+            # was how this method could exceed the one budget it exists to keep.
+            marker = f"+{len(bad) - len(parts)} more"
+            while parts and len("; ".join([*parts, marker])) > room:
+                parts.pop()
+                marker = f"+{len(bad) - len(parts)} more"
+            parts.append(marker)
+        return (head + "; ".join(parts) + tail)[:LINE_BUDGET]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,9 +212,17 @@ def _check_leaked_temp(home: Path, state: Path, now: float) -> Check:
     """Atomic writes clean up after themselves; a SIGKILLed hook does not."""
     stale: list[str] = []
     cutoff = now - 86400
+    seen_dirs: set[str] = set()
     for directory in (home / ".claude", state):
         if not directory.is_dir():
             continue
+        # CLAUDE_SESSION_STATE_DIR is operator-settable and can point at
+        # ~/.claude itself, which would count every orphan twice and trip the
+        # ceiling at half the real number.
+        key = str(directory.resolve(strict=False)).lower()
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
         try:
             for entry in os.scandir(directory):
                 if not entry.is_file(follow_symlinks=False):
@@ -217,29 +247,59 @@ def _check_janitor(state: Path, now: float) -> Check:
     if not directory.is_dir():
         return Check("janitor", True, "not deployed", checked=False)
     try:
-        reports = [e for e in os.scandir(directory) if e.name.startswith("report-latest_")]
+        # Take the mtimes inside the guard: this directory is written by
+        # concurrent hooks and swept by state_reaper, so a report can be
+        # replaced between the listing and the stat.
+        reports = [
+            (e.path, e.stat().st_mtime)
+            for e in os.scandir(directory)
+            if e.name.startswith("report-latest_")
+        ]
     except OSError as exc:
         return Check("janitor", False, f"unreadable ({type(exc).__name__})", checked=False)
     if not reports:
         return Check("janitor", True, "no report yet", checked=False)
-    newest = max(reports, key=lambda e: e.stat().st_mtime)
-    age_h = (now - newest.stat().st_mtime) / 3600
+    stale_cutoff = now - JANITOR_STALE_HOURS * 3600
+    age_h = (now - max(mtime for _, mtime in reports)) / 3600
     if age_h > JANITOR_STALE_HOURS:
         return Check("janitor", False, f"report {age_h:.0f}h old (scheduler stopped?)")
+    # Only tally reports that are themselves current. One repo's janitor
+    # stopping while another keeps writing would otherwise republish the dead
+    # repo's frozen alarms as today's, indefinitely.
     alarms = 0
-    for entry in reports:
+    stale_reports = 0
+    for path, mtime in reports:
+        if mtime < stale_cutoff:
+            stale_reports += 1
+            continue
         try:
-            text = Path(entry.path).read_text(encoding="utf-8-sig", errors="replace")
+            text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         alarms += sum(1 for line in text.splitlines() if _ALARM_LINE.match(line))
     if alarms:
-        return Check("janitor", False, f"{alarms} alarms")
+        suffix = f" (+{stale_reports} stale report(s))" if stale_reports else ""
+        return Check("janitor", False, f"{alarms} alarms{suffix}")
+    if stale_reports:
+        return Check("janitor", False, f"{stale_reports} stale report(s)")
     return Check("janitor", True, "0 alarms")
 
 
-def _check_installed_drift(checkout: Path | None) -> Check:
-    """--full only: hashes every installed artifact against the repo."""
+# Below this, starting the drift subprocess is not worth it: it cannot finish.
+_DRIFT_MIN_BUDGET_S = 10.0
+_DRIFT_MAX_S = 300.0
+
+
+def _check_installed_drift(checkout: Path | None, remaining_s: float = _DRIFT_MAX_S) -> Check:
+    """--full only: hashes every installed artifact against the repo.
+
+    Bounded by whatever is left of the caller's budget, not by a flat 300s.
+    Skipping when the budget is already spent is not enough on its own: the
+    subprocess itself has to fit, or a caller that arrives here with two
+    seconds left still stalls for five minutes.
+    """
+    if remaining_s < _DRIFT_MIN_BUDGET_S:
+        return Check("drift", True, f"skipped: {remaining_s:.1f}s budget left", checked=False)
     checkout = checkout or _repo_from_file()
     if checkout is None:
         return Check("drift", True, "no checkout", checked=False)
@@ -251,7 +311,7 @@ def _check_installed_drift(checkout: Path | None) -> Check:
             ["powershell", "-NoProfile", "-NonInteractive", "-File", str(script), "-Check"],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=min(_DRIFT_MAX_S, remaining_s),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -296,7 +356,13 @@ def build_report(
         except Exception as exc:  # never break a session over a diagnostic
             report.checks.append(Check(name, False, f"raised {type(exc).__name__}", checked=False))
     if full:
-        report.checks.append(_check_installed_drift(checkout))
+        # Documented as "for a terminal or CI, never for the hook", but nothing
+        # enforced it: this check shells out and used to ignore the budget
+        # entirely. It now gets what is left of it, and declines if that is
+        # too little to finish in.
+        report.checks.append(
+            _check_installed_drift(checkout, remaining_s=deadline - time.monotonic())
+        )
     return report
 
 
