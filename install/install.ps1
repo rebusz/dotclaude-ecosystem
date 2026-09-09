@@ -131,8 +131,17 @@ if ($Check) {
     foreach ($stale in $RetiredSkillDirs) {
         if (Test-Path $stale) { $drift += "RETIRED PRESENT $stale (run install to move it aside)" }
     }
+    # -Check used to iterate skills, commands and retired dirs only, so it
+    # reported "No drift" while the managed hook block was absent from
+    # settings.json and duplicated twenty handlers across two checkouts. The
+    # detector for that already existed; nothing called it (audit P2-25).
+    & py (Join-Path $RepoRoot "scripts\hooks_install.py") status --checkout $RepoRoot | Out-Null
+    $hooksStatus = $LASTEXITCODE
+    if ($hooksStatus -ne 0) {
+        $drift += "HOOK BLOCK not clean (hooks_install.py status exited $hooksStatus) -- run: py $RepoRoot\scripts\hooks_install.py status"
+    }
     if ($drift.Count -eq 0) {
-        Write-Host "No drift: every managed artifact matches the repo." -ForegroundColor Green
+        Write-Host "No drift: every managed artifact matches the repo, and the hook block is clean." -ForegroundColor Green
         exit 0
     }
     foreach ($d in $drift) { Write-Host "  $d" -ForegroundColor Red }
@@ -147,11 +156,52 @@ Write-Host "Source : $RepoRoot"
 Write-Host "Target : $ClaudeHome"
 Write-Host ""
 
-# Backup existing
+# Backup existing.
+#
+# This used to be `Copy-Item -Path $ClaudeHome -Recurse`: the whole home, every
+# run, no rotation and no exclusions. On the operator's box that had grown to
+# 16.9 GB of stale copies against a 4.5 GB live home, three of them each
+# carrying .credentials.json, .env and mcp-needs-auth-cache.json in plaintext at
+# default ACLs -- including a superseded token from July. It also ran for
+# minutes before any install work, on a box running the live trading stack
+# (audit P1-16).
+#
+# A backup is only useful for what the installer can damage, so copy exactly
+# that. Everything omitted here is either untouched by this script (projects/,
+# plugins/, state/, caches) or independently re-derivable from the repo. Skills
+# additionally keep their own per-pair skills.bak/<stamp>, and settings.json
+# keeps its own rotated sidecar backups under .claude/backups/.
+$BackupScope = @('scripts', 'skills', 'commands', 'settings.json', 'CLAUDE.md',
+                 'hooks-install-manifest.json')
+$BackupKeep = 3
+
 if (Test-Path $ClaudeHome) {
     $backup = "$ClaudeHome.bak.$Stamp"
-    Write-Host "[1/7] Backup ~/.claude -> $backup" -ForegroundColor Yellow
-    Copy-Item -Path $ClaudeHome -Destination $backup -Recurse -Force
+    Write-Host "[1/7] Backup installer scope of ~/.claude -> $backup" -ForegroundColor Yellow
+    New-Item -ItemType Directory -Force -Path $backup | Out-Null
+    foreach ($item in $BackupScope) {
+        $src = Join-Path $ClaudeHome $item
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination $backup -Recurse -Force
+        }
+    }
+    Set-Content -Path (Join-Path $backup "README.txt") -Encoding utf8 -Value @"
+Installer-scope backup taken by install.ps1 at $Stamp.
+
+Contains only what the installer writes: $($BackupScope -join ', ').
+
+Deliberately NOT a copy of the whole ~/.claude. The previous whole-home backup
+carried credentials in plaintext and grew without bound; everything omitted is
+either untouched by the installer or re-derivable from the repository.
+"@
+
+    # Rotate: keep the newest $BackupKeep, delete older ones.
+    $stale = @(Get-ChildItem -Path (Split-Path -Parent $ClaudeHome) -Directory -Filter ".claude.bak.*" -Force |
+               Sort-Object Name -Descending | Select-Object -Skip $BackupKeep)
+    foreach ($old in $stale) {
+        Write-Host "  rotating out $($old.FullName)" -ForegroundColor DarkGray
+        Remove-Item -Path $old.FullName -Recurse -Force -Confirm:$false
+    }
 } else {
     Write-Host "[1/7] No existing ~/.claude to back up" -ForegroundColor Green
     New-Item -ItemType Directory -Force -Path $ClaudeHome | Out-Null
@@ -226,9 +276,28 @@ foreach ($stale in $RetiredSkillDirs) {
 # settings.json -- wire the managed hook block (handler-granular merge, dry-run first)
 Write-Host "[4/7] Wire managed hooks into ~/.claude/settings.json" -ForegroundColor Cyan
 $HooksInstaller = Join-Path $RepoRoot "scripts\hooks_install.py"
-& py $HooksInstaller install --checkout $RepoRoot            # dry-run diff
-& py $HooksInstaller install --checkout $RepoRoot --apply    # merge managed block, foreign hooks preserved
-Write-Host "  managed hook block wired (run: py $HooksInstaller doctor)" -ForegroundColor Green
+# --home is explicit so this step is testable against a throwaway profile and
+# never silently retargets; it matches Path.home() in a normal run.
+$HooksHome = Split-Path -Parent $ClaudeHome
+& py $HooksInstaller install --checkout $RepoRoot --home $HooksHome           # dry-run diff
+& py $HooksInstaller install --checkout $RepoRoot --home $HooksHome --apply   # merge managed block, foreign hooks preserved
+# $ErrorActionPreference = "Stop" does NOT turn a native non-zero exit into a
+# terminating error, so this script used to print "managed hook block wired" and
+# "=== Install complete ===" even when hooks_install exited 2 on a bad manifest,
+# a missing managed script or an unparseable settings.json (audit P1-15).
+# 2 means it could not do the job -- fatal. 3 means it did, but collisions or
+# unclassified handlers remain -- loud, and the rest of the install still runs.
+$hooksExit = $LASTEXITCODE
+if ($hooksExit -eq 3) {
+    Write-Host "  WARNING: hook block wired, but unresolved handlers remain." -ForegroundColor Red
+    Write-Host "           Inspect: py $HooksInstaller status --home $HooksHome" -ForegroundColor Red
+    Write-Host "           Claim them: py $HooksInstaller install --checkout $RepoRoot --home $HooksHome --apply --reconcile" -ForegroundColor Red
+    $script:HookWarning = $true
+} elseif ($hooksExit -ne 0) {
+    throw "hooks_install.py exited $hooksExit -- the managed hook block was NOT wired. Nothing else was installed on top of a broken hook state."
+} else {
+    Write-Host "  managed hook block wired (run: py $HooksInstaller doctor)" -ForegroundColor Green
+}
 
 # CLAUDE.md
 Write-Host "[5/7] Install CLAUDE.md template" -ForegroundColor Cyan
@@ -275,7 +344,11 @@ foreach ($f in @("MEMORY.md", "ECOSYSTEM_IDEA_BOX.md")) {
 }
 
 Write-Host ""
-Write-Host "=== Install complete ===" -ForegroundColor Green
+if ($script:HookWarning) {
+    Write-Host "=== Install complete, WITH an unresolved hook block ===" -ForegroundColor Red
+} else {
+    Write-Host "=== Install complete ===" -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "  1. Review ~/.claude/CLAUDE.md and personalize the ecosystem table"
