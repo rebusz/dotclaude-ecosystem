@@ -49,7 +49,7 @@ collision check was done by hand over `design/plans/` (14 plans) and
 | Local Python | 3.14.3 | CI pins 3.12 — local green ≠ CI green |
 | Worktrees, this repo | 26 (12 older than 30 days) | |
 | Worktrees, Tsignal 5.0 | **504**, 1361 local branches | growing ~25/day; janitor ALARM daily since June |
-| `~/.claude` on disk | 4.5 GB | `skills/gstack` 1.7 GB, `projects` 1.4 GB, `state` 384 MB |
+| `~/.claude` on disk | 4.5 GB live **+ 16.9 GB of installer backups** | `skills/gstack` 1.7 GB, `projects` 1.4 GB, `state` 384 MB |
 | Hook errors logged | 2,035 lines, 50–150/day, trend up | |
 
 The two `main` failures are `test_implementation_review_packet.py::test_master_agent_owns_risk_aware_review_routing`
@@ -196,7 +196,7 @@ values. `install.ps1 -Check` reports **53 drift items**, 22 of them missing
 | P1-13 | `--validation` / `--validation-file` bypasses the review packet's fail-closed secret rejection entirely | CONFIRMED `implementation_review_packet.py:137,159,210,263` |
 | P1-14 | Hook stdin decodes as **cp1252**; every non-ASCII trigger silently never fires. `nowy moduł` → `nowy moduÅ‚`, regex misses | CONFIRMED reproduced: `sys.stdin.encoding = cp1252`, match `True`→`False` |
 | P1-15 | `install.ps1` ignores `hooks_install.py`'s exit code and prints "Install complete" on total failure (`$ErrorActionPreference` does not trap native exit codes) | CONFIRMED `install/install.ps1:229-231` |
-| P1-16 | Installer copies `~/.claude` wholesale — including `.credentials.json`, `.env` and the whole transcript store — into unrotated plaintext `~/.claude.bak.<stamp>` trees (3 present) | CONFIRMED `install.ps1:151-154` + files on disk |
+| P1-16 | Installer clones `~/.claude` wholesale on **every** run, no rotation, no exclusions. **16.9 GB of stale backups against a 4.5 GB live home** (7.8 + 4.6 + 4.5 GB), each future run adds ~4.5 GB. All three trees carry `.credentials.json`, `.env` and `mcp-needs-auth-cache.json` in plaintext at default ACLs — and the July tree holds a *different* 471-byte credentials file, so a rotated token still sits on disk. The copy also runs for minutes before any install work, on the box running the live trading stack | CONFIRMED `install.ps1:151-154`; sizes measured; credential files verified present in all three |
 | P1-17 | `agent-rules/core.md` contradicts itself on the Gemini pin and on the Codex-lane exclusion; `sync_agent_rules --write` is frozen (163/162 lines) so no target can be re-converged | CONFIRMED `core.md:28` vs `:30`; measured render |
 | P1-18 | Repo v2 `master-agent` never installed; agents run the v1 monolith whose authoritative routing table is duplicated inside itself with divergent content | CONFIRMED 32,900 B vs 7,161 B; `install.ps1 -Check` 53 drift items |
 | P1-19 | `skills/whatnext/SKILL.md:57` and `overlays/codex-global.md:30` forbid agents from touching the broker API / order path — the exact prohibition `core.md:18` names as the cause of the paper/live divergence | CONFIRMED both file:line |
