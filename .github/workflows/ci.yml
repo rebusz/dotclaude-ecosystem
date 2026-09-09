@@ -23,6 +23,16 @@ on:
   push:
     branches: [main]
 
+# Without path filters, every push to a branch runs the suite -- including the
+# design-doc auto-backups the PostToolUse hook pushes during a planning
+# session, which arrive in bursts. Superseding a run is the right answer to
+# that; reintroducing a filter is not, because the filter is what swallowed the
+# ready_for_review transition in the first place. Only the newest commit's
+# result can gate a merge anyway.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   suite:
     # Draft PRs stay uncheckedly cheap; the operator's documented policy is to
