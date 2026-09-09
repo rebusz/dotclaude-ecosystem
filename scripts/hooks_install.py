@@ -205,8 +205,49 @@ def _command_path_token(command: str) -> str | None:
     return parts[-1]
 
 
+@dataclass(frozen=True)
+class Ownership:
+    """What this installer can PROVE it put in settings.json.
+
+    The allowlist used to be the current checkout plus ~/.claude/scripts, and
+    nothing else. Installing from a second checkout is the normal case, not an
+    error — an agent worktree, a moved repo — and each such install classified
+    the previous checkout's handlers as `collision`, kept them in place, and
+    appended its own canonical group on top. The operator's box reached 20
+    handlers for a 10-entry manifest that way: every hook fired twice, half of
+    them from a worktree frozen weeks earlier (audit P1-1).
+
+    The sidecar already recorded exactly which commands and which root were
+    installed, so ownership is a lookup, not a guess. `claim_any_root` is the
+    explicit operator override for handlers this installer never recorded —
+    hand-wired ones, or a sidecar lost to a home restore.
+    """
+
+    roots: frozenset[str] = frozenset()
+    commands: frozenset[str] = frozenset()
+    claim_any_root: bool = False
+
+
+_NO_OWNERSHIP = Ownership()
+
+
+def sidecar_ownership(home: Path, *, claim_any_root: bool = False) -> Ownership:
+    """Roots and exact commands recorded by previous installs, current one last."""
+    sidecar = read_sidecar(home) or {}
+    roots: set[str] = set()
+    for value in [sidecar.get("checkout_root"), *(sidecar.get("previous_roots") or [])]:
+        if isinstance(value, str) and value.strip():
+            roots.add(value.replace("\\", "/").rstrip("/").lower())
+    commands = {
+        e["command"] for e in (sidecar.get("entries") or [])
+        if isinstance(e, dict) and isinstance(e.get("command"), str)
+    }
+    return Ownership(frozenset(roots), frozenset(commands), claim_any_root)
+
+
 def classify_handler(command: str, checkout: Path, home: Path,
-                     managed: set[str]) -> tuple[str, str | None]:
+                     managed: set[str],
+                     ownership: Ownership = _NO_OWNERSHIP) -> tuple[str, str | None]:
     """Return (kind, basename): 'managed' | 'collision' | 'foreign' | 'unclassified'."""
     token = _command_path_token(command)
     if token is None:
@@ -214,17 +255,22 @@ def classify_handler(command: str, checkout: Path, home: Path,
     base = Path(token.replace("\\", "/")).name
     if base not in managed:
         return ("foreign", None)
-    # basename matches a managed script: only ours if rooted in an allowlisted legacy root.
-    legacy_roots = [(checkout / "scripts"), (home / ".claude" / "scripts")]
+    if command in ownership.commands:
+        return ("managed", base)  # byte-identical to something we recorded installing
+    # basename matches a managed script: ours if rooted in an allowlisted root,
+    # in a root a previous install recorded, or under an explicit --reconcile.
+    allowed = [(checkout / "scripts").as_posix().lower(),
+               (home / ".claude" / "scripts").as_posix().lower()]
+    allowed += [f"{root}/scripts" for root in ownership.roots]
     try:
-        resolved = Path(token.replace("\\", "/"))
-        for root in legacy_roots:
-            root_posix = root.as_posix().lower()
-            if resolved.as_posix().lower() == (root.as_posix() + "/" + base).lower() or \
-               resolved.as_posix().lower().startswith(root_posix + "/"):
+        resolved = Path(token.replace("\\", "/")).as_posix().lower()
+        for root_posix in allowed:
+            if resolved == f"{root_posix}/{base}".lower() or resolved.startswith(root_posix + "/"):
                 return ("managed", base)
     except (OSError, ValueError):
         return ("collision", base)
+    if ownership.claim_any_root:
+        return ("managed", base)
     return ("collision", base)
 
 
@@ -238,7 +284,8 @@ def _canonical_group(entry: ManifestEntry, interpreter: str, checkout: Path) -> 
 
 
 def merge_hooks(settings: dict[str, Any], entries: list[ManifestEntry],
-                interpreter: str, checkout: Path, home: Path) -> dict[str, Any]:
+                interpreter: str, checkout: Path, home: Path,
+                ownership: Ownership = _NO_OWNERSHIP) -> dict[str, Any]:
     """Return a new settings dict with the managed block reconciled at handler granularity.
 
     Removes only individual command handlers whose resolved basename matches a managed
@@ -265,7 +312,7 @@ def merge_hooks(settings: dict[str, Any], entries: list[ManifestEntry],
             kept_handlers = []
             for handler in group["hooks"]:
                 cmd = handler.get("command", "") if isinstance(handler, dict) else ""
-                kind, _ = classify_handler(cmd, checkout, home, managed)
+                kind, _ = classify_handler(cmd, checkout, home, managed, ownership)
                 if kind == "managed":
                     continue  # drop; will be re-inserted canonically
                 kept_handlers.append(handler)  # foreign / collision / unclassified: keep in place
@@ -283,7 +330,8 @@ def merge_hooks(settings: dict[str, Any], entries: list[ManifestEntry],
 
 
 def compute_collisions(settings: dict[str, Any], entries: list[ManifestEntry],
-                       checkout: Path, home: Path) -> tuple[list[str], list[str]]:
+                       checkout: Path, home: Path,
+                       ownership: Ownership = _NO_OWNERSHIP) -> tuple[list[str], list[str]]:
     """Scan managed events for COLLISION (basename match outside allowlisted roots) and
     UNCLASSIFIED (untokenizable) handlers, so they are surfaced, never silently mutated."""
     managed = managed_basenames(entries)
@@ -299,7 +347,7 @@ def compute_collisions(settings: dict[str, Any], entries: list[ManifestEntry],
                 continue
             for handler in group.get("hooks", []) or []:
                 cmd = handler.get("command", "") if isinstance(handler, dict) else ""
-                kind, base = classify_handler(cmd, checkout, home, managed)
+                kind, base = classify_handler(cmd, checkout, home, managed, ownership)
                 if kind == "collision":
                     collisions.append(f"{event}: {cmd}")
                 elif kind == "unclassified":
@@ -409,14 +457,16 @@ def _validated_context(home: Path, checkout: Path | None) -> tuple[Path, list[Ma
     return root, entries, interpreter
 
 
-def install(*, home: Path, checkout: Path | None, apply: bool) -> dict[str, Any]:
+def install(*, home: Path, checkout: Path | None, apply: bool,
+            reconcile: bool = False) -> dict[str, Any]:
     settings_path = home / ".claude" / "settings.json"
     # (1-3) validate everything before any disk mutation (Matrix B4)
     root, entries, interpreter = _validated_context(home, checkout)
     before = load_settings(settings_path)
+    ownership = sidecar_ownership(home, claim_any_root=reconcile)
     # (5) compute merge in memory
-    after = merge_hooks(before, entries, interpreter, root, home)
-    collisions, unclassified = compute_collisions(before, entries, root, home)
+    after = merge_hooks(before, entries, interpreter, root, home, ownership)
+    collisions, unclassified = compute_collisions(before, entries, root, home, ownership)
     diff = _diff(before, after)
     if not apply:
         return {"mode": "dry-run", "checkout": str(root), "interpreter": interpreter,
@@ -435,8 +485,14 @@ def install(*, home: Path, checkout: Path | None, apply: bool) -> dict[str, Any]
     backup = backup_settings(settings_path, home)
     rendered = [{"event": e.event, "matcher": e.matcher,
                  "command": render_command(interpreter, root, e.script)} for e in entries]
+    # Carry the roots we have ever installed from. Without this history a third
+    # install cannot recognise the first one's handlers, and they accumulate.
+    previous_roots = sorted(
+        r for r in ownership.roots if r != root.as_posix().lower()
+    )
     pending = {"schema_version": SIDECAR_SCHEMA, "state": "pending",
-               "checkout_root": root.as_posix(), "interpreter": interpreter,
+               "checkout_root": root.as_posix(), "previous_roots": previous_roots,
+               "interpreter": interpreter,
                "installed_at_utc": datetime.now(timezone.utc).isoformat(),
                "manifest_sha256": manifest_sha256(root),
                "entries": rendered, "settings_backup": str(backup)}
@@ -575,8 +631,10 @@ def status(*, home: Path, checkout: Path | None, check_janitor: bool = False) ->
         return report
 
     sidecar = read_sidecar(home)
-    actual = _actual_managed(settings, entries, root, home)  # (event, matcher, command) multiset
-    report.collisions, report.unclassified = compute_collisions(settings, entries, root, home)
+    ownership = sidecar_ownership(home)
+    actual = _actual_managed(settings, entries, root, home, ownership)
+    report.collisions, report.unclassified = compute_collisions(
+        settings, entries, root, home, ownership)
 
     if sidecar is not None and sidecar.get("state") == "pending":
         report.overall = "INCOMPLETE_INSTALL"
@@ -616,7 +674,8 @@ def status(*, home: Path, checkout: Path | None, check_janitor: bool = False) ->
 
 
 def _actual_managed(settings: dict[str, Any], entries: list[ManifestEntry],
-                    checkout: Path, home: Path) -> list[tuple[str, str, str]]:
+                    checkout: Path, home: Path,
+                    ownership: Ownership = _NO_OWNERSHIP) -> list[tuple[str, str, str]]:
     managed = managed_basenames(entries)
     managed_events = {e.event for e in entries}
     out: list[tuple[str, str, str]] = []
@@ -630,7 +689,7 @@ def _actual_managed(settings: dict[str, Any], entries: list[ManifestEntry],
             matcher = group.get("matcher", "")
             for handler in group.get("hooks", []) or []:
                 cmd = handler.get("command", "") if isinstance(handler, dict) else ""
-                kind, _ = classify_handler(cmd, checkout, home, managed)
+                kind, _ = classify_handler(cmd, checkout, home, managed, ownership)
                 if kind == "managed":
                     out.append((event, matcher, cmd))
     return out
@@ -687,6 +746,11 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--home", type=Path, default=Path.home())
         if name == "install":
             p.add_argument("--checkout", type=Path, default=None)
+            p.add_argument(
+                "--reconcile", action="store_true",
+                help="also claim handlers whose basename is managed but whose root this "
+                     "installer never recorded (hand-wired entries, or a lost sidecar). "
+                     "Explicit because it deletes handlers we cannot prove we wrote.")
     for name in ("status", "doctor"):
         p = sub.add_parser(name)
         p.add_argument("--home", type=Path, default=Path.home())
@@ -702,8 +766,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report.to_dict(), indent=2) if args.json else _render_human(report))
             return 0 if report.overall in ("OK", "UNVERIFIED_PRESENT") else 3
         if args.command == "install":
-            result = install(home=args.home, checkout=args.checkout, apply=args.apply)
+            result = install(home=args.home, checkout=args.checkout, apply=args.apply,
+                             reconcile=args.reconcile)
             print(json.dumps(result, indent=2))
+            # Exit 3 when the block is still not clean. This used to return 0
+            # unconditionally, so the collision list was printed and nothing —
+            # not install.ps1, not CI, not the janitor — could gate on it.
+            # 2 stays "could not do the job"; 3 is "did it, state still dirty".
+            if result["collisions"] or result["unclassified"]:
+                print(
+                    f"unresolved: {len(result['collisions'])} collision(s), "
+                    f"{len(result['unclassified'])} unclassified handler(s); "
+                    "re-run with --reconcile to claim them",
+                    file=sys.stderr,
+                )
+                return 3
             return 0
         if args.command == "uninstall":
             result = uninstall(home=args.home, apply=args.apply)
