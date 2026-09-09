@@ -20,14 +20,10 @@ from scripts.conductor_model import (
 )
 from scripts.conductor_store import (
     ConductorStore,
-    GateVerdict,
-    GateVerdictResult,
-    RecoveryAdjudication,
     STORAGE_QUOTAS_BYTES,
     read_host_resource_status,
     adjudicate_recovery,
     build_recovery_command,
-    evaluate_gate_verdict,
     format_duration,
     read_gate_frame,
     read_resource_live_snapshot,
@@ -530,7 +526,7 @@ def test_queue_order_equals_promotion_order(tmp_path: pathlib.Path):
 
     # Compare with scheduler promotion order
     from scripts.conductor_resources import HostResourceManager
-    manager = HostResourceManager(store)
+    HostResourceManager(store)  # constructing it seeds the pool rows read below
     expected_order = [r.request_id for r in store.list_resource_requests(states=["QUEUED"])]
     assert queue_from_snapshot == expected_order
 
@@ -540,8 +536,8 @@ def test_status_compatibility_keys_and_types(tmp_path: pathlib.Path):
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store)
 
-    req = manager.request(purpose="pytest_full", attempt_id="at-1", agent_instance="ag-1")
-    req2 = manager.request(purpose="pytest_full", attempt_id="at-2", agent_instance="ag-2")
+    manager.request(purpose="pytest_full", attempt_id="at-1", agent_instance="ag-1")
+    manager.request(purpose="pytest_full", attempt_id="at-2", agent_instance="ag-2")
 
     live = read_resource_live_snapshot(resource_key="host:heavy", root_dir=tmp_path)
     status = manager.status()
@@ -646,9 +642,7 @@ def test_recovery_command_builder_scenarios(tmp_path: pathlib.Path):
 
 def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     import subprocess
-    import sys
     from datetime import datetime, timezone, timedelta
-    from scripts import conductorctl
     from scripts.conductor_resources import DEFAULT_LEASE_TTL_SECONDS, HostResourceManager
 
     store = ConductorStore(root_dir=tmp_path)
@@ -659,7 +653,7 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     fenced_req = store.get_resource_request(wedged["request_id"]).to_dict()
     lease = store.get_resource_lease_by_request(wedged["request_id"]) if hasattr(store, "get_resource_lease_by_request") else None
     if not lease:
-        leases = [l for l in store.list_resource_leases() if l.request_id == wedged["request_id"]]
+        leases = [row for row in store.list_resource_leases() if row.request_id == wedged["request_id"]]
         lease = leases[0] if leases else None
     fenced_req["lease"] = lease.to_dict() if lease else None
 
@@ -756,7 +750,7 @@ def test_schema_migration_v5_adds_slot_key_and_seeds_cdp_pools(tmp_path: pathlib
 
 def test_read_all_pools_live_single_snapshot_read(tmp_path: pathlib.Path):
     """ONE SNAPSHOT property: reading all pools takes exactly one DB snapshot via shutil.copy2."""
-    store = ConductorStore(root_dir=tmp_path)
+    ConductorStore(root_dir=tmp_path)  # creates the DB the readers below open
     from scripts.conductor_store import read_all_pools_live, read_gate_frame
     from unittest.mock import patch
 

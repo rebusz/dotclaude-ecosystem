@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
 import pathlib
 import queue
 import subprocess
@@ -28,10 +27,9 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 # Import store and verdict functions from conductor_store
-from scripts.conductor_store import (
+from scripts.conductor_store import (  # noqa: E402 - sys.path is extended above
     GateVerdict,
     GateVerdictResult,
-    RecoveryAdjudication,
     adjudicate_recovery,
     evaluate_gate_verdict,
     format_duration,
@@ -539,13 +537,13 @@ class PoolSectionView:
         heartbeat_seq = holder.get("heartbeat_sequence", "none")
         hb_last = holder.get("last_heartbeat_utc", "") or ""
         created = holder.get("created_at_utc", "") or ""
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
         expires = holder.get("expires_at_utc", "") or ""
 
         pid = holder.get("process_pid")
         proc_start = holder.get("process_start_time")
         proc_obs = observe_process_liveness(pid, proc_start)
 
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
         elapsed_str = ""
         if created:
             try:
@@ -1306,7 +1304,6 @@ class ConductorGatePanel(tk.Frame):
         self._history_has_more = page.get("has_more", False)
         self._history_total = page.get("total_terminal", len(self._history_items))
 
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
         for req in items:
             created = req.get("created_at_utc", "")
             released = req.get("released_at_utc", "")

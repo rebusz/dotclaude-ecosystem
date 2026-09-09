@@ -23,15 +23,30 @@ class TestPonytailOnDemand(unittest.TestCase):
         self.assertIn("Do not inject this skill into subagents", text)
 
     def test_master_agent_architect_decides_without_operator_flag(self) -> None:
-        text = (ROOT / "skills" / "master-agent" / "SKILL.md").read_text(encoding="utf-8")
+        """Asserted as a contract, not as prose.
 
-        self.assertIn("Ponytail decision checkpoint", text)
-        self.assertIn("The operator does not need a separate flag", text)
-        self.assertIn("ARCHITECT Ponytail decision (global)", text)
-        self.assertIn("still applies when a repo-local `Prompts/master_agent.md`", text)
-        self.assertIn("`/fwf <plan>` / `/fwp <plan>`", text)
-        self.assertIn("Never use this", text)
-        self.assertIn("checkpoint for AUDIT, R2/R3", text)
+        This used to pin seven exact sentences in `master-agent/SKILL.md`. PR
+        #112 rewrote that file as a router and the assertions broke together
+        (audit P1-5), even though the contract itself survived — split between
+        the router and the ARCHITECT protocol. What matters is that the
+        checkpoint is ARCHITECT's own decision, is bounded to R0/R1, and is
+        excluded from the risk classes where a shortcut is not acceptable.
+        """
+        skill_root = ROOT / "skills" / "master-agent"
+        tree = "\n".join(
+            path.read_text(encoding="utf-8") for path in sorted(skill_root.rglob("*.md"))
+        )
+        router = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("Ponytail", router, "ARCHITECT's own router must carry the checkpoint")
+        self.assertIn("R0/R1", router)
+        # The exclusions are the load-bearing half: a simplification pass has no
+        # business in an audit, in QUANT, or anywhere near the live path.
+        for excluded in ("audit", "QUANT", "R2/R3"):
+            with self.subTest(excluded=excluded):
+                self.assertIn(excluded, router)
+        self.assertIn("Ponytail", tree)
+        self.assertTrue((ROOT / "skills" / "ponytail-on-demand" / "SKILL.md").is_file())
 
     def test_skill_has_no_lifecycle_hook_surface(self) -> None:
         skill_dir = SKILL.parent

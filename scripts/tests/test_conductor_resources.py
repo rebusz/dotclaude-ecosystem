@@ -514,7 +514,7 @@ def test_verdict_differential_against_admission(tmp_path: pathlib.Path):
     # 4. FENCED (RECOVERY_REQUIRED >= 1)
     store_fenced = ConductorStore(root_dir=tmp_path / "fenced_pool")
     manager_fenced = HostResourceManager(store_fenced)
-    req_fenced = manager_fenced.request(purpose="pytest_heavy", attempt_id="at-f1", agent_instance="tsignal-cctv:79584")
+    manager_fenced.request(purpose="pytest_heavy", attempt_id="at-f1", agent_instance="tsignal-cctv:79584")
     manager_fenced.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
 
     snapshot_fenced = read_resource_live_snapshot(root_dir=tmp_path / "fenced_pool")
@@ -873,7 +873,7 @@ def test_promotion_skips_slot_busy_candidate_and_promotes_next_eligible(tmp_path
     # Occupy all 3 slots
     k1 = manager.request(purpose="cdp_perplexity", attempt_id="at-k1", agent_instance="ag-k1", slot_key="kimi-3")
     s1 = manager.request(purpose="cdp_perplexity", attempt_id="at-s1", agent_instance="ag-s1", slot_key="sonnet-5")
-    g1 = manager.request(purpose="cdp_perplexity", attempt_id="at-g1", agent_instance="ag-g1", slot_key="grok-4.6")
+    manager.request(purpose="cdp_perplexity", attempt_id="at-g1", agent_instance="ag-g1", slot_key="grok-4.6")
 
     # Queue head (higher priority 80): kimi-3 (blocked by k1 slot)
     k2 = manager.request(purpose="cdp_perplexity", attempt_id="at-k2", agent_instance="ag-k2", slot_key="kimi-3", priority=80)
@@ -910,7 +910,7 @@ def test_priority_overrides_earlier_queued_request_and_both_admit(tmp_path: path
     # Fill all 3 units
     a1 = manager.request(purpose="cdp_perplexity", attempt_id="at-a1", agent_instance="ag-a1", slot_key="m1")
     a2 = manager.request(purpose="cdp_perplexity", attempt_id="at-a2", agent_instance="ag-a2", slot_key="m2")
-    a3 = manager.request(purpose="cdp_perplexity", attempt_id="at-a3", agent_instance="ag-a3", slot_key="m3")
+    manager.request(purpose="cdp_perplexity", attempt_id="at-a3", agent_instance="ag-a3", slot_key="m3")
 
     # Queue req_low at priority 50 first
     req_low = manager.request(purpose="cdp_perplexity", attempt_id="at-low", agent_instance="ag-low", slot_key="m4", priority=50)

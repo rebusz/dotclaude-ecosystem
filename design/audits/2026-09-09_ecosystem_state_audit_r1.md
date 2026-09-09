@@ -83,6 +83,22 @@ failed on something no local run could reproduce: the GitHub runner's TEMP is an
 spellings of the same directory in the new ownership record. Slice C owns the
 gate; the bug itself is fixed in `ca05725`.
 
+**Cause found and verified (Slice C, PR #115).** It was the `paths:` filter.
+GitHub evaluates it on `ready_for_review` in a way that produced no run at all,
+so the transition the operator's batching policy depends on was the one event
+that never fired. Removing the filter — done anyway, because it was also the
+mechanism of the 45-script blind spot — fixes it. Measured on #115 by opening
+the PR as a draft and marking it ready with no further push:
+
+| Moment | Runs on the branch |
+|---|---|
+| draft, after the initial push | 1 (`completed/skipped`) |
+| immediately after `gh pr ready` | **2** — the new one `in_progress`, not skipped |
+
+One filter removal closes both P1-22 and P1-6. That is the whole finding: the
+same mechanism that hid 45 scripts from CI also silenced the gate that would
+have reported it.
+
 ---
 
 ## Layer 2 — data flow

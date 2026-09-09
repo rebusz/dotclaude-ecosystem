@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime
@@ -159,12 +158,10 @@ def _strike_idea_entries(repo_root: Path, slugs: list[str]) -> int:
     changed = 0
     new_lines: list[str] = []
     for line in text.splitlines():
-        marked = False
         for slug in slugs:
             if slug in line and "(DONE " not in line:
                 line = line.rstrip() + f" (DONE {today})"
                 changed += 1
-                marked = True
                 break
         new_lines.append(line)
     if changed:
