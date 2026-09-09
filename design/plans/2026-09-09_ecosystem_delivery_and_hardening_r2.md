@@ -111,7 +111,21 @@ new surface small and makes every existing detector suddenly load-bearing.
 
 Ordered so each is independently shippable and each unblocks the next.
 
-#### Slice A — disarm the live footguns (R1, hours)
+#### Slice A — disarm the live footguns (R1, hours) — **SHIPPED 2026-09-09**
+
+Landed on `claude/ecosystem-architecture-audit-23f607`, PR #114. Applied to the
+live `~/.claude/settings.json`: **21 handlers → 11** (the 10 the manifest
+defines plus the one foreign gstack Stop hook, preserved);
+`hooks_install status` reports `overall: OK`, exit 0, for the first time.
+Backup at `~/.claude/backups/settings.json.20260909T155309Z`.
+
+Review found 10 issues on the diff; 9 fixed in place, 1 deferred to Slice F
+(the stdin seam fixes input only — `force_utf8_stdio()` for the output half
+belongs with the other encoding work). Two items in the original list moved:
+the stale `_worktrees/dotclaude-ecosystem-unified-fwf-20260831` worktree and
+the 16.9 GB of legacy backups are destructive deletions and stay with the
+operator — the installer now reports legacy backup trees instead of rotating
+them away.
 
 The only slice that is urgent rather than important. Everything here is already
 armed on the operator's box.
