@@ -44,3 +44,24 @@ Rules:
 - Do not include secrets, raw env dumps, broker/account payloads, or large logs.
 - Prefer links/paths to artifacts over pasted output.
 - If validation was skipped, say why.
+
+## TruthDeck boundary snapshot
+
+Take a fresh read-only evidence read at both ends of a handoff instead of trusting
+prose alone — a handoff is context, never proof.
+
+- **Creating a handoff:** run
+  `truthctl snapshot --repo "<repo-root>" [--plan "<plan-path>"] --no-store --json`
+  and fold the current Git/PR/review state into the handoff instead of hand-typed
+  guesses. Exit `12` with parseable JSON is a valid snapshot with non-green gates,
+  not a tool failure — say so explicitly ("Blocker/stop reason") rather than
+  writing a stale-looking clean handoff.
+- **Receiving a handoff:** run the same `truthctl snapshot`, then verify the
+  handoff itself with `truthctl verify-handoff --repo "<repo-root>" --handoff
+  "<path>" --sha256 "<expected>"` (backed by `truthdeck_verify_handoff` in the
+  TruthDeck MCP) before treating it as current. A hash match alone is not a
+  continuation verdict — surface `STALE`/`UNKNOWN`/`HOLD` states from either
+  command before resuming work.
+- Missing `truthctl` or malformed output at either end: note "TruthDeck
+  unavailable" and continue from the handoff's own Repo/Branch/Dirty-tree fields.
+  Never hard-block a handoff on snapshot tooling.
