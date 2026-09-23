@@ -17,6 +17,7 @@ import difflib
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -389,6 +390,51 @@ def sync_target(
     return TargetResult(spec=spec, changed=changed, backup_path=backup, checksum=checksum, message=status)
 
 
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=15,
+    )
+
+
+def _common_dir(root: Path) -> Path | None:
+    cp = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if cp.returncode != 0 or not cp.stdout.strip():
+        return None
+    return Path(cp.stdout.strip()).resolve()
+
+
+def validate_source_root(source_root: Path, sources: set[Path]) -> None:
+    """Refuse to write unless the sources come from a known clean checkout.
+
+    --write rewrites the managed block in every runtime's global instruction
+    file, and those are loaded into every later session. `--source-root <dir>`
+    used to accept any directory, so one invocation could plant persistent
+    instructions across all four runtimes (audit P2-17). The docstring already
+    promised "a git-tracked source tree"; now it is enforced:
+
+    * the root is a worktree of the canonical dotclaude-ecosystem repository
+      (same git common dir as DEFAULT_SOURCE_ROOT's checkout), and
+    * every source file is tracked and identical to HEAD -- what is written is
+      what was committed, reviewed, and can be reverted.
+    """
+    canonical = _common_dir(DEFAULT_SOURCE_ROOT.parent)
+    if canonical is None:
+        raise SyncError(f"canonical checkout not found at {DEFAULT_SOURCE_ROOT.parent}; refusing to write")
+    actual = _common_dir(source_root)
+    if actual != canonical:
+        raise SyncError(
+            f"--source-root {source_root} is not a checkout of the canonical repository "
+            f"({DEFAULT_SOURCE_ROOT.parent}); refusing to write"
+        )
+    rels = sorted(str(path) for path in sources)
+    if _git(source_root, "ls-files", "--error-unmatch", "--", *rels).returncode != 0:
+        raise SyncError("an agent-rules source file is not tracked by git; refusing to write")
+    if _git(source_root, "diff", "--quiet", "HEAD", "--", *rels).returncode != 0:
+        raise SyncError("agent-rules sources have uncommitted changes; commit them before --write")
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync managed Claude/Codex instruction blocks.")
     action = parser.add_mutually_exclusive_group()
@@ -432,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise SyncError(f"unknown target filter(s): {', '.join(sorted(missing))}")
         if not specs:
             raise SyncError("no targets selected")
+        if write:
+            validate_source_root(source_root, {rel for spec in specs for rel in spec.sources})
 
         results: list[TargetResult] = []
         for spec in specs:

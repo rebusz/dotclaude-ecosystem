@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from secret_patterns import redact_high_confidence
+
 
 DEFAULT_MAX_LINES = 12
 DEFAULT_MAX_CHARS = 4000
@@ -41,7 +43,11 @@ SENSITIVE_COMMAND_PHRASES = {
 
 
 def redact_text(text: str) -> str:
-    redacted = text
+    # The shared high-confidence shapes first -- GitHub fine-grained tokens,
+    # Google keys, JWTs, AWS ids, private-key blocks, credentialed URLs -- none
+    # of which the local list below knew about. curator_claims routes its
+    # transcript projection through here, so it inherits them too (audit F14).
+    redacted, _ = redact_high_confidence(text)
     for pattern in SECRET_PATTERNS:
         if pattern.groups >= 2:
             redacted = pattern.sub(lambda m: f"{m.group(1)}=[REDACTED]", redacted)

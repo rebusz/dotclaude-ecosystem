@@ -82,7 +82,7 @@ def main() -> None:
         with log_path.open("a", encoding="utf-8") as logf:
             logf.write(f"\n--- auto-sync triggered at {time.ctime(now)} (file: {file_path}) ---\n")
             subprocess.Popen(
-                ["python", str(sync_script),
+                [sys.executable, str(sync_script),
                  "--target", str(TARGET),
                  "--push",
                  "--note", f"auto: memory edit {Path(file_path).name}",

@@ -21,6 +21,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from untrusted_text import clean_fact
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -84,7 +86,7 @@ def _regen_catalog(name: str) -> tuple[bool, str]:
         return False, f"{name}.py not found"
     try:
         r = subprocess.run(
-            ["python", str(script)],
+            [sys.executable, str(script)],
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
@@ -102,7 +104,9 @@ def _append_vision_log(vision_path: Path, plan_slug: str, note: str) -> bool:
     if not text or BEGIN not in text or END not in text:
         return False
     today = datetime.utcnow().date().isoformat()
-    entry = f"- {today} — {plan_slug}: {note}".rstrip(": ")
+    # The vision AUTO-LOG is re-read into every later plan-context injection,
+    # so a note is one line with no tags (audit F11).
+    entry = f"- {today} — {clean_fact(plan_slug, 120)}: {clean_fact(note, 200)}".rstrip(": ")
     pre, rest = text.split(BEGIN, 1)
     block, post = rest.split(END, 1)
     block_lines = block.splitlines()

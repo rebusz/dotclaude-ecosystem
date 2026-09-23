@@ -8,10 +8,15 @@
     "minimalist-ui",
     "image-to-code"
   ],
-  "agents": ["claude-code", "codex", "cursor"],
+  "agents": [
+    "claude-code",
+    "codex",
+    "cursor"
+  ],
   "mode": "copy",
   "scope": "global",
   "cli": "vercel-labs/skills (npx skills add)",
+  "cli_package": "skills@1.5.16",
   "native_dirs": {
     "claude-code": "~/.claude/skills",
     "codex": "~/.codex/skills",
