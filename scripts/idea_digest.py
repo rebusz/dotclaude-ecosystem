@@ -221,9 +221,15 @@ def cmd_by_vision(args: argparse.Namespace) -> None:
 #     unchanged, giving a file-existence and needle oracle over the whole disk;
 #   * `command_exit_zero` used to pass a full argv from the JSON straight to
 #     subprocess.run, so one commit editing that file turned into arbitrary code
-#     execution on a schedule. It may now only run a `.py` file inside the
-#     repository's scripts/ directory, with this interpreter, under a timeout.
+#     execution on a schedule. It may now only run an allowlisted read-only
+#     probe (script + subcommand) from the repository's scripts/ directory,
+#     with this interpreter, under a timeout. "Any script in scripts/" was not
+#     enough: git_hygiene --apply --deploy and sync_ecosystem_context --push
+#     live there too.
 _INTERPRETER_TOKENS = frozenset({"python", "python3", "py", sys.executable})
+_ALLOWED_PROBES = {
+    "session_cost_probe.py": frozenset({"b0-status"}),
+}
 _TRIGGER_COMMAND_TIMEOUT_S = 120
 
 
@@ -241,9 +247,11 @@ def _resolve_trigger_path(path: str, base: Path) -> Path | None:
 
 def _contained_script(argv: list[str], base: Path) -> list[str] | None:
     """The argv to run for a command predicate, or None if it is not allowed."""
-    if len(argv) < 2 or argv[0] not in _INTERPRETER_TOKENS:
+    if len(argv) < 3 or argv[0] not in _INTERPRETER_TOKENS:
         return None
     script = _resolve_trigger_path(argv[1], base)
+    if script is None or argv[2] not in _ALLOWED_PROBES.get(script.name, ()):
+        return None
     scripts_dir = (base.resolve() / "scripts")
     if (
         script is None
@@ -280,8 +288,8 @@ def evaluate_trigger(predicate: dict, base: Path) -> tuple[str, str]:
         argv = _contained_script(cmd, base)
         if argv is None:
             return "blocked", (
-                "command predicates may only run a .py file inside the repository's "
-                "scripts/ directory with this interpreter"
+                "command predicates may only run an allowlisted probe from the "
+                "repository's scripts/ directory with this interpreter"
             )
         try:
             cp = subprocess.run(argv, cwd=base, capture_output=True, text=True, check=False,

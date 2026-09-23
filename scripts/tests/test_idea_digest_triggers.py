@@ -52,11 +52,11 @@ class TestWorkflowTriggers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             (base / "scripts").mkdir()
-            (base / "scripts" / "fails.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+            (base / "scripts" / "session_cost_probe.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
             status, reason = idea_digest.evaluate_trigger(
                 {
                     "type": "command_exit_zero",
-                    "command": ["python", "scripts/fails.py"],
+                    "command": ["python", "scripts/session_cost_probe.py", "b0-status"],
                 },
                 base,
             )
@@ -73,7 +73,8 @@ class TestTriggerContainment(unittest.TestCase):
     def _repo(self, d: str) -> Path:
         base = Path(d)
         (base / "scripts").mkdir()
-        (base / "scripts" / "probe.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+        (base / "scripts" / "session_cost_probe.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+        (base / "scripts" / "git_hygiene.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
         return base
 
     def test_an_arbitrary_argv_is_refused(self):
@@ -85,7 +86,20 @@ class TestTriggerContainment(unittest.TestCase):
                     status, reason = idea_digest.evaluate_trigger(
                         {"type": "command_exit_zero", "command": argv}, base)
                     self.assertEqual(status, "blocked")
-                    self.assertIn("scripts/", reason)
+                    self.assertIn("allowlisted probe", reason)
+
+    def test_a_mutating_repo_script_or_other_subcommand_is_refused(self):
+        """Containment to scripts/ was not least privilege: the mutating tools
+        live there too."""
+        with tempfile.TemporaryDirectory() as d:
+            base = self._repo(d)
+            for argv in (["python", "scripts/git_hygiene.py", "--apply", "--deploy"],
+                         ["python", "scripts/session_cost_probe.py", "record"],
+                         ["python", "scripts/session_cost_probe.py"]):
+                with self.subTest(argv=argv):
+                    status, _ = idea_digest.evaluate_trigger(
+                        {"type": "command_exit_zero", "command": argv}, base)
+                    self.assertEqual(status, "blocked")
 
     def test_a_script_outside_scripts_or_outside_the_repo_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
@@ -95,14 +109,16 @@ class TestTriggerContainment(unittest.TestCase):
                            str(Path(d).parent / "outside.py")):
                 with self.subTest(script=script):
                     status, _ = idea_digest.evaluate_trigger(
-                        {"type": "command_exit_zero", "command": ["python", script]}, base)
+                        {"type": "command_exit_zero", "command": ["python", script, "b0-status"]}, base)
                     self.assertEqual(status, "blocked")
 
     def test_the_legitimate_form_still_runs_with_this_interpreter(self):
         with tempfile.TemporaryDirectory() as d:
             base = self._repo(d)
             status, reason = idea_digest.evaluate_trigger(
-                {"type": "command_exit_zero", "command": ["python", "scripts/probe.py"]}, base)
+                {"type": "command_exit_zero",
+                 "command": ["python", "scripts/session_cost_probe.py", "b0-status", "--baseline", "x.json"]},
+                base)
             self.assertEqual(status, "triggered", reason)
 
     def test_paths_cannot_probe_outside_the_repository(self):
