@@ -104,7 +104,12 @@ Tylko ciężkie pytesty używają `host:heavy`. CDP korzysta z niezależnych pul
 i Playwright nie są heavy. Zachowaj ownership i zwalniaj każdą pulę po jej pracy.
 
 **5. Exact-head review.** Po lokalnej walidacji przygotuj commit, push,
-draft PR i canonical packet. Rola [review](implementation-review.md) działa
+draft PR i canonical packet. Packet buduj przez `scripts/implementation_review_packet.py`
+— odrzuca on sekrety fail-closed i przypina dokładny base/head SHA; nie składaj
+go ręcznie, bo ręczny packet omija tę bramkę. Wymaganą zgodę na publikację
+zewnętrzną daje standing authorization planu dla skonfigurowanego zestawu
+recenzentów, o ile plan nie jest oznaczony jako internal-only.
+Rola [review](implementation-review.md) działa
 na zatwierdzonej niezależnej lane/modelu. Weryfikuj full SHA, źródło,
 kompletność oraz poświadczenia. NO_REVIEW, nieaktualny head i brak wymaganej
 lane nie są PASS. Napraw zakresowe blokery, zweryfikuj i zrecenzuj nowy head.

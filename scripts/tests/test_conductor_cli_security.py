@@ -299,7 +299,7 @@ def test_resource_live_all_and_doctor_leave_tree_byte_identical_with_four_pools(
     and create no home when run against absent dir.
     """
     conductor_home = tmp_path / "four-pools-read-only"
-    store = ConductorStore(root_dir=conductor_home)
+    ConductorStore(root_dir=conductor_home)  # creates the store the CLI below reads
 
     env = os.environ.copy()
     env["TDCONDUCTOR_DIR"] = str(conductor_home)

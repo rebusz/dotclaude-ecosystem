@@ -189,7 +189,29 @@ fully gated with zero tests executed. Slice C owns the fix.
 **Validation.** Doctor returns non-zero on today's state and zero after Slice A;
 assert both, from a fixture home.
 
-#### Slice C — CI coverage and the red build (R2)
+#### Slice C — CI coverage and the red build (R2) — **SHIPPED 2026-09-09**
+
+PR #115. `main` is green again: **667 passed, 0 failed**, 42 ruff violations → 0.
+
+The red build turned out not to be stale tests. #112 moved the routing detail
+into `references/protocols/` (legitimate) *and* dropped the only reference to
+`implementation_review_packet.py`, which landed nowhere else — the protocol
+asked for a canonical packet while nothing pointed at the builder that rejects
+secrets fail-closed. Restored; both tests rewritten to assert the contract
+rather than the wording, and mutation-verified.
+
+Items 2, 3, 5 and 6 collapsed into one change: the three path-filtered
+workflows became a single `ci.yml` running the whole suite on a 3.12/3.14
+matrix, with scope in `pyproject.toml`. No `conductor-ci.yml` was needed and
+`truthctl.py` needs no `paths:` entry, because there are no path filters left.
+
+That removal also closed P1-22, measured rather than assumed: on #115, opening
+as a draft gave one `completed/skipped` run, and `gh pr ready` with no further
+push produced a second, running one. The filter was what swallowed the
+`ready_for_review` transition — the same mechanism that hid 45 scripts from CI
+was silencing the gate that would have reported it.
+
+#### Slice C — original scope (R2)
 
 1. Fix the two failing contract tests — decide first whether the v2
    `master-agent/SKILL.md` or the tests are correct, then make one match the

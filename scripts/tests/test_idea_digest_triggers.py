@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import sys
 
 _SCRIPTS = Path(__file__).parent.parent
 sys.path.insert(0, str(_SCRIPTS))

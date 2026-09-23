@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_TEAM_PATH = ROOT / "skills" / "run-model-team" / "scripts" / "model_team.py"
@@ -38,6 +40,16 @@ def test_chatgpt_role_builds_only_the_cdp_driver_command(tmp_path: Path) -> None
             "provider_model": "gpt-5.6-sol",
         },
     )()
+
+    if not Path(module.CHATGPT_CDP_DRIVER).exists():
+        # No CDP driver on this host -- a CI runner, or any box that is not the
+        # operator's. The policy under test is exactly what must happen then:
+        # refuse, rather than quietly fall back to a Codex CLI lane. Asserting
+        # the built command here would have made this test pass only on one
+        # machine, which is how it went unnoticed that it had never run in CI.
+        with pytest.raises(module.DispatchError):
+            module._chatgpt_command(args, tmp_path, tmp_path / "result.json")
+        return
 
     command = module._chatgpt_command(args, tmp_path, tmp_path / "result.json")
 

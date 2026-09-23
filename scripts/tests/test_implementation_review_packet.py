@@ -143,27 +143,71 @@ class ImplementationReviewPacketTests(unittest.TestCase):
 
 
 class ExternalReviewWorkflowContractTests(unittest.TestCase):
-    def test_master_agent_owns_risk_aware_review_routing(self) -> None:
-        text = (ROOT / "skills" / "master-agent" / "SKILL.md").read_text(encoding="utf-8")
+    """The external-review gate, asserted as a contract rather than as prose.
+
+    These assertions used to pin exact sentences in `master-agent/SKILL.md`.
+    PR #112 turned that file into a router and moved the detail into
+    `references/protocols/`, so 18 of 20 assertions broke at once and `main`
+    went red on 2026-09-07 (audit P1-5). Pinning wording makes a legitimate
+    refactor look like a regression, and the tempting repair — delete the
+    assertions — would have silently dropped the gate.
+
+    It nearly did: #112 also removed the only reference to
+    `implementation_review_packet.py`, and it landed nowhere else, so the
+    protocol said "build a canonical packet" while nothing pointed at the
+    builder that rejects secrets fail-closed. Restored in `full-workflow.md`.
+
+    So: search the whole skill tree for each contract element, and name the
+    element, not the sentence.
+    """
+
+    SKILL_ROOT = ROOT / "skills" / "master-agent"
+
+    def _skill_tree(self) -> str:
+        return "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(self.SKILL_ROOT.rglob("*.md"))
+        )
+
+    def test_the_router_lives_in_master_agent_and_covers_every_risk_class(self) -> None:
+        text = (self.SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("## Review Workflow Routing", text)
-        self.assertIn("| R3 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review", text)
-        self.assertIn("| R2 | `/fwf` or `/fwp`: CEO -> matrix -> eng -> implementation -> review", text)
-        self.assertIn("| R1 | `/fwf` or `/fwp`: CEO -> audit -> eng -> implementation -> review", text)
-        self.assertIn("There is no separate closeout command", text)
-        self.assertIn("Codex always passes\n`--synthesizer gpt`", text)
-        self.assertIn("draft PR", text)
-        self.assertIn("implementation_review_packet.py", text)
-        self.assertIn("older head is stale", text.lower())
-        self.assertIn("external-publication consent", text)
-        self.assertIn("Every `SHIP-BLOCKING` finding must be", text)
-        self.assertIn("standing authorization", text)
-        self.assertIn("exact-head publication token", text)
-        self.assertIn("continues through ready, CI, merge", text)
-        self.assertNotIn("/fw close", text)
-        self.assertNotIn("`/audit`", text)
-        self.assertNotIn("Launch the external panel", text)
-        self.assertNotIn("run LOCAL REVIEW + COMPOUND", text)
+        self.assertIn("authoritative router", text)
+        for risk in ("R0", "R1", "R2", "R3"):
+            with self.subTest(risk=risk):
+                self.assertRegex(text, rf"\|\s*{risk}\s*\|")
+        # `core.md` calls the audit and matrix runners internal stages, so the
+        # routing table must not advertise one as a public workflow topology.
+        self.assertNotIn("CEO -> matrix ->", text)
+
+    def test_the_external_review_gate_survives_somewhere_in_the_skill_tree(self) -> None:
+        tree = self._skill_tree()
+
+        for element in (
+            "draft PR",                        # the review source, never a branch tip
+            "implementation_review_packet",    # the builder that fails closed on secrets
+            "packet",
+            "exact-head",
+            "SHIP-BLOCKING",
+            "squash merge",
+        ):
+            with self.subTest(element=element):
+                self.assertIn(element, tree, f"external-review contract lost: {element!r}")
+
+    def test_the_packet_builder_named_by_the_contract_actually_exists(self) -> None:
+        """The pairing is the point: a contract naming a tool that is gone, or a
+        tool no contract names, are the same failure wearing different clothes."""
+        self.assertIn("implementation_review_packet", self._skill_tree())
+        self.assertTrue((ROOT / "scripts" / "implementation_review_packet.py").is_file())
+
+    def test_superseded_workflow_surfaces_stay_retired(self) -> None:
+        text = (self.SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for retired in ("/fw close", "`/audit`", "Launch the external panel",
+                        "run LOCAL REVIEW + COMPOUND"):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, text)
 
     def test_executor_delegates_to_master_agent_risk_router(self) -> None:
         text = (ROOT / "skills" / "executor" / "SKILL.md").read_text(encoding="utf-8")

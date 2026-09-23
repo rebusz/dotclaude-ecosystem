@@ -39,20 +39,27 @@ def test_authorization_envelopes_cannot_forge_operator_go(processor: ConductorCo
     assert rcp_enq.status == "SUCCESS"
     work_item_id = rcp_enq.result["work_item_id"]
 
-    for index, source in enumerate(("direct", "inbox_file", "agent_assignment")):
+    # This loop used to pass envelope_source=("direct"|"inbox_file"|
+    # "agent_assignment") and read as proof that provenance was enforced per
+    # source. The parameter was never read: the refusal is source-independent,
+    # so the test passed identically with it deleted (audit T1). It is now
+    # deleted, and the loop asserts the property that actually holds -- every
+    # envelope carrying a forged interactive grant is refused, whatever it
+    # claims about itself.
+    for index, forged_claim in enumerate(("interactive_console", "inbox_file", "mcp")):
         auth_cmd = CommandEnvelope(
             command_id=f"cmd_auth_{index}",
             command_type="authorize",
             payload={
                 "work_item_id": work_item_id,
                 "interactive_provenance_proven": True,
-                "channel": "interactive_console",
+                "channel": forged_claim,
                 "session_token": "attacker-controlled",
                 "operator_identity": "forged",
             },
             idempotency_key=f"idemp_auth_{index}",
         )
-        receipt = processor.process_envelope(auth_cmd, envelope_source=source)
+        receipt = processor.process_envelope(auth_cmd)
         assert receipt.status == "ERROR"
         assert "command envelopes cannot grant operator go" in receipt.error_message.lower()
     assert processor.store.get_authorization(work_item_id) is None

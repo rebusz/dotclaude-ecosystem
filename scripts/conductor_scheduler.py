@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from scripts.conductor_model import WorkItem, WorkItemState
+from scripts.conductor_model import WorkItem, WorkItemState, authorization_refusal
 from scripts.conductor_resources import HostResourceManager
 from scripts.conductor_store import ConductorStore
 
@@ -68,12 +68,15 @@ class ConductorScheduler:
 
             # Check R2/R3 operator authorization
             if item.risk_class in {"R2", "R3"}:
-                auth = self.store.get_authorization(item.work_item_id)
-                if not auth or not auth.interactive_provenance_proven:
+                refusal = authorization_refusal(
+                    self.store.get_authorization(item.work_item_id),
+                    scope_digest_sha256=item.scope_digest_sha256,
+                )
+                if refusal is not None:
                     rejected.append({
                         "work_item_id": item.work_item_id,
                         "title": item.title,
-                        "reason_code": "AUTHORIZATION_MISSING",
+                        "reason_code": refusal,
                     })
                     continue
 

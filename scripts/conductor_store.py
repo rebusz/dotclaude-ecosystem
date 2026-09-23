@@ -49,6 +49,11 @@ STORAGE_QUOTAS_BYTES = {
     "artifacts": 1_073_741_824,  # 1 GiB
     "receipts": 268_435_456,  # 256 MiB
     "inbox": 67_108_864,  # 64 MiB
+    # These two had no ceiling and were invisible to storage_status: the
+    # daemon's own FileHandler writes logs/, and every migration drops a full
+    # DB copy into backups/ (audit C12). Report-only like the rest.
+    "logs": 268_435_456,  # 256 MiB
+    "backups": 1_073_741_824,  # 1 GiB
 }
 
 
@@ -1010,6 +1015,11 @@ def read_host_resource_status(
 read_resource_pool_status = read_host_resource_status
 
 
+# The newest schema this build knows how to migrate to. A store above it is a
+# downgrade, and downgrades corrupt (audit C9).
+LATEST_SCHEMA_VERSION = 7
+
+
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
 
@@ -1105,6 +1115,15 @@ class ConductorStore:
             cur = conn.execute("SELECT MAX(version) FROM schema_migrations")
             row = cur.fetchone()
             current_version = row[0] if (row and row[0] is not None) else 0
+            if current_version > LATEST_SCHEMA_VERSION:
+                # Every migration below is an `if current_version < N`, so a
+                # database written by a future build skips them all and is then
+                # read and written by code that does not know its schema.
+                # Nothing raised and nothing warned (audit C9).
+                raise RuntimeError(
+                    f"conductor store schema v{current_version} is newer than this build "
+                    f"understands (v{LATEST_SCHEMA_VERSION}); upgrade rather than downgrade-write"
+                )
 
             if current_version < 1:
                 # Backup before migration if DB existed
@@ -1428,6 +1447,33 @@ class ConductorStore:
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (6, datetime('now'))"
                 )
 
+            if current_version < 7:
+                # Adopted, not invented. The live store on the operator's box was
+                # migrated to v7 on 2026-08-31 by the unmerged branch
+                # codex/conductor-auto-recovery-handoff-20260831 (owner process
+                # identity for orphan auto-recovery), while main stopped at v6. The
+                # installed v6 code has been reading and writing a v7 store ever
+                # since -- the downgrade-write hazard C9 exists to refuse. Refusing
+                # it without this migration would have turned a silent hazard into
+                # an outage on the next Conductor start, so main learns the schema
+                # the live system already has. Only the schema: the columns are
+                # additive, nullable or defaulted, and no code here reads them yet.
+                # Idempotent, and byte-compatible with that branch's own step.
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+                }
+                if "owner_process_pid" not in columns:
+                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_owner_identity_{int(time.time())}.db"
+                        shutil.copy2(self.db_path, backup_file)
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_pid INTEGER NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_start_time REAL NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_identity_source TEXT NOT NULL DEFAULT 'UNRECORDED'")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_last_seen_at_utc TEXT NULL")
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (7, datetime('now'))"
+                )
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
@@ -1440,6 +1486,11 @@ class ConductorStore:
         now_iso = current_utc_iso()
 
         with self._connection() as conn:
+            # BEGIN IMMEDIATE takes the write lock before the read, so two
+            # callers cannot both observe the same stale row and both decide to
+            # steal it. Without it, eight concurrent callers on one dead-pid row
+            # were granted the "single writer" lock seven times (audit C3).
+            conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute("SELECT * FROM leader_locks WHERE lock_name = ?", (lock_name,))
             row = cur.fetchone()
 
@@ -1470,15 +1521,19 @@ class ConductorStore:
                     return False
 
                 # Stale lock recovery
-                conn.execute(
+                # Conditional on the leader we actually observed: if anyone
+                # else moved the row between our read and our write, we lose
+                # rather than silently overwriting a live owner.
+                cursor = conn.execute(
                     """
                     UPDATE leader_locks
                     SET leader_id = ?, pid = ?, process_start_time = ?, acquired_at_utc = ?, last_heartbeat_utc = ?
-                    WHERE lock_name = ?
+                    WHERE lock_name = ? AND leader_id = ?
                     """,
-                    (self.leader_id, current_pid, start_time, now_iso, now_iso, lock_name),
+                    (self.leader_id, current_pid, start_time, now_iso, now_iso,
+                     lock_name, existing_leader_id),
                 )
-                return True
+                return cursor.rowcount == 1
 
             else:
                 conn.execute(
@@ -1745,10 +1800,15 @@ class ConductorStore:
                 ),
             )
 
-    def save_lease(self, lease: Lease) -> None:
-        """Insert or update Lease."""
+    def save_lease(self, lease: Lease) -> bool:
+        """Insert or update a Lease; True only if a row was written.
+
+        The update is conditional on the same attempt and a strictly higher
+        sequence, so a replayed or foreign heartbeat writes nothing -- and the
+        caller must be told, not left believing its lease was extended.
+        """
         with self._connection() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO leases (
                     lease_id, attempt_id, agent_instance, heartbeat_sequence, expires_at_utc, last_heartbeat_utc, schema_version
@@ -1757,6 +1817,8 @@ class ConductorStore:
                     heartbeat_sequence = excluded.heartbeat_sequence,
                     expires_at_utc = excluded.expires_at_utc,
                     last_heartbeat_utc = excluded.last_heartbeat_utc
+                WHERE excluded.attempt_id = leases.attempt_id
+                  AND excluded.heartbeat_sequence > leases.heartbeat_sequence
                 """,
                 (
                     lease.lease_id,
@@ -1768,6 +1830,7 @@ class ConductorStore:
                     lease.schema_version,
                 ),
             )
+            return cursor.rowcount == 1
 
     def save_resource_pool(self, pool: HostResourcePool) -> None:
         """Insert or update a host resource pool definition."""

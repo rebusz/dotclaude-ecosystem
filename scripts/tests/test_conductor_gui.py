@@ -5,15 +5,12 @@ Headless-safe: constructs widgets without mainloop(), asserts widget state direc
 
 from __future__ import annotations
 
-import datetime
 import pathlib
 import queue
 import shutil
 import sqlite3
-from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
-import psutil
 import pytest
 import tkinter as tk
 
@@ -21,16 +18,12 @@ from scripts.conductor_model import HostResourcePool, HostResourceRequestState
 from scripts.conductor_resources import HostResourceManager
 from scripts.conductor_store import (
     ConductorStore,
-    GateVerdict,
-    _read_only_snapshot_connection,
     read_gate_frame,
     read_resource_history_page,
-    read_resource_live_snapshot,
 )
 from scripts.conductor_gui import (
     ConductorGatePanel,
     GatePanelWorker,
-    observe_process_liveness,
 )
 
 

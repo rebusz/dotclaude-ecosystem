@@ -10,9 +10,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
 import pathlib
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -28,10 +28,9 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 # Import store and verdict functions from conductor_store
-from scripts.conductor_store import (
+from scripts.conductor_store import (  # noqa: E402 - sys.path is extended above
     GateVerdict,
     GateVerdictResult,
-    RecoveryAdjudication,
     adjudicate_recovery,
     evaluate_gate_verdict,
     format_duration,
@@ -64,6 +63,9 @@ COLOR_DEGRADED_FG = "#76A8C7"
 COLOR_NEUTRAL_BG = "#0F0F12"
 COLOR_CARD_BG = "#17181D"
 COLOR_BORDER = "#343741"
+_PYTHON_BINARY = re.compile(r"(?:python(?:\d+(?:\.\d+)?)?w?|pyw?)(?:\.exe)?", re.IGNORECASE)
+
+
 def _conductorctl_command() -> tuple:
     """Resolve the installer-owned conductorctl, never a PATH guess.
 
@@ -71,6 +73,18 @@ def _conductorctl_command() -> tuple:
     the canonical interpreter and script, so the GUI runs the same binary the
     rest of the ecosystem does rather than whatever happens to be on PATH.
     """
+    # First choice: the conductorctl installed beside this file, run by this
+    # interpreter. It is the same install the GUI came from and nothing outside
+    # it can redirect it.
+    sibling = pathlib.Path(__file__).resolve().parent / "conductorctl.py"
+    if sibling.is_file():
+        return (sys.executable, str(sibling))
+
+    # Fallback: the install manifest -- but validated, not trusted. It lives in
+    # ~/.conductor/ beside the inbox that other agents write, and the RECOVER
+    # button used to pass whatever interpreter and script it named straight to
+    # subprocess.run (audit C10). Accept only a real Python binary and a real
+    # file named conductorctl.py.
     manifest = pathlib.Path.home() / ".conductor" / "install-manifest.json"
     try:
         raw = json.loads(manifest.read_text(encoding="utf-8"))
@@ -78,7 +92,15 @@ def _conductorctl_command() -> tuple:
     except (OSError, ValueError):
         command = None
     if isinstance(command, list) and len(command) == 2 and all(command):
-        return tuple(command)
+        interpreter, script = pathlib.Path(command[0]), pathlib.Path(command[1])
+        if (
+            interpreter.is_file()
+            and _PYTHON_BINARY.fullmatch(interpreter.name)
+            and script.is_file()
+            and script.name == "conductorctl.py"
+        ):
+            return (str(interpreter), str(script))
+        raise RuntimeError(f"refusing unvalidated conductorctl command from {manifest}: {command!r}")
     raise RuntimeError(f"conductorctl not resolvable from {manifest}")
 
 
@@ -539,13 +561,13 @@ class PoolSectionView:
         heartbeat_seq = holder.get("heartbeat_sequence", "none")
         hb_last = holder.get("last_heartbeat_utc", "") or ""
         created = holder.get("created_at_utc", "") or ""
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
         expires = holder.get("expires_at_utc", "") or ""
 
         pid = holder.get("process_pid")
         proc_start = holder.get("process_start_time")
         proc_obs = observe_process_liveness(pid, proc_start)
 
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
         elapsed_str = ""
         if created:
             try:
@@ -1306,7 +1328,6 @@ class ConductorGatePanel(tk.Frame):
         self._history_has_more = page.get("has_more", False)
         self._history_total = page.get("total_terminal", len(self._history_items))
 
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
         for req in items:
             created = req.get("created_at_utc", "")
             released = req.get("released_at_utc", "")

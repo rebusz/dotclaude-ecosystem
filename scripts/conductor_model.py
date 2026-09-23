@@ -6,7 +6,7 @@ All environment variable references use TDCONDUCTOR_* to avoid collision with 3r
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 import uuid
@@ -346,6 +346,62 @@ class AuthorizationRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def parse_iso_or_expired(value: object) -> datetime:
+    """Read an ISO timestamp; anything unreadable is treated as already past.
+
+    Shared by lease and authorization expiry so the fail-closed rule cannot
+    drift between them: an unparseable expiry means expired, never eternal.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# A GO is a decision about a specific scope at a specific time. The backstop TTL
+# bounds how long an unused one can sit; the scope digest is the load-bearing
+# check, because any change to the work item's scope invalidates it at once.
+AUTHORIZATION_TTL_SECONDS = 7 * 24 * 3600
+
+
+def authorization_refusal(
+    auth: Optional["AuthorizationRecord"],
+    *,
+    scope_digest_sha256: str,
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    """Return None when `auth` still authorizes this scope, else the ReasonCode.
+
+    The one predicate both the claim path and the scheduler use, so the two can
+    never disagree about what a valid GO is. Before this they each checked only
+    `auth and auth.interactive_provenance_proven`: a GO never expired, and its
+    scope digest was recorded at grant time and never compared again, so a GO
+    given for an R3 item admitted a claim months later against whatever scope
+    the item carried by then (audit C7). AUTHORIZATION_EXPIRED and
+    AUTHORIZATION_SCOPE_MISMATCH existed in ReasonCode all along; nothing
+    emitted them.
+    """
+    if auth is None or not auth.interactive_provenance_proven:
+        return ReasonCode.AUTHORIZATION_MISSING.value
+    if auth.expires_at_utc:
+        expires = parse_iso_or_expired(auth.expires_at_utc)
+    else:
+        # Records granted before GOs carried an expiry. Treating them as
+        # eternal would leave this finding open for the whole existing store,
+        # so they expire TTL after issue. Only unclaimed work is affected: a
+        # claim is checked once, so running work is never interrupted -- stale
+        # READY items go to HOLD and need a fresh GO, which is the point.
+        expires = parse_iso_or_expired(auth.issued_at_utc) + timedelta(
+            seconds=AUTHORIZATION_TTL_SECONDS
+        )
+    if expires <= (now or datetime.now(timezone.utc)):
+        return ReasonCode.AUTHORIZATION_EXPIRED.value
+    if auth.scope_digest_sha256 != scope_digest_sha256:
+        return ReasonCode.AUTHORIZATION_SCOPE_MISMATCH.value
+    return None
 
 
 @dataclass

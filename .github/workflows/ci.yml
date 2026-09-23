@@ -1,0 +1,59 @@
+name: CI
+
+# One workflow, whole suite, no path filters -- routed ONLY to an isolated,
+# operator-controlled self-hosted runner.
+#
+# Coverage: this replaces hooks-ci, session-lifecycle-ci and truthdeck-ci,
+# which between them named 27 of 72 scripts in hand-maintained argument lists.
+# Everything else -- the whole Conductor subsystem, ~9k lines with ten real
+# test files -- was checked by nothing (audit 2026-09-09, P1-5 / P1-6). Path
+# filters are gone on purpose: they hid those scripts AND swallowed the
+# ready_for_review transition, so a PR taken draft -> ready merged with
+# `completed/skipped` checks and zero executed tests (P1-22).
+#
+# Routing: operator policy 2026-09-17 (agent-rules/refs/self-hosted-ci-only.md)
+# forbids GitHub-hosted execution in every operator-owned repository, and this
+# repository is PUBLIC. Public-repository code must never run on the trusted
+# trading workstation, so the job targets a dedicated `dotclaude-isolated`
+# label that no workstation runner carries. Until the operator registers an
+# isolated runner with that label, jobs cannot start: CI is BLOCKED, never
+# PASS, and trusted local validation at the exact head is the substitute the
+# policy names. The workflow is additionally paused (disabled_manually) as
+# containment; re-enable only after route validation and a real local run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+# Without path filters, every push runs the suite -- including the design-doc
+# auto-backups the PostToolUse hook pushes in bursts. Superseding a run is the
+# answer to that; reintroducing a filter is not, for the reason above.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    # Draft PRs stay cheap (the operator batches pushes while drafting), and a
+    # fork's PR never reaches a self-hosted runner: on a public repository its
+    # workflow edits and code are untrusted by definition.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, windows, dotclaude-isolated]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Interpreter
+        run: py -3 --version
+      - name: Install
+        run: py -3 -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+      - name: Lint
+        run: py -3 -m ruff check scripts
+      - name: Compile
+        run: py -3 -m compileall -q scripts
+      - name: Tests
+        run: py -3 -m pytest -q

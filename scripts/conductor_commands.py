@@ -21,6 +21,8 @@ from scripts.conductor_model import (
     ReasonCode,
     WorkItem,
     WorkItemState,
+    AUTHORIZATION_TTL_SECONDS,
+    authorization_refusal,
 )
 from scripts.conductor_store import ConductorStore
 from scripts.conductor_resources import HostResourceManager, resolve_resource_key
@@ -33,8 +35,15 @@ class ConductorCommandProcessor:
         self.store = store
         self.resources = HostResourceManager(store=store)
 
-    def process_envelope(self, envelope: CommandEnvelope, envelope_source: str = "direct") -> Receipt:
-        """Process a command envelope with idempotency protection and source provenance verification."""
+    def process_envelope(self, envelope: CommandEnvelope) -> Receipt:
+        """Process a command envelope, idempotently.
+
+        There is deliberately no `envelope_source` parameter. One existed and
+        was read by nothing: every refusal here is source-independent, so it
+        documented provenance enforcement that did not exist, and a test
+        looped over its values as if it did (audit T1). Refusals that must
+        hold for every source are written as exactly that.
+        """
         existing_receipt = self.store.get_receipt(envelope.idempotency_key)
         if existing_receipt:
             return existing_receipt
@@ -44,6 +53,17 @@ class ConductorCommandProcessor:
                 raise ValueError(
                     "Authorization refused: command envelopes cannot grant operator GO; "
                     "use the attached-TTY conductorctl authorize ceremony"
+                )
+
+            # Same authority, different command type. `resource_recover` clears
+            # a fence with `evidence: OPERATOR_ATTESTED`, and its attestation
+            # arrived as a payload boolean -- so dropping a JSON file into the
+            # inbox cleared a host:heavy fence with no tty and no operator
+            # (audit C2). Attestation is a ceremony, never a field.
+            if envelope.payload.get("operator_attestation"):
+                raise ValueError(
+                    f"Attestation refused: '{envelope.command_type}' envelopes cannot carry "
+                    "operator attestation; use the attached-TTY conductorctl ceremony"
                 )
 
             handler_name = f"_handle_{envelope.command_type}"
@@ -147,6 +167,9 @@ class ConductorCommandProcessor:
             permitted_terminal_stage=item.requested_terminal_stage,
             operator_identity=operator_identity,
             interactive_provenance_proven=True,
+            expires_at_utc=(
+                datetime.now(timezone.utc) + timedelta(seconds=AUTHORIZATION_TTL_SECONDS)
+            ).isoformat(),
         )
 
         self.store.save_authorization(auth_record)
@@ -179,13 +202,16 @@ class ConductorCommandProcessor:
 
         # R2/R3 authorization check
         if item.risk_class in {"R2", "R3"}:
-            auth = self.store.get_authorization(work_item_id)
-            if not auth or not auth.interactive_provenance_proven:
+            refusal = authorization_refusal(
+                self.store.get_authorization(work_item_id),
+                scope_digest_sha256=item.scope_digest_sha256,
+            )
+            if refusal is not None:
                 self.store.transition_work_item_state(
                     work_item_id=work_item_id,
                     target_state=WorkItemState.HOLD,
                     actor=claimed_by_host,
-                    reason_code=ReasonCode.AUTHORIZATION_MISSING.value,
+                    reason_code=refusal,
                 )
                 raise ValueError(f"WorkItem {work_item_id} requires operator R2/R3 authorization")
 
@@ -263,7 +289,14 @@ class ConductorCommandProcessor:
             last_heartbeat_utc=now_dt.isoformat(),
         )
 
-        self.store.save_lease(lease)
+        if not self.store.save_lease(lease):
+            # A replayed sequence or another attempt's heartbeat writes nothing.
+            # Reporting success anyway told the real owner its lease had been
+            # extended when it had not, and gave an intruder a green receipt.
+            raise ValueError(
+                "HEARTBEAT_REJECTED: sequence not ahead of the recorded one, "
+                "or the lease belongs to another attempt"
+            )
         return {"lease_id": lease_id, "heartbeat_sequence": sequence, "expires_at_utc": lease.expires_at_utc}
 
     def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
