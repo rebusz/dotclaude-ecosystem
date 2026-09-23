@@ -39,6 +39,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from secret_patterns import find_high_confidence, is_sensitive_path, redact_assignments
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -61,7 +63,7 @@ DENY_FILES = [
 # Inline replacement patterns (run on every text body before writing)
 SANITIZE_RULES: list[tuple[re.Pattern, str]] = [
     # Absolute paths d:/APPS/<repo>/... → <repo>/...
-    (re.compile(r"[Dd]:[\\/]+APPS[\\/]+([A-Za-z0-9 _-]+?)[\\/]+", re.IGNORECASE),
+    (re.compile(r"[Dd]:[\\/]+APPS[\\/]+([A-Za-z0-9 ._-]+?)[\\/]+", re.IGNORECASE),
      r"<\1>/"),
     # Bare absolute Windows paths d:/... → /<redacted-path>/
     (re.compile(r"[A-Za-z]:[\\/](?:Users|Program Files|ProgramData)[\\/][^\s\"'<>)]+", re.IGNORECASE),
@@ -76,9 +78,10 @@ SANITIZE_RULES: list[tuple[re.Pattern, str]] = [
     # Broker account IDs (rough heuristic: long alphanum after broker name)
     (re.compile(r"(Questrade|IBKR|ProjectX|Tradovate)\s+(account|acct)[:\s#]+\w+",
                 re.IGNORECASE), r"\1 \2 <redacted>"),
-    # API keys / tokens (AWS, GitHub, generic high-entropy)
-    (re.compile(r"\b(AKIA|gho_|ghp_|github_pat_|sk-)[A-Za-z0-9_]{16,}"), "<redacted-token>"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "<redacted-slack-token>"),
+    # Token-shaped secrets are NOT redacted here any more: sanitize() refuses
+    # the whole sync when it sees one (see SecretDetected). The old rule,
+    # `(AKIA|gho_|ghp_|github_pat_|sk-)[A-Za-z0-9_]{16,}`, stopped at the first
+    # hyphen, so `sk-proj-...` and `sk-ant-...` were pushed to GitHub verbatim.
     # Bearer tokens
     (re.compile(r"Bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE), "Bearer <redacted>"),
     # Email — only the operator's own email (others stay)
@@ -86,19 +89,40 @@ SANITIZE_RULES: list[tuple[re.Pattern, str]] = [
 ]
 
 
-def sanitize(text: str) -> tuple[str, int]:
-    """Apply all sanitize rules. Returns (cleaned_text, num_replacements)."""
+class SecretDetected(RuntimeError):
+    """A high-confidence secret shape was found in content bound for GitHub."""
+
+
+def sanitize(text: str, source: str = "") -> tuple[str, int]:
+    """Refuse secret-bearing text; redact domain detail from the rest.
+
+    This path pushes to a GitHub repository unattended -- the auto-sync hook
+    fires it on memory edits with no operator in the loop. Redact-and-continue
+    is the wrong failure mode for a credential there: one missed shape and it
+    is published. So a high-confidence match raises BEFORE any text is
+    returned, which means the file is never even written into the target tree,
+    and the caller aborts the sync without committing or pushing (audit F4).
+    Shapes come from `secret_patterns`, shared with every other detector.
+    """
+    found = find_high_confidence(text)
+    if found:
+        raise SecretDetected(f"{source or '<text>'}: {', '.join(found)}")
     total = 0
     out = text
     for pat, repl in SANITIZE_RULES:
         out, n = pat.subn(repl, out)
         total += n
-    return out, total
+    out, assigned = redact_assignments(out)
+    return out, total + assigned
 
 
 def is_denied_file(path: Path) -> bool:
-    name = path.name
-    return any(rx.search(name) for rx in DENY_FILES)
+    # DENY_FILES was only ever applied to `*.md` glob results, so four of its
+    # five patterns (auth.json, *.token, *.key, .env*) could never match
+    # anything it saw: a guard that read as protection and provided none
+    # (audit F20). The shared path rules are at least one definition, and the
+    # real defence for markdown is the content gate in sanitize().
+    return is_sensitive_path(str(path)) or any(rx.search(path.name) for rx in DENY_FILES)
 
 
 def _read(p: Path) -> str:
@@ -152,7 +176,7 @@ def compile_memory(target: Path, sanitize_count: list[int]) -> None:
     global_mem = HOME / "MEMORY.md"
     if global_mem.exists():
         sections.append("## Global memory (`~/.claude/MEMORY.md`)\n")
-        body, n = sanitize(_read(global_mem))
+        body, n = sanitize(_read(global_mem), source=str(global_mem))
         sanitize_count[0] += n
         sections.append(body)
 
@@ -167,7 +191,7 @@ def compile_memory(target: Path, sanitize_count: list[int]) -> None:
             for mf in sorted(mem_dir.glob("*.md")):
                 if is_denied_file(mf):
                     continue
-                body, n = sanitize(_read(mf))
+                body, n = sanitize(_read(mf), source=str(mf))
                 sanitize_count[0] += n
                 sections.append(f"\n#### `{mf.name}`\n")
                 sections.append(body)
@@ -178,7 +202,7 @@ def compile_memory(target: Path, sanitize_count: list[int]) -> None:
 def copy_simple(src: Path, dst: Path, sanitize_count: list[int]) -> bool:
     if not src.exists():
         return False
-    body, n = sanitize(_read(src))
+    body, n = sanitize(_read(src), source=str(src))
     sanitize_count[0] += n
     _atomic_write(dst, body)
     return True
@@ -193,7 +217,7 @@ def copy_visions(target_visions: Path, sanitize_count: list[int]) -> int:
         for vf in vis_dir.glob("*.md"):
             if is_denied_file(vf):
                 continue
-            body, n = sanitize(_read(vf))
+            body, n = sanitize(_read(vf), source=str(vf))
             sanitize_count[0] += n
             _atomic_write(target_visions / vf.name, body)
             n_copied += 1
@@ -220,7 +244,7 @@ def copy_plans_recent(target_plans: Path, days: int, sanitize_count: list[int]) 
                 continue
             if pdate < cutoff:
                 continue
-            body, n = sanitize(_read(pf))
+            body, n = sanitize(_read(pf), source=str(pf))
             sanitize_count[0] += n
             target_name = f"{repo.name.replace(' ', '_')}_{pf.name}"
             _atomic_write(target_plans / target_name, body)
@@ -234,7 +258,7 @@ def copy_idea_boxes(target_dir: Path, sanitize_count: list[int]) -> int:
         ib = repo / "IDEA_BOX.md"
         if not ib.exists():
             continue
-        body, n = sanitize(_read(ib))
+        body, n = sanitize(_read(ib), source=str(ib))
         sanitize_count[0] += n
         slug = repo.name.lower().replace(" ", "-").replace(".", "-")
         _atomic_write(target_dir / f"{slug}.md", body)
@@ -288,6 +312,15 @@ def git_commit_push(target: Path, note: str, push: bool) -> tuple[bool, str]:
 
 
 def main() -> int:
+    try:
+        return _main()
+    except SecretDetected as err:
+        print(f"ABORTED: high-confidence secret in sync source -- nothing committed or pushed: {err}",
+              file=sys.stderr)
+        return 3
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(description="Sync ecosystem context to private repo")
     parser.add_argument("--target", default="D:/dotclaude/ecosystem-context",
                         help="Target context repo path")

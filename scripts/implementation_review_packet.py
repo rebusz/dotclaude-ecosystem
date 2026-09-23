@@ -15,20 +15,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from secret_patterns import find_high_confidence, is_sensitive_path
+
 
 DEFAULT_MAX_DIFF_CHARS = 180_000
 PACKET_SCHEMA_VERSION = "implementation-review/v1"
-SENSITIVE_PATH_PATTERNS = (
-    re.compile(r"(?:^|/)\.env(?:\.|$)", re.IGNORECASE),
-    re.compile(r"\.(?:pem|key|p12|pfx)$", re.IGNORECASE),
-    re.compile(r"(?:^|/)(?:credentials?|secrets?)\.(?:json|ya?ml|toml)$", re.IGNORECASE),
-)
-HIGH_CONFIDENCE_SECRET_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\bgh[oprsu]_[A-Za-z0-9]{30,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
-)
 
 
 class PacketError(RuntimeError):
@@ -75,21 +66,28 @@ def _changed_paths(name_status: str) -> list[str]:
 
 
 def _reject_sensitive_content(name_status: str, diff: str) -> None:
-    sensitive_paths = [
-        path
-        for path in _changed_paths(name_status)
-        if any(pattern.search(path) for pattern in SENSITIVE_PATH_PATTERNS)
-    ]
+    sensitive_paths = [path for path in _changed_paths(name_status) if is_sensitive_path(path)]
     if sensitive_paths:
         raise PacketError(
             "refusing external review packet for sensitive path(s): "
             + ", ".join(sensitive_paths)
         )
-    for pattern in HIGH_CONFIDENCE_SECRET_PATTERNS:
-        if pattern.search(diff):
-            raise PacketError(
-                f"refusing external review packet: high-confidence secret pattern {pattern.pattern!r}"
-            )
+    _reject_secret_text(diff)
+
+
+def _reject_secret_text(text: str) -> None:
+    """Fail closed on any high-confidence secret shape, wherever it appears.
+
+    The patterns come from `secret_patterns`, shared with every other detector
+    in the repo. This gate used to carry its own four patterns and missed every
+    modern LLM key, `github_pat_` tokens, JWTs and connection strings (audit F5).
+    """
+    found = find_high_confidence(text)
+    if found:
+        raise PacketError(
+            "refusing external review packet: high-confidence secret pattern(s): "
+            + ", ".join(found)
+        )
 
 
 def _repo_label(repo: Path, github_repo: str) -> str:
@@ -162,7 +160,7 @@ def build_packet(
     github_repo = github_repo.strip() or "(not available)"
     changed_count = len([line for line in names.splitlines() if line.strip()])
 
-    return f"""# External Implementation Review Packet
+    packet = f"""# External Implementation Review Packet
 
 ## Review contract
 
@@ -227,6 +225,12 @@ TRANSMISSION_COMPLETE: yes OR no OR unknown
 {diff}
 ```
 """
+    # Scan the packet as it will be published, not just the diff. Validation
+    # evidence arrives from `--validation`/`--validation-file` -- pytest output,
+    # CI logs, env dumps -- and was interpolated verbatim with no scan at all,
+    # walking straight past the one gate documented as failing closed (audit F3).
+    _reject_secret_text(packet)
+    return packet
 
 
 def _default_output(repo: Path, end_sha: str) -> Path:
