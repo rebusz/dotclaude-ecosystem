@@ -1017,7 +1017,7 @@ read_resource_pool_status = read_host_resource_status
 
 # The newest schema this build knows how to migrate to. A store above it is a
 # downgrade, and downgrades corrupt (audit C9).
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 class ConductorStore:
@@ -1445,6 +1445,33 @@ class ConductorStore:
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (6, datetime('now'))"
+                )
+
+            if current_version < 7:
+                # Adopted, not invented. The live store on the operator's box was
+                # migrated to v7 on 2026-08-31 by the unmerged branch
+                # codex/conductor-auto-recovery-handoff-20260831 (owner process
+                # identity for orphan auto-recovery), while main stopped at v6. The
+                # installed v6 code has been reading and writing a v7 store ever
+                # since -- the downgrade-write hazard C9 exists to refuse. Refusing
+                # it without this migration would have turned a silent hazard into
+                # an outage on the next Conductor start, so main learns the schema
+                # the live system already has. Only the schema: the columns are
+                # additive, nullable or defaulted, and no code here reads them yet.
+                # Idempotent, and byte-compatible with that branch's own step.
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+                }
+                if "owner_process_pid" not in columns:
+                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
+                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_owner_identity_{int(time.time())}.db"
+                        shutil.copy2(self.db_path, backup_file)
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_pid INTEGER NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_start_time REAL NULL")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_identity_source TEXT NOT NULL DEFAULT 'UNRECORDED'")
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_last_seen_at_utc TEXT NULL")
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (7, datetime('now'))"
                 )
 
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:

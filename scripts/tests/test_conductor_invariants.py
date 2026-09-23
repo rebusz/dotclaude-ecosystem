@@ -564,3 +564,29 @@ def test_the_gui_accepts_the_py_launcher_it_is_installed_with() -> None:
         assert conductor_gui._PYTHON_BINARY.fullmatch(name), name
     for name in ("cmd.exe", "evil.exe", "python.exe.bat", "pyx.exe"):
         assert not conductor_gui._PYTHON_BINARY.fullmatch(name), name
+
+
+def test_c9_latest_schema_version_matches_the_migration_ladder() -> None:
+    """C9 refuses any store newer than LATEST_SCHEMA_VERSION. If a migration is
+    added without bumping the constant, this build would refuse the very store
+    it had just migrated -- an outage from a one-line omission."""
+    import re
+
+    from scripts import conductor_store
+
+    source = pathlib.Path(conductor_store.__file__).read_text(encoding="utf-8")
+    ladder = [int(n) for n in re.findall(r"if current_version < (\d+):", source)]
+    assert max(ladder) == conductor_store.LATEST_SCHEMA_VERSION
+
+
+def test_c9_a_store_at_the_live_schema_opens(root: pathlib.Path) -> None:
+    """The operator's live store reached v7 through an unmerged branch while
+    main stopped at v6. Main must open it rather than refuse it on sight."""
+    ConductorStore(root_dir=root)
+    reopened = ConductorStore(root_dir=root)
+    with reopened._connection() as conn:
+        versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations")]
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(host_resource_requests)")}
+    assert 7 in versions
+    assert {"owner_process_pid", "owner_process_start_time",
+            "owner_identity_source", "owner_last_seen_at_utc"} <= columns
