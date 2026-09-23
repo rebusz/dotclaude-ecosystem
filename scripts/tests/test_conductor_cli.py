@@ -101,21 +101,36 @@ def test_resource_recover_cli_round_trip(tmp_path: pathlib.Path, monkeypatch: py
     assert refusal["status"] == "ERROR"
     assert "OWNER_LIVENESS_UNPROVEN" in refusal["error_message"]
 
-    exit_code = conductorctl.main(
-        [
-            "resource-recover",
-            "--request-id",
-            wedged["request_id"],
-            "--attest-owner-gone",
-            "--reason",
-            "owning agent host is gone",
-        ]
-    )
-    assert exit_code == 0
-    receipt = json.loads(capsys.readouterr().out)
-    assert receipt["status"] == "SUCCESS"
-    assert receipt["result"]["evidence"] == "OPERATOR_ATTESTED"
-    assert receipt["result"]["promoted"]["request_id"] == queued["request_id"]
+    attest = [
+        "resource-recover",
+        "--request-id",
+        wedged["request_id"],
+        "--attest-owner-gone",
+        "--reason",
+        "owning agent host is gone",
+    ]
+
+    # The flag alone is not attestation. This test used to assert exit 0 here,
+    # which codified the hole: argv — or an inbox file carrying the same
+    # payload — cleared a host:heavy fence with `evidence: OPERATOR_ATTESTED`
+    # and no operator anywhere near it (audit C2/T3).
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+    assert conductorctl.main(attest) == 1
+    assert "interactive console TTY" in capsys.readouterr().err
+
+    # A tty but the wrong words is still not attestation.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
+    assert conductorctl.main(attest) == 1
+    assert "exact interactive attestation" in capsys.readouterr().err
+
+    # The real ceremony: attached tty, exact confirmation.
+    monkeypatch.setattr("builtins.input", lambda _prompt="": f"GONE {wedged['request_id']}")
+    assert conductorctl.main(attest) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["evidence"] == "OPERATOR_ATTESTED"
+    assert result["promoted"]["request_id"] == queued["request_id"]
 
     status = HostResourceManager(ConductorStore(root_dir=tmp_path)).status()
     assert status["recovery_required"] == 0

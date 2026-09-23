@@ -33,6 +33,9 @@ RESOURCE_KEY = "host:heavy"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
+# The closed set of pools this host has. Anything else is a typo or an attempt
+# to mint a private pool beside the capacity-one one (audit C1).
+KNOWN_RESOURCE_KEYS = frozenset({RESOURCE_KEY}) | CDP_POOLS
 DEFAULT_POOL_CAPACITIES = {
     "host:heavy": 1,
     "cdp:perplexity": 3,
@@ -100,6 +103,16 @@ def resolve_resource_key(
     if resource_key == RESOURCE_KEY and _is_cdp_purpose(purpose):
         resource_key = None
     if resource_key:
+        # A pool key names one of the pools this host actually has. Returning it
+        # verbatim let `--resource-key host:heavy2` mint a private capacity-1
+        # pool and run a second heavy pytest beside the real one -- the
+        # capacity-one guarantee bypassed by spelling, not by force
+        # (audit 2026-09-09, C1).
+        if resource_key not in KNOWN_RESOURCE_KEYS:
+            raise ValueError(
+                f"unknown resource key '{resource_key}'; "
+                f"expected one of {sorted(KNOWN_RESOURCE_KEYS)}"
+            )
         return resource_key
     if role and role in ROLE_TO_RESOURCE_KEY:
         return ROLE_TO_RESOURCE_KEY[role]
@@ -204,6 +217,15 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _parse_iso(value: str) -> datetime:
+    """Read back an `_iso` timestamp. Unreadable means expired, not eternal."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def classify_pytest_invocation(
     pytest_args: Sequence[str], cwd: str | pathlib.Path | None = None
 ) -> str:
@@ -268,6 +290,11 @@ class HostResourceManager:
     def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY):
         self.store = store
         self.resource_key = resource_key
+        if resource_key not in KNOWN_RESOURCE_KEYS:
+            raise ValueError(
+                f"unknown resource key '{resource_key}'; "
+                f"expected one of {sorted(KNOWN_RESOURCE_KEYS)}"
+            )
         pool = self.store.get_resource_pool(resource_key)
         if pool is None:
             default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
@@ -464,6 +491,13 @@ class HostResourceManager:
                 raise ResourceAdmissionError("RESOURCE_LEASE_NOT_ACTIVE")
             if sequence <= int(row["heartbeat_sequence"]):
                 raise ValueError("HEARTBEAT_OUT_OF_ORDER")
+            # An expired lease is not a lease. `request()` already refuses to
+            # inherit one, but heartbeat gated only on ACTIVE and then wrote a
+            # fresh expiry, so a lease that had already lapsed could be
+            # resurrected indefinitely and the fence never formed (audit C5).
+            # The asymmetry was the bug: two paths, one boundary.
+            if row["expires_at_utc"] and _parse_iso(row["expires_at_utc"]) <= now:
+                raise ResourceAdmissionError("RESOURCE_LEASE_EXPIRED")
             expires = _iso(now + timedelta(seconds=lease_ttl_seconds))
             conn.execute(
                 """
@@ -825,7 +859,20 @@ class HostResourceManager:
                         break
                     if lease_id:
                         sequence += 1
-                        self.heartbeat(lease_id, sequence)
+                        try:
+                            self.heartbeat(lease_id, sequence)
+                        except Exception:
+                            # The lease was fenced or released while our child
+                            # ran. The `finally` below marks recovery, which is
+                            # right for the ledger -- but the pytest process
+                            # would have kept running unattended on the host
+                            # (audit C11). Take the child down with the lease.
+                            try:
+                                process.kill()
+                                process.communicate(timeout=10)
+                            except (OSError, subprocess.TimeoutExpired):
+                                pass
+                            raise
             return {
                 **admission,
                 "classification": classification,
@@ -914,12 +961,12 @@ class HostResourceManager:
         if not purpose.startswith("pytest_") and resource_key == "host:heavy":
             raise ValueError(f"non-pytest purpose '{purpose}' cannot consume '{resource_key}'")
 
-        # Specific purpose to pool alignment
-        if purpose == "cdp_perplexity" and resource_key != "cdp:perplexity":
-            raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
-        if purpose == "cdp_chatgpt" and resource_key != "cdp:chatgpt":
-            raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
-        if purpose == "cdp_gemini" and resource_key != "cdp:gemini":
+        # Specific purpose to pool alignment, derived rather than hand-listed.
+        # Three of these used to be written out by hand and `cdp_tv` was added
+        # to every other table without one, so a TV capture could admit into
+        # cdp:gemini and starve that lane (C6). A loop cannot skip a purpose.
+        pinned = PURPOSE_TO_RESOURCE_KEY.get(purpose)
+        if pinned is not None and pinned.startswith("cdp:") and resource_key != pinned:
             raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
 
     def _mark_recovery(self, request_id: str, *, reason: str) -> None:

@@ -668,7 +668,7 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
     env = os.environ.copy()
     env["TDCONDUCTOR_DIR"] = str(tmp_path)
 
-    # Execute directly via powershell
+    # Execute directly via powershell, with no tty attached.
     completed = subprocess.run(
         ["powershell", "-NoProfile", "-Command", filled_cmd],
         env=env,
@@ -676,12 +676,18 @@ def test_recovery_command_builder_powershell_execution(tmp_path: pathlib.Path):
         text=True,
         timeout=30,
     )
-    assert completed.returncode == 0, completed.stderr
 
-    # Verify request is released and recovered in DB
+    # The suggested command is the one that needs an operator, so running it
+    # from a script must REFUSE. This assertion used to be `returncode == 0`,
+    # which is what made the attestation reachable without a human at all
+    # (audit C2). The command still has to be well-formed and safely quoted —
+    # that is what the run proves — but it cannot complete unattended.
+    assert completed.returncode == 1, completed.stdout
+    assert "interactive console TTY" in completed.stderr
+
+    # And the fence therefore still stands.
     updated = store.get_resource_request(wedged["request_id"])
-    assert updated.state == HostResourceRequestState.RELEASED
-    assert updated.reason_code == "RECOVERY_ATTESTED"
+    assert updated.state == HostResourceRequestState.RECOVERY_REQUIRED
 
 
 def test_schema_migration_v5_adds_slot_key_and_seeds_cdp_pools(tmp_path: pathlib.Path):

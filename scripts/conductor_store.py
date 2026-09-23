@@ -49,6 +49,11 @@ STORAGE_QUOTAS_BYTES = {
     "artifacts": 1_073_741_824,  # 1 GiB
     "receipts": 268_435_456,  # 256 MiB
     "inbox": 67_108_864,  # 64 MiB
+    # These two had no ceiling and were invisible to storage_status: the
+    # daemon's own FileHandler writes logs/, and every migration drops a full
+    # DB copy into backups/ (audit C12). Report-only like the rest.
+    "logs": 268_435_456,  # 256 MiB
+    "backups": 1_073_741_824,  # 1 GiB
 }
 
 
@@ -1010,6 +1015,11 @@ def read_host_resource_status(
 read_resource_pool_status = read_host_resource_status
 
 
+# The newest schema this build knows how to migrate to. A store above it is a
+# downgrade, and downgrades corrupt (audit C9).
+LATEST_SCHEMA_VERSION = 6
+
+
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
 
@@ -1105,6 +1115,15 @@ class ConductorStore:
             cur = conn.execute("SELECT MAX(version) FROM schema_migrations")
             row = cur.fetchone()
             current_version = row[0] if (row and row[0] is not None) else 0
+            if current_version > LATEST_SCHEMA_VERSION:
+                # Every migration below is an `if current_version < N`, so a
+                # database written by a future build skips them all and is then
+                # read and written by code that does not know its schema.
+                # Nothing raised and nothing warned (audit C9).
+                raise RuntimeError(
+                    f"conductor store schema v{current_version} is newer than this build "
+                    f"understands (v{LATEST_SCHEMA_VERSION}); upgrade rather than downgrade-write"
+                )
 
             if current_version < 1:
                 # Backup before migration if DB existed
@@ -1440,6 +1459,11 @@ class ConductorStore:
         now_iso = current_utc_iso()
 
         with self._connection() as conn:
+            # BEGIN IMMEDIATE takes the write lock before the read, so two
+            # callers cannot both observe the same stale row and both decide to
+            # steal it. Without it, eight concurrent callers on one dead-pid row
+            # were granted the "single writer" lock seven times (audit C3).
+            conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute("SELECT * FROM leader_locks WHERE lock_name = ?", (lock_name,))
             row = cur.fetchone()
 
@@ -1470,15 +1494,19 @@ class ConductorStore:
                     return False
 
                 # Stale lock recovery
-                conn.execute(
+                # Conditional on the leader we actually observed: if anyone
+                # else moved the row between our read and our write, we lose
+                # rather than silently overwriting a live owner.
+                cursor = conn.execute(
                     """
                     UPDATE leader_locks
                     SET leader_id = ?, pid = ?, process_start_time = ?, acquired_at_utc = ?, last_heartbeat_utc = ?
-                    WHERE lock_name = ?
+                    WHERE lock_name = ? AND leader_id = ?
                     """,
-                    (self.leader_id, current_pid, start_time, now_iso, now_iso, lock_name),
+                    (self.leader_id, current_pid, start_time, now_iso, now_iso,
+                     lock_name, existing_leader_id),
                 )
-                return True
+                return cursor.rowcount == 1
 
             else:
                 conn.execute(
@@ -1757,6 +1785,8 @@ class ConductorStore:
                     heartbeat_sequence = excluded.heartbeat_sequence,
                     expires_at_utc = excluded.expires_at_utc,
                     last_heartbeat_utc = excluded.last_heartbeat_utc
+                WHERE excluded.attempt_id = leases.attempt_id
+                  AND excluded.heartbeat_sequence > leases.heartbeat_sequence
                 """,
                 (
                     lease.lease_id,

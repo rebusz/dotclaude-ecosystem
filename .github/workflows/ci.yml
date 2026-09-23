@@ -1,21 +1,25 @@
 name: CI
 
-# One workflow, whole suite, no path filters.
+# One workflow, whole suite, no path filters -- routed ONLY to an isolated,
+# operator-controlled self-hosted runner.
 #
-# This replaces hooks-ci, session-lifecycle-ci and truthdeck-ci, which between
-# them named 27 of 72 scripts in hand-maintained argument lists. Everything else
-# — the entire Conductor subsystem, ~9k lines with ten real test files — was
-# checked by nothing, ever, and `main` sat red for two days on two contract
-# tests no workflow ran (audit 2026-09-09, P1-5 / P1-6).
+# Coverage: this replaces hooks-ci, session-lifecycle-ci and truthdeck-ci,
+# which between them named 27 of 72 scripts in hand-maintained argument lists.
+# Everything else -- the whole Conductor subsystem, ~9k lines with ten real
+# test files -- was checked by nothing (audit 2026-09-09, P1-5 / P1-6). Path
+# filters are gone on purpose: they hid those scripts AND swallowed the
+# ready_for_review transition, so a PR taken draft -> ready merged with
+# `completed/skipped` checks and zero executed tests (P1-22).
 #
-# Path filters are gone on purpose. They were the mechanism of the blind spot:
-# `truthctl.py` was exercised by truthdeck-ci's own pytest step yet excluded
-# from its trigger glob, so editing the CLI entrypoint ran nothing. The suite
-# takes ~2 minutes; that is cheaper than a filter nobody can keep correct.
-#
-# `ready_for_review` is listed because the draft gate below skips draft pushes,
-# and a PR taken draft -> ready without a further push would otherwise merge
-# with `completed/skipped` checks and zero executed tests (P1-22).
+# Routing: operator policy 2026-09-17 (agent-rules/refs/self-hosted-ci-only.md)
+# forbids GitHub-hosted execution in every operator-owned repository, and this
+# repository is PUBLIC. Public-repository code must never run on the trusted
+# trading workstation, so the job targets a dedicated `dotclaude-isolated`
+# label that no workstation runner carries. Until the operator registers an
+# isolated runner with that label, jobs cannot start: CI is BLOCKED, never
+# PASS, and trusted local validation at the exact head is the substitute the
+# policy names. The workflow is additionally paused (disabled_manually) as
+# containment; re-enable only after route validation and a real local run.
 
 on:
   pull_request:
@@ -23,39 +27,33 @@ on:
   push:
     branches: [main]
 
-# Without path filters, every push to a branch runs the suite -- including the
-# design-doc auto-backups the PostToolUse hook pushes during a planning
-# session, which arrive in bursts. Superseding a run is the right answer to
-# that; reintroducing a filter is not, because the filter is what swallowed the
-# ready_for_review transition in the first place. Only the newest commit's
-# result can gate a merge anyway.
+# Without path filters, every push runs the suite -- including the design-doc
+# auto-backups the PostToolUse hook pushes in bursts. Superseding a run is the
+# answer to that; reintroducing a filter is not, for the reason above.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   suite:
-    # Draft PRs stay uncheckedly cheap; the operator's documented policy is to
-    # batch pushes while drafting and mark ready once.
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.12 is the floor the code targets; 3.14 is what the operator's box
-        # actually runs. Testing only one of them is how "local green" and "CI
-        # green" stopped meaning the same thing.
-        python-version: ["3.12", "3.14"]
+    # Draft PRs stay cheap (the operator batches pushes while drafting), and a
+    # fork's PR never reaches a self-hosted runner: on a public repository its
+    # workflow edits and code are untrusted by definition.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, windows, dotclaude-isolated]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
+      - name: Interpreter
+        run: py -3 --version
       - name: Install
-        run: python -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+        run: py -3 -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
       - name: Lint
-        run: python -m ruff check scripts
+        run: py -3 -m ruff check scripts
       - name: Compile
-        run: python -m compileall -q scripts
+        run: py -3 -m compileall -q scripts
       - name: Tests
-        run: python -m pytest -q
+        run: py -3 -m pytest -q

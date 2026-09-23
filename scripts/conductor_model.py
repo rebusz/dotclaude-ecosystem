@@ -348,6 +348,45 @@ class AuthorizationRecord:
         return asdict(self)
 
 
+# A GO is a decision about a specific scope at a specific time. The backstop TTL
+# bounds how long an unused one can sit; the scope digest is the load-bearing
+# check, because any change to the work item's scope invalidates it at once.
+AUTHORIZATION_TTL_SECONDS = 7 * 24 * 3600
+
+
+def authorization_refusal(
+    auth: Optional["AuthorizationRecord"],
+    *,
+    scope_digest_sha256: str,
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    """Return None when `auth` still authorizes this scope, else the ReasonCode.
+
+    The one predicate both the claim path and the scheduler use, so the two can
+    never disagree about what a valid GO is. Before this they each checked only
+    `auth and auth.interactive_provenance_proven`: a GO never expired, and its
+    scope digest was recorded at grant time and never compared again, so a GO
+    given for an R3 item admitted a claim months later against whatever scope
+    the item carried by then (audit C7). AUTHORIZATION_EXPIRED and
+    AUTHORIZATION_SCOPE_MISMATCH existed in ReasonCode all along; nothing
+    emitted them.
+    """
+    if auth is None or not auth.interactive_provenance_proven:
+        return ReasonCode.AUTHORIZATION_MISSING.value
+    if auth.expires_at_utc:
+        try:
+            expires = datetime.fromisoformat(str(auth.expires_at_utc).replace("Z", "+00:00"))
+        except ValueError:
+            return ReasonCode.AUTHORIZATION_EXPIRED.value  # unreadable is expired, not eternal
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires <= (now or datetime.now(timezone.utc)):
+            return ReasonCode.AUTHORIZATION_EXPIRED.value
+    if auth.scope_digest_sha256 != scope_digest_sha256:
+        return ReasonCode.AUTHORIZATION_SCOPE_MISMATCH.value
+    return None
+
+
 @dataclass
 class CommandEnvelope:
     command_id: str

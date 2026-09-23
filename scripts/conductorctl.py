@@ -195,13 +195,18 @@ def main(argv: list[str] | None = None) -> int:
                 for p in all_pools.values()
             )
         )
-        if not truthctl.get("ok"):
-            info["doctor_status"] = "BLOCKED"
-        elif info.get("store_state") == "ABSENT":
+        if info.get("store_state") == "ABSENT":
             # Conductor is not initialised on this host. `doctor` is the command
             # an operator runs to discover exactly that, so it reports the fact
             # and exits 0. Nothing can be wedged in a store that does not exist.
+            #
+            # This must be decided BEFORE the truthctl check. An uninitialised
+            # host has no truthctl either, so the truthctl branch pre-empted it
+            # and every bare machine reported BLOCKED instead of ABSENT --
+            # invisible until CI ran these tests for the first time on 2026-09-09.
             info["doctor_status"] = "ABSENT"
+        elif not truthctl.get("ok"):
+            info["doctor_status"] = "BLOCKED"
         elif gate_blocked:
             info["doctor_status"] = "BLOCKED"
         elif storage.get("status") == "BLOCKED":
@@ -334,12 +339,36 @@ def main(argv: list[str] | None = None) -> int:
         return _print_receipt_exit(receipt)
 
     elif args.command == "resource-recover":
+        if args.attest_owner_gone:
+            # Clearing a fence on the operator's word is the same authority as
+            # `authorize`, so it goes through the same ceremony. It used to be a
+            # bare `store_true`, which meant argv alone -- or an inbox file --
+            # could attest that a host:heavy owner was gone (audit C2).
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                print(
+                    "Error: --attest-owner-gone requires an attached interactive console TTY",
+                    file=sys.stderr,
+                )
+                return 1
+            expected = f"GONE {args.request_id}"
+            confirmation = input(f"Type {expected} to attest this owner is gone: ")
+            if not hmac.compare_digest(confirmation.strip(), expected):
+                print("Error: exact interactive attestation was not entered", file=sys.stderr)
+                return 1
+            result = processor.resources.recover(
+                args.request_id,
+                operator_attestation=True,
+                reason=args.reason,
+                actor="operator_cli",
+            )
+            print(json.dumps(result, indent=2))
+            return 0
+
         envelope = CommandEnvelope(
             command_id=f"cmd_{uuid.uuid4().hex[:12]}",
             command_type="resource_recover",
             payload={
                 "request_id": args.request_id,
-                "operator_attestation": args.attest_owner_gone,
                 "reason": args.reason,
                 "actor": "operator_cli",
             },

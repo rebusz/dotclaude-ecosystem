@@ -59,25 +59,47 @@ def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool =
                     issued_at_utc=envelope_dict.get("issued_at_utc", ""),
                 )
 
-                receipt = processor.process_envelope(envelope, envelope_source="inbox_file")
+                receipt = processor.process_envelope(envelope)
                 logging.info(f"Processed envelope {envelope.command_id} ({envelope.command_type}) -> {receipt.status}")
 
                 # Remove inbox file after processing
                 filepath.unlink(missing_ok=True)
             except Exception as err:
+                # The file is only unlinked on the success path above, so a
+                # truncated or malformed envelope was re-read on every poll --
+                # one error line per second, forever, with no forward progress
+                # (audit C13). Move it aside so the loop can continue and the
+                # operator still has the evidence.
                 logging.error(f"Error processing inbox file {filepath}: {err}")
+                try:
+                    quarantine = filepath.parent / "quarantine"
+                    quarantine.mkdir(parents=True, exist_ok=True)
+                    filepath.replace(quarantine / filepath.name)
+                    logging.error(f"Quarantined unprocessable envelope -> {quarantine / filepath.name}")
+                except OSError as move_err:
+                    logging.error(f"Could not quarantine {filepath}: {move_err}")
 
-        # Perform periodic reconcile check
+        # Periodic reconcile. This is the coordinator's own housekeeping, not a
+        # command anyone issued, so it does not go through the envelope path:
+        # that path persists a receipt row AND a receipt file per call, and at
+        # the default 1s poll it wrote ~86,400 of each per day for a no-op
+        # (audit C12). Real work still leaves a trace, in the log.
         try:
-            rec_envelope = CommandEnvelope(
-                command_id=f"auto_rec_{int(time.time())}",
-                command_type="reconcile",
-                payload={"dry_run": False},
-                idempotency_key=f"auto_rec_{int(time.time())}",
-            )
-            processor.process_envelope(rec_envelope)
+            outcome = processor._handle_reconcile({"dry_run": False})
+            if outcome.get("expired_count"):
+                logging.warning(
+                    f"Work-item reconcile expired {outcome['expired_count']} lease(s): "
+                    f"{outcome.get('reconciled_items')}"
+                )
         except Exception as err:
             logging.error(f"Error running auto reconcile: {err}")
+
+        try:
+            expired = processor.resources.reconcile()
+            if expired.get("expired_count"):
+                logging.warning(f"Host-resource reconcile fenced {expired['expired_count']} lease(s)")
+        except Exception as err:
+            logging.error(f"Error running host-resource reconcile: {err}")
 
         if single_pass:
             break

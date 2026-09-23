@@ -144,14 +144,35 @@ def test_inherited_pytest_keeps_parent_process_identity(manager: HostResourceMan
 
 
 def test_forged_and_expired_inherited_tokens_fail_closed(manager: HostResourceManager):
+    """A forged token buys nothing: no inheritance, and no capacity bypass.
+
+    This asserted only that a forged parent_lease_id still reached ACTIVE,
+    under a name promising it failed closed — which read as evidence of a
+    guarantee the assertion never checked (audit T2). What the code actually
+    does, and what matters, is refuse to INHERIT: the request is demoted to a
+    normal admission and must then queue behind a busy pool like anyone else.
+    """
     forged = manager.request(
         purpose="pytest_heavy",
         attempt_id="child",
         agent_instance="inst",
         parent_lease_id="forged",
     )
+    # The pool was free, so a normal admission is ACTIVE — but by admission,
+    # not by inheritance, and the ledger says so.
     assert forged["state"] == HostResourceRequestState.ACTIVE.value
     assert forged["reason_code"] == "INHERITED_LEASE_INVALID"
+
+    # The property that matters: with the pool occupied, a forged token cannot
+    # walk past capacity-one the way a real inherited child would.
+    gatecrasher = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="child-2",
+        agent_instance="inst",
+        parent_lease_id="forged",
+    )
+    assert gatecrasher["state"] == HostResourceRequestState.QUEUED.value
+    manager.release(gatecrasher["request_id"])
     manager.release(forged["request_id"])
 
     parent = manager.request(purpose="pytest_full", attempt_id="parent", agent_instance="inst")
