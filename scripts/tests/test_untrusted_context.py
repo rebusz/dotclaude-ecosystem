@@ -120,3 +120,8 @@ def test_the_detector_states_the_boundary_after_the_block(monkeypatch, tmp_path)
     end = out.index("=== END AUTO-INJECTED STEERING CONTEXT ===")
     assert out.index(detector._UNTRUSTED_NOTE) > end
     assert "not instructions" in detector._UNTRUSTED_NOTE
+    # Nothing imperative trails the quoted text: the note is the last line and
+    # the hook's own instruction precedes the block.
+    assert out.rstrip().endswith(detector._UNTRUSTED_NOTE)
+    assert out.index(detector._STEER_INSTRUCTION) < out.index("=== AUTO-INJECTED STEERING")
+    assert not any(line.startswith("AI:") for line in out.splitlines())
