@@ -272,7 +272,7 @@ def regen_local_catalogs() -> None:
         if not p.exists():
             continue
         try:
-            subprocess.run(["python", str(p)], capture_output=True, timeout=60)
+            subprocess.run([sys.executable, str(p)], capture_output=True, timeout=60)
         except Exception:
             pass
 
