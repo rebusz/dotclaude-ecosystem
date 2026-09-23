@@ -406,11 +406,18 @@ def test_c10_the_sibling_conductorctl_is_preferred() -> None:
 
 # ── C11: a lost lease takes the child down with it ──────────────────────────
 
-def test_c11_a_heartbeat_failure_kills_the_pytest_child(
-    tmp_path: pathlib.Path, manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch
+def test_c11_a_fenced_lease_kills_the_child_without_masking_the_error(
+    tmp_path: pathlib.Path, root: pathlib.Path, manager: HostResourceManager,
 ) -> None:
     """The heartbeat raised out of the wait loop with the child still running;
-    the ledger was marked for recovery, the process kept running unattended."""
+    the ledger was marked for recovery, the process kept running unattended.
+
+    Driven for real: while the child sleeps, a second manager on the same store
+    fences the lease exactly as the daemon would, so the genuine heartbeat
+    raises RESOURCE_LEASE_NOT_ACTIVE. No stub -- an earlier version replaced
+    `heartbeat`, which kept the request ACTIVE and so never reached the branch
+    where `release` would refuse the fenced request and raise from `finally`.
+    """
     work = tmp_path / "child"
     work.mkdir()
     pidfile = work / "child.pid"
@@ -422,35 +429,138 @@ def test_c11_a_heartbeat_failure_kills_the_pytest_child(
         encoding="utf-8",
     )
 
-    def lease_lost(lease_id: str, sequence: int, **_: object) -> None:
+    def fence_when_child_is_up() -> None:
         deadline = time.monotonic() + 30
         while not pidfile.exists() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        raise ResourceAdmissionError("RESOURCE_LEASE_NOT_ACTIVE")
-
-    monkeypatch.setattr(manager, "heartbeat", lease_lost)
-
-    with pytest.raises(ResourceAdmissionError):
-        manager.run_bounded_pytest(
-            python_executable=sys.executable, pytest_args=["-q", "test_sleeper.py"],
-            cwd=work, attempt_id="c11", agent_instance="c11",
-            heartbeat_interval_seconds=0.2, timeout_seconds=120, force_heavy=True,
-            base_environment=dict(os.environ),
+            time.sleep(0.05)
+        # A reconcile with a future clock fences without touching the lease's
+        # own expiry, so the child's heartbeat meets NOT_ACTIVE, not EXPIRED.
+        HostResourceManager(ConductorStore(root_dir=root)).reconcile(
+            now=datetime.now(timezone.utc) + timedelta(hours=1)
         )
+
+    fencer = threading.Thread(target=fence_when_child_is_up)
+    fencer.start()
+    try:
+        with pytest.raises(ResourceAdmissionError, match="RESOURCE_LEASE_NOT_ACTIVE"):
+            manager.run_bounded_pytest(
+                python_executable=sys.executable, pytest_args=["-q", "test_sleeper.py"],
+                cwd=work, attempt_id="c11", agent_instance="c11",
+                heartbeat_interval_seconds=0.2, timeout_seconds=120, force_heavy=True,
+                base_environment=dict(os.environ),
+            )
+    finally:
+        fencer.join(timeout=60)
 
     child_pid = int(pidfile.read_text(encoding="utf-8"))
     deadline = time.monotonic() + 10
-    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
-        try:
-            if psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE:
-                break
-        except psutil.NoSuchProcess:
-            break
-        time.sleep(0.1)
-    alive = psutil.pid_exists(child_pid)
-    if alive:
+    alive = True
+    while time.monotonic() < deadline:
         try:
             alive = psutil.Process(child_pid).status() != psutil.STATUS_ZOMBIE
         except psutil.NoSuchProcess:
             alive = False
+        if not alive:
+            break
+        time.sleep(0.1)
     assert not alive, f"pytest child {child_pid} survived the lost lease"
+
+    requests = manager.store.list_resource_requests(states=["RECOVERY_REQUIRED"])
+    assert any(r.attempt_id == "c11" for r in requests), "the fence must still stand"
+
+
+# ── Review follow-ups: the fixes must not trade one silent failure for another
+
+def _claimed_r1_lease(store: ConductorStore) -> tuple[ConductorCommandProcessor, dict]:
+    processor = ConductorCommandProcessor(store=store)
+    receipt = processor.process_envelope(CommandEnvelope(
+        command_id="cmd_enq_hb", command_type="enqueue",
+        payload={"idempotency_key": "idemp_hb", "title": "R1 task",
+                 "repo_id": "dotclaude-ecosystem", "repo_path": "D:/x",
+                 "plan_path": "design/plans/x.md", "risk_class": "R1", "workflow": "fwf",
+                 "requested_terminal_stage": "merged",
+                 "job_kind": "engineering_plan_lifecycle", "created_by": "operator"},
+        idempotency_key="idemp_enq_hb",
+    ))
+    work_item_id = receipt.result["work_item_id"]
+    store.transition_work_item_state(work_item_id=work_item_id,
+                                     target_state=WorkItemState.READY,
+                                     actor="operator", reason_code="READY_TEST")
+    claim = processor.process_envelope(CommandEnvelope(
+        command_id="cmd_claim_hb", command_type="claim",
+        payload={"work_item_id": work_item_id, "claimed_by_host": "claude_host"},
+        idempotency_key="idemp_claim_hb",
+    )).result
+    return processor, claim
+
+
+def test_a_rejected_heartbeat_is_reported_not_silently_accepted(store: ConductorStore) -> None:
+    """C8 made the write conditional; the command must then say it refused,
+    rather than return a fresh expiry for a lease it never extended."""
+    processor, claim = _claimed_r1_lease(store)
+    heartbeat = {"lease_id": claim["lease_id"], "attempt_id": claim["attempt_id"]}
+
+    ok = processor.process_envelope(CommandEnvelope(
+        command_id="hb1", command_type="heartbeat", payload={**heartbeat, "sequence": 10},
+        idempotency_key="idemp_hb1"))
+    assert ok.status == "SUCCESS"
+
+    replay = processor.process_envelope(CommandEnvelope(
+        command_id="hb2", command_type="heartbeat", payload={**heartbeat, "sequence": 4},
+        idempotency_key="idemp_hb2"))
+    intruder = processor.process_envelope(CommandEnvelope(
+        command_id="hb3", command_type="heartbeat",
+        payload={**heartbeat, "attempt_id": "intruder", "sequence": 99},
+        idempotency_key="idemp_hb3"))
+
+    for receipt in (replay, intruder):
+        assert receipt.status == "ERROR"
+        assert "HEARTBEAT_REJECTED" in receipt.error_message
+
+
+def test_a_transient_inbox_failure_is_retried_not_quarantined(
+    root: pathlib.Path, store: ConductorStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quarantine is for files that cannot be envelopes. A locked database is
+    an environmental fault; quarantining a valid command on it would silently
+    drop the command."""
+    import sqlite3
+
+    envelope = store.inbox_dir / "env_valid.json"
+    envelope.write_text(json.dumps({
+        "command_id": "cmd_valid", "command_type": "status", "payload": {},
+        "idempotency_key": "idemp_valid"}), encoding="utf-8")
+
+    def locked(self, _envelope):  # simulates the environment, not the logic under test
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ConductorCommandProcessor, "process_envelope", locked)
+    _one_daemon_pass(root, monkeypatch)
+
+    assert envelope.exists(), "a valid envelope must stay queued for the next poll"
+    assert not (store.inbox_dir / "quarantine" / "env_valid.json").exists()
+
+
+def test_a_legacy_go_without_an_expiry_expires_ttl_after_issue(store: ConductorStore) -> None:
+    """Records granted before GOs carried an expiry were eternal; only the
+    scope check guarded them. They now expire TTL after they were issued."""
+    from scripts.conductor_model import AUTHORIZATION_TTL_SECONDS
+
+    processor = ConductorCommandProcessor(store=store)
+    work_item_id = _authorized_r2_item(processor)
+    long_ago = datetime.now(timezone.utc) - timedelta(seconds=AUTHORIZATION_TTL_SECONDS + 60)
+    with store._connection() as conn:
+        conn.execute("UPDATE authorizations SET expires_at_utc = NULL, issued_at_utc = ? "
+                     "WHERE work_item_id = ?", (long_ago.isoformat(), work_item_id))
+
+    _claim(processor, work_item_id)
+
+    assert store.get_work_item(work_item_id).state == WorkItemState.HOLD
+    assert _last_reason(store, work_item_id) == ReasonCode.AUTHORIZATION_EXPIRED.value
+
+
+def test_the_gui_accepts_the_py_launcher_it_is_installed_with() -> None:
+    for name in ("py.exe", "pyw.exe", "py", "python.exe", "python3.14.exe"):
+        assert conductor_gui._PYTHON_BINARY.fullmatch(name), name
+    for name in ("cmd.exe", "evil.exe", "python.exe.bat", "pyx.exe"):
+        assert not conductor_gui._PYTHON_BINARY.fullmatch(name), name

@@ -289,7 +289,14 @@ class ConductorCommandProcessor:
             last_heartbeat_utc=now_dt.isoformat(),
         )
 
-        self.store.save_lease(lease)
+        if not self.store.save_lease(lease):
+            # A replayed sequence or another attempt's heartbeat writes nothing.
+            # Reporting success anyway told the real owner its lease had been
+            # extended when it had not, and gave an intruder a green receipt.
+            raise ValueError(
+                "HEARTBEAT_REJECTED: sequence not ahead of the recorded one, "
+                "or the lease belongs to another attempt"
+            )
         return {"lease_id": lease_id, "heartbeat_sequence": sequence, "expires_at_utc": lease.expires_at_utc}
 
     def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:

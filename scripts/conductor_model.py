@@ -6,7 +6,7 @@ All environment variable references use TDCONDUCTOR_* to avoid collision with 3r
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 import uuid
@@ -348,6 +348,19 @@ class AuthorizationRecord:
         return asdict(self)
 
 
+def parse_iso_or_expired(value: object) -> datetime:
+    """Read an ISO timestamp; anything unreadable is treated as already past.
+
+    Shared by lease and authorization expiry so the fail-closed rule cannot
+    drift between them: an unparseable expiry means expired, never eternal.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 # A GO is a decision about a specific scope at a specific time. The backstop TTL
 # bounds how long an unused one can sit; the scope digest is the load-bearing
 # check, because any change to the work item's scope invalidates it at once.
@@ -374,14 +387,18 @@ def authorization_refusal(
     if auth is None or not auth.interactive_provenance_proven:
         return ReasonCode.AUTHORIZATION_MISSING.value
     if auth.expires_at_utc:
-        try:
-            expires = datetime.fromisoformat(str(auth.expires_at_utc).replace("Z", "+00:00"))
-        except ValueError:
-            return ReasonCode.AUTHORIZATION_EXPIRED.value  # unreadable is expired, not eternal
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        if expires <= (now or datetime.now(timezone.utc)):
-            return ReasonCode.AUTHORIZATION_EXPIRED.value
+        expires = parse_iso_or_expired(auth.expires_at_utc)
+    else:
+        # Records granted before GOs carried an expiry. Treating them as
+        # eternal would leave this finding open for the whole existing store,
+        # so they expire TTL after issue. Only unclaimed work is affected: a
+        # claim is checked once, so running work is never interrupted -- stale
+        # READY items go to HOLD and need a fresh GO, which is the point.
+        expires = parse_iso_or_expired(auth.issued_at_utc) + timedelta(
+            seconds=AUTHORIZATION_TTL_SECONDS
+        )
+    if expires <= (now or datetime.now(timezone.utc)):
+        return ReasonCode.AUTHORIZATION_EXPIRED.value
     if auth.scope_digest_sha256 != scope_digest_sha256:
         return ReasonCode.AUTHORIZATION_SCOPE_MISMATCH.value
     return None

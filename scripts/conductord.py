@@ -64,13 +64,16 @@ def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool =
 
                 # Remove inbox file after processing
                 filepath.unlink(missing_ok=True)
-            except Exception as err:
+            except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError) as err:
                 # The file is only unlinked on the success path above, so a
                 # truncated or malformed envelope was re-read on every poll --
                 # one error line per second, forever, with no forward progress
                 # (audit C13). Move it aside so the loop can continue and the
-                # operator still has the evidence.
-                logging.error(f"Error processing inbox file {filepath}: {err}")
+                # operator still has the evidence. Only a file that CANNOT be
+                # an envelope goes here: a sharing violation or a locked
+                # database is transient, and quarantining a valid command on
+                # the first hiccup would silently drop it.
+                logging.error(f"Unprocessable inbox file {filepath}: {err}")
                 try:
                     quarantine = filepath.parent / "quarantine"
                     quarantine.mkdir(parents=True, exist_ok=True)
@@ -78,6 +81,8 @@ def run_coordinator_loop(poll_interval_seconds: float = 1.0, single_pass: bool =
                     logging.error(f"Quarantined unprocessable envelope -> {quarantine / filepath.name}")
                 except OSError as move_err:
                     logging.error(f"Could not quarantine {filepath}: {move_err}")
+            except Exception as err:
+                logging.error(f"Transient error on inbox file {filepath}, will retry: {err}")
 
         # Periodic reconcile. This is the coordinator's own housekeeping, not a
         # command anyone issued, so it does not go through the envelope path:

@@ -1773,10 +1773,15 @@ class ConductorStore:
                 ),
             )
 
-    def save_lease(self, lease: Lease) -> None:
-        """Insert or update Lease."""
+    def save_lease(self, lease: Lease) -> bool:
+        """Insert or update a Lease; True only if a row was written.
+
+        The update is conditional on the same attempt and a strictly higher
+        sequence, so a replayed or foreign heartbeat writes nothing -- and the
+        caller must be told, not left believing its lease was extended.
+        """
         with self._connection() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO leases (
                     lease_id, attempt_id, agent_instance, heartbeat_sequence, expires_at_utc, last_heartbeat_utc, schema_version
@@ -1798,6 +1803,7 @@ class ConductorStore:
                     lease.schema_version,
                 ),
             )
+            return cursor.rowcount == 1
 
     def save_resource_pool(self, pool: HostResourcePool) -> None:
         """Insert or update a host resource pool definition."""

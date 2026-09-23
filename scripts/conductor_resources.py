@@ -25,6 +25,7 @@ from scripts.conductor_model import (
     HostResourceRequest,
     HostResourceRequestState,
     current_utc_iso,
+    parse_iso_or_expired,
 )
 from scripts.conductor_store import ConductorStore
 
@@ -215,15 +216,6 @@ def _now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
-
-
-def _parse_iso(value: str) -> datetime:
-    """Read back an `_iso` timestamp. Unreadable means expired, not eternal."""
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def classify_pytest_invocation(
@@ -496,7 +488,7 @@ class HostResourceManager:
             # fresh expiry, so a lease that had already lapsed could be
             # resurrected indefinitely and the fence never formed (audit C5).
             # The asymmetry was the bug: two paths, one boundary.
-            if row["expires_at_utc"] and _parse_iso(row["expires_at_utc"]) <= now:
+            if row["expires_at_utc"] and parse_iso_or_expired(row["expires_at_utc"]) <= now:
                 raise ResourceAdmissionError("RESOURCE_LEASE_EXPIRED")
             expires = _iso(now + timedelta(seconds=lease_ttl_seconds))
             conn.execute(
@@ -564,15 +556,23 @@ class HostResourceManager:
         """Mark expired resource leases recovery-required; never auto-retry them."""
         now = now or _now()
         now_iso = _iso(now)
-        with self.store._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                """
+        expired_query = """
                 SELECT l.lease_id, l.request_id, r.state FROM host_resource_leases l
                 JOIN host_resource_requests r ON r.request_id = l.request_id
                 WHERE r.state = ? AND l.expires_at_utc < ?
-                """,
-                (HostResourceRequestState.ACTIVE.value, now_iso),
+                """
+        # The daemon calls this every poll. Look first without the write lock:
+        # taking BEGIN IMMEDIATE once a second when nothing has expired only
+        # contends with claims and admissions on the live workstation.
+        with self.store._connection() as conn:
+            if not conn.execute(
+                expired_query, (HostResourceRequestState.ACTIVE.value, now_iso)
+            ).fetchone():
+                return {"expired_count": 0, "request_ids": [], "dry_run": dry_run}
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")  # re-read under the lock: no TOCTOU
+            rows = conn.execute(
+                expired_query, (HostResourceRequestState.ACTIVE.value, now_iso)
             ).fetchall()
             if not dry_run:
                 for row in rows:
@@ -811,6 +811,7 @@ class HostResourceManager:
         stderr = ""
         timed_out = False
         recovery_required = False
+        lease_lost = False
         try:
             process = subprocess.Popen(
                 command,
@@ -863,15 +864,14 @@ class HostResourceManager:
                             self.heartbeat(lease_id, sequence)
                         except Exception:
                             # The lease was fenced or released while our child
-                            # ran. The `finally` below marks recovery, which is
-                            # right for the ledger -- but the pytest process
-                            # would have kept running unattended on the host
-                            # (audit C11). Take the child down with the lease.
+                            # ran; left alone the pytest process kept running
+                            # unattended on the host (audit C11). Take it down.
+                            lease_lost = True
                             try:
                                 process.kill()
                                 process.communicate(timeout=10)
                             except (OSError, subprocess.TimeoutExpired):
-                                pass
+                                recovery_required = True  # death not observed
                             raise
             return {
                 **admission,
@@ -888,6 +888,14 @@ class HostResourceManager:
             # has observed its terminal state.
             if recovery_required or (process is not None and process.poll() is None):
                 self._mark_recovery(request_id, reason="PYTEST_TERMINATION_AMBIGUOUS")
+            elif lease_id and lease_lost:
+                # We killed the child and observed its exit, but the request may
+                # already be fenced -- and `release` refuses RECOVERY_REQUIRED by
+                # design, which would raise from inside this `finally` and mask
+                # the lease-lost error. Release only what is still ours.
+                current = self.store.get_resource_request(request_id)
+                if current is not None and current.state == HostResourceRequestState.ACTIVE:
+                    self.release(request_id, reason="PYTEST_LEASE_LOST")
             elif lease_id:
                 self.release(request_id, reason="PYTEST_TIMEOUT" if timed_out else "PYTEST_COMPLETED")
 

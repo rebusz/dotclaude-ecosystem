@@ -63,7 +63,7 @@ COLOR_DEGRADED_FG = "#76A8C7"
 COLOR_NEUTRAL_BG = "#0F0F12"
 COLOR_CARD_BG = "#17181D"
 COLOR_BORDER = "#343741"
-_PYTHON_BINARY = re.compile(r"python(?:\d+(?:\.\d+)?)?w?(?:\.exe)?", re.IGNORECASE)
+_PYTHON_BINARY = re.compile(r"(?:python(?:\d+(?:\.\d+)?)?w?|pyw?)(?:\.exe)?", re.IGNORECASE)
 
 
 def _conductorctl_command() -> tuple:
