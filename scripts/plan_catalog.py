@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
@@ -211,15 +212,19 @@ def generate(verbose: bool = False) -> str:
     warnings = 0
 
     _progress("parse_start", started, files=len(md_files))
-    for index, f in enumerate(md_files, 1):
-        try:
-            e = parse_plan_frontmatter(f)
-            entries.append(e)
-        except Exception as exc:
-            logging.warning("plan_catalog: skipping %s: %s", f, exc)
-            warnings += 1
-        if index % 100 == 0:
-            _progress("parse_progress", started, scanned=index, entries=len(entries), warnings=warnings)
+    # Bound outstanding reads while retaining discovery order and per-file faults.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for offset in range(0, len(md_files), 256):
+            batch = md_files[offset:offset + 256]
+            futures = [pool.submit(parse_plan_frontmatter, path) for path in batch]
+            for index, (path, future) in enumerate(zip(batch, futures), offset + 1):
+                try:
+                    entries.append(future.result())
+                except Exception as exc:
+                    logging.warning("plan_catalog: skipping %s: %s", path, exc)
+                    warnings += 1
+                if index % 100 == 0:
+                    _progress("parse_progress", started, scanned=index, entries=len(entries), warnings=warnings)
     _progress("parse_done", started, scanned=len(md_files), entries=len(entries), warnings=warnings)
     _progress("render_start", started, entries=len(entries))
 

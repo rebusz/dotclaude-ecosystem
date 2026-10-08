@@ -138,6 +138,29 @@ class CatalogDiagnosticsTests(unittest.TestCase):
         self.assertIn("scanned=3 entries=3 warnings=0", stderr.getvalue())
         self.assertNotIn("wrote ", stderr.getvalue())
 
+    def test_parallel_scan_preserves_order_and_continues_after_disappeared_file(self):
+        for index in range(275):
+            self.plan(f"2026-10-01_{index:03}.md", f"# Plan {index:03}\n")
+        paths = catalog.walk_repos(catalog.discover_repos(str(self.base)))
+        vanished = paths[130]
+        original_walk = catalog.walk_repos
+
+        def disappear(repos):
+            found = original_walk(repos)
+            vanished.unlink()
+            return found
+
+        stderr = io.StringIO()
+        with mock.patch.object(catalog, "BASE", str(self.base)), mock.patch.object(catalog, "walk_repos", disappear), contextlib.redirect_stderr(stderr), self.assertLogs(level="WARNING") as logs:
+            content = catalog.generate()
+        self.assertIn("274 plans, 0 audits across 1 repos", content)
+        expected_titles = ["[Plan " + path.stem.rsplit("_", 1)[1] + "]" for path in paths if path != vanished]
+        positions = [content.index(title) for title in expected_titles]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("[Plan " + vanished.stem.rsplit("_", 1)[1] + "]", content)
+        self.assertEqual(sum("skipping" in line for line in logs.output), 1)
+        self.assertIn("scanned=275 entries=274 warnings=1", stderr.getvalue())
+
     def test_publication_failure_preserves_last_valid_and_never_claims_wrote(self):
         output = self.base / "PLANS.md"
         output.write_text("last valid", encoding="utf-8")
