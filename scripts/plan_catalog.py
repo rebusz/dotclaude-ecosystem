@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
@@ -55,13 +56,17 @@ def _date_from_filename(path: Path) -> str:
     return m.group() if m else ""
 
 
-def _date_from_body(path: Path) -> str:
+def _read_fallback_body(path: Path) -> str:
     try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-        m = _BODY_DATE_RE.search(text)
-        return m.group(1) if m else ""
+        return path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ""
+
+
+def _date_from_body(path: Path, *, text: str | None = None) -> str:
+    text = _read_fallback_body(path) if text is None else text
+    m = _BODY_DATE_RE.search(text)
+    return m.group(1) if m else ""
 
 
 def _date_from_mtime(path: Path) -> str:
@@ -71,13 +76,10 @@ def _date_from_mtime(path: Path) -> str:
         return date.today().isoformat()
 
 
-def _h1_title(path: Path) -> str:
-    try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-        m = _H1_RE.search(text)
-        return _strip_md(m.group(1)) if m else ""
-    except OSError:
-        return ""
+def _h1_title(path: Path, *, text: str | None = None) -> str:
+    text = _read_fallback_body(path) if text is None else text
+    m = _H1_RE.search(text)
+    return _strip_md(m.group(1)) if m else ""
 
 
 def _file_uri(path: Path) -> str:
@@ -101,12 +103,18 @@ def parse_plan_frontmatter(path: Path) -> PlanEntry:
     raw = parse_yaml_block(path)
     has_fm = bool(raw)
 
-    title = raw.get("title", "") or _h1_title(path) or _slugify(path.stem)
-    title = _strip_md(str(title))
-
+    title = raw.get("title", "")
     date_str = str(raw.get("date", ""))
-    if not _DATE_RE.fullmatch(date_str):
-        date_str = _date_from_filename(path) or _date_from_body(path) or _date_from_mtime(path)
+    date_valid = bool(_DATE_RE.fullmatch(date_str))
+    filename_date = "" if date_valid else _date_from_filename(path)
+    # Header parsing remains strict and bounded. Only the body fallback is shared.
+    body = None
+    if not title or (not date_valid and not filename_date):
+        body = _read_fallback_body(path)
+    title = title or _h1_title(path, text=body) or _slugify(path.stem)
+    title = _strip_md(str(title))
+    if not date_valid:
+        date_str = filename_date or _date_from_body(path, text=body) or _date_from_mtime(path)
 
     raw_status = str(raw.get("status", "")).strip().lower()
     status = raw_status if raw_status in VALID_STATUSES else "unknown"
@@ -174,30 +182,46 @@ def _render_section(title: str, entries: list[PlanEntry]) -> str:
     return "\n".join(lines)
 
 
+def _progress(phase: str, started: float, **counts: int) -> None:
+    fields = " ".join(f"{key}={value}" for key, value in counts.items())
+    print(f"[plan_catalog] phase={phase} elapsed_s={time.monotonic() - started:.6f} {fields}".rstrip(),
+          file=sys.stderr, flush=True)
+
+
 def generate(verbose: bool = False) -> str:
+    started = time.monotonic()
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _progress("discovery_start", started)
     try:
         repos = discover_repos(BASE)
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    _progress("discovery_done", started, repos=len(repos))
     if verbose:
         print(f"[plan_catalog] discovered {len(repos)} repos:", file=sys.stderr)
         for r in repos:
             print(f"  {r}", file=sys.stderr)
 
+    _progress("walk_start", started, repos=len(repos))
     md_files = walk_repos(repos)
+    _progress("walk_done", started, repos=len(repos), files=len(md_files))
     entries: list[PlanEntry] = []
     warnings = 0
 
-    for f in md_files:
+    _progress("parse_start", started, files=len(md_files))
+    for index, f in enumerate(md_files, 1):
         try:
             e = parse_plan_frontmatter(f)
             entries.append(e)
         except Exception as exc:
             logging.warning("plan_catalog: skipping %s: %s", f, exc)
             warnings += 1
+        if index % 100 == 0:
+            _progress("parse_progress", started, scanned=index, entries=len(entries), warnings=warnings)
+    _progress("parse_done", started, scanned=len(md_files), entries=len(entries), warnings=warnings)
+    _progress("render_start", started, entries=len(entries))
 
     plans = [e for e in entries if not e["is_audit"]]
     audits = [e for e in entries if e["is_audit"]]
@@ -264,16 +288,21 @@ def generate(verbose: bool = False) -> str:
     content = "\n".join(lines) + "\n"
     print(
         f"[plan_catalog] scanned {n_repos} repos | {n_plans} plans | {n_audits} audits "
-        f"| {warnings} warnings | wrote {OUTPUT}",
-        file=sys.stderr,
+        f"| {warnings} warnings | rendered",
+        file=sys.stderr, flush=True,
     )
+    _progress("render_done", started, chars=len(content), plans=n_plans, audits=n_audits)
     return content
 
 
 def write_output(path: Path, content: str) -> None:
+    started = time.monotonic()
+    _progress("publication_start", started, chars=len(content))
     tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
     tmp.write_text(content, encoding="utf-8", newline="\n")
     os.replace(tmp, path)
+    _progress("publication_done", started, chars=len(content))
+    print(f"[plan_catalog] wrote {path}", file=sys.stderr, flush=True)
 
 
 def main() -> None:
