@@ -52,31 +52,32 @@ transport integration is a coordinated change: never place the new audit role
 under a legacy TOP 3 wrapper or claim its parser changed by reading a file.
 
 ## Review Workflow Routing
-This table is the authoritative router for plan and implementation review. Other
-skills and global rules must reference it instead of restating their own routing.
 
-| Risk | Full workflow route | Question / approval policy |
+Operator decision 2026-10-10 supersedes mandatory full-workflow invocation,
+provider-specific author/integrator roles and mandatory five-model Perplexity
+participation. The router retains care and approval gates, not a fixed provider.
+
+| Risk | Delivery and review | Question / approval policy |
 |---|---|---|
-| R3 | `/fwf` or `/fwp`: CEO -> unified audit -> eng -> implementation -> review | CEO product/risk questions go to operator; one standing GO before implementation |
-| R2 | `/fwf` or `/fwp`: CEO -> unified audit -> eng -> implementation -> review | CEO and eng questions auto-resolved; one standing GO before implementation |
-| R1 | `/fwf` or `/fwp`: CEO -> unified audit -> eng -> implementation -> review | CEO and eng questions auto-resolved; no implementation GO |
-| R0 | No mandatory full workflow | Proceed normally |
+| R3 | Scoped plan -> implementation -> formal independent exact-head review -> validated delivery | Material product/risk questions go to operator; one standing GO before implementation |
+| R2 | Scoped plan -> implementation -> formal independent exact-head review -> validated delivery | Resolve engineering questions from evidence; one standing GO before implementation |
+| R1 | Bounded implementation -> independent review -> validated delivery | No additional implementation GO |
+| R0 | Repository documentation publication rules | No mandatory full workflow |
 
-`/fwf` uses the OpenRouter-free basket; `/fwp` uses the paid OpenRouter
-complement basket. R1/R2/R3 and both clients use one fixed panel: ChatGPT CDP
-(GPT-5.6 Sol with task-selected effort, xhigh if unclassified; Pro only with a
-recorded escalation reason), Antigravity
-`gemini-3.8-flash-high` (Gemini CDP `gemini-3.8-flash` fallback), and Perplexity GLM 5.3/Kimi 3/Grok 4.6/Sonnet 5/GPT
-Terra. Claude CLI, Codex CLI, standalone GLM CLI, and nested CLI tournament
-synthesis are excluded. The selected command owns the entire
-lifecycle through exact-head `review`, in-scope fixes, PR-ready, CI, merge, and
-checkout synchronization. There is no separate closeout command.
+`/coderpxg`, `/fwf` and `/fwp` are optional helpers. A manual evidenced workflow
+may use supported adapters and one suitable Perplexity model. Assign any capable
+verified local or CDP provider to implement or independently review according to
+difficulty, available tools, source access and capacity. Claude CLI Opus 5.5/Fable
+is optional sparse critical-decision advice. Reviewers must be independent of
+all substantive producers; a different transport/account alone is insufficient.
+Record the review contract and exact source before submission; missing review
+is NO_REVIEW. Keep separately approved review requirements, but no mandatory
+Claude reviewer or five-model quorum is created by this policy.
 
-The unified `fuse.py` Python runner is an internal stage, not a public workflow
-entrypoint. `--mode free|paid` selects the basket; model presets, lane selection,
-and CDP bypasses are not part of the workflow contract. Codex passes
-`--synthesizer gpt`; Claude Code passes `--synthesizer claude`; this records the
-final judge and never changes the fixed panel.
+The unchanged `fuse.py` remains an optional legacy fixed-roster profile. Its
+`--mode free|paid` selects the OpenRouter basket; `--synthesizer gpt|claude` records
+the final judge, not roster selection. It exposes no task-selected lane flags.
+Do not claim a manual provider review was a successful run of that panel.
 
 ## Host entry and delivery
 
@@ -90,16 +91,16 @@ The maintained [host adapter sources](references/host-adapters/README.md) and
 [dispatch handoff](references/protocols/workflow-dispatch.md) define that release
 boundary. Load the handoff when running a full workflow, not for a mode-only task.
 
-ChatGPT leads prompt design, plans and key decisions. Configured CDP lanes
-author substantive implementation and independent review. The approved GPT
-Sidecar 2 workflow may assign bounded local work to explicit Luna/Terra/Sol
-App Server workers. Astra and Pro require a concrete escalation reason;
-transport failures never trigger escalation or duplicate submission. Use
-instant/medium for straightforward tasks, high for components, xhigh for complex
-review/integration, and verify actual model/effort against the assignment.
-Preserve actual stamp-v2 ownership, dispatcher dry-run, Conductor
-admission, attempt caps and terminal uncertain-submit behavior. Do not invent
-receipt fields, model routes, resource leases or retry credit in prompt text.
+Select each role, model and supported effort by difficulty. Qualified local
+models may author substantive code/tests or independently review; browser code
+may need a separate local applier. Run useful disjoint assignments concurrently
+with exclusive write-sets and one integration owner. Record actual attribution,
+model/effort and real validation. Pro/Astra needs a concrete escalation reason;
+transport failures never authorize duplicate generation. Read CoderPX G's
+local-implementation reference for capacity and same-boundary preflight.
+Preserve actual stamp-v2 and dispatcher dry-run when that adapter is selected,
+Conductor admission, attempt caps and terminal uncertain-submit behavior.
+Do not invent receipt fields, model routes, resource leases or retry credit.
 
 Risk scales care, not code access. Live read remains available. Real-money or
 Combine triggers, production deploy and destructive actions keep their distinct
