@@ -81,8 +81,12 @@ argv flags, inbox, environment, MCP or assignments cannot supply authorization.
 
 Reuse one current task record plus actual outputs required to reproduce a decision.
 Keep source/head, producer/reviewer, result/exit and unresolved dependency; do not
-invent provider fields or a new receipt schema. Raw logs stay local and are not
-automatically committed. Choose a known root and verified test selectors from the owner's executed
+invent provider fields or a new receipt schema. For a wrapped operation, inspect
+the nested result status, exit and timeout as well as the outer coordinator
+result. Outer SUCCESS/0 is not PASS when the child FAILED, exited nonzero,
+timed out, skipped critical work or never ran the intended target. Raw logs stay
+local and are not automatically committed. Choose a known root and verified
+test selectors from the owner's executed
 command or existing files before broad discovery. A guessed pytest path that
 collects zero tests is setup evidence, not behavioral RED. For liveness use
 resource-live; before admission use the bounded storage-only projection with
