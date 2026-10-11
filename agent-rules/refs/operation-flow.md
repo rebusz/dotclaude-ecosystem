@@ -12,6 +12,17 @@ means an unresolved native prompt, not refusal or SUBMIT_UNCONFIRMED. Point to t
 prompt once (operation, scope, session/attempt); resume only after its actual result.
 Do not create a duplicate prompt or change executor/shell to evade it.
 
+Before unattended dispatch, inspect the selected worker's effective session
+approval policy, sandbox writable roots, network access and needed tools
+against the exact owned write-set and external calls. A parent's profile,
+global config and standing business GO are not worker permissions. If access
+is insufficient, hold only that operation and name its release condition.
+Ask once for the exact application profile change when needed; do not
+replay denied commands or switch workers to evade a refusal. An actual
+pending native prompt is WAITING_APPROVAL, never RUNNING; a profile gap
+without a prompt is BLOCKED. Continue qualified disjoint work and verify
+the new effective profile before resuming the dependent operation.
+
 | Observation | Dependent operation | Independent authorized work |
 |---|---|---|
 | Policy/permission denial, ACL/sandbox/GPO restriction | Stop; use only the legitimate approval route if offered. No bypass or weakened policy | Continue outside that denied operation and its dependencies |
