@@ -99,8 +99,12 @@ timed out, skipped critical work or never ran the intended target. Raw logs stay
 local and are not automatically committed. Choose a known root and verified
 test selectors from the owner's executed
 command or existing files before broad discovery. A guessed pytest path that
-collects zero tests is setup evidence, not behavioral RED. For liveness use
-resource-live; before admission use the bounded storage-only projection with
+collects zero tests is setup evidence, not behavioral RED. For an ordered
+pytest pair, retain requested/observed node IDs, numeric seed, -vv stdout and
+native result; run scripts/pytest_order_evidence.py --receipt <attempt.json>.
+Missing order or seed stays UNKNOWN, never inferred from quiet progress or a
+later attempt. For liveness use resource-live; before admission use the bounded
+storage-only projection with
 its actual exit code, not a full resource-status ledger. Capture large
 inventories, parse, filter by owned scope, then project total_count and
 relevant identities/status. In a large shared checkout, check tracked conflicts
