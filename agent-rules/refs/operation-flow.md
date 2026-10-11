@@ -88,7 +88,11 @@ collects zero tests is setup evidence, not behavioral RED. For liveness use
 resource-live; before admission use the bounded storage-only projection with
 its actual exit code, not a full resource-status ledger. Capture large
 inventories, parse, filter by owned scope, then project total_count and
-relevant identities/status. Never dump environment
+relevant identities/status. In a large shared checkout, check tracked conflicts
+with `git status --short --untracked-files=no` and explicit intended paths; do not
+walk unrelated untracked directories or retry denied paths. Preserve Git porcelain
+status columns when parsing (`--porcelain -z` is preferable); never strip leading
+whitespace before interpreting a status row. Never dump environment
 variables or credentials. No repeated whole Conductor status/log scans.
 
 Read repository/Git text as UTF-8 strict and configure stdout explicitly when
