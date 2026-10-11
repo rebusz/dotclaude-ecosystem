@@ -94,3 +94,5 @@ Run the plan post-hook and report actual changes, test exits, review, PR/SHA,
 remaining gates and attribution. When dispatch.py was used, retain its generated
 ownership ledger; otherwise report actual supported provider/task receipts
 without inventing dispatcher records.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

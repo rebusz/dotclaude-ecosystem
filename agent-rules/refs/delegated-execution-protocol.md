@@ -20,11 +20,11 @@ emergency-off. Direct-push is exactly how a broken R3 change reaches live practi
    persistence contracts, live-decision state. These land: branch off `origin/main` -> implement
    scope only -> real tests -> **draft PR** (`gh pr create --draft`) -> notify for exact-head
    review -> fix SHIP-BLOCKING findings -> `gh pr ready` -> squash-merge -> fast-forward the
-   operator's main checkout. **Never `git push` to `main` and never self-merge an R2/R3 change.**
+   operator's main checkout. **Never `git push` to `main` and never self-clear an R2/R3 change. The designated delivery owner may merge after independent review and required CI; author approval alone is insufficient.**
    Direct-push is allowed ONLY for R0 docs / CI-ignored paths (`design/**`, `*.md`).
 
 2. **Can't-open-PR fallback.** A platform whose harness cannot open a PR itself stops at a
-   **pushed branch** and hands off the branch/SHA for a human or Claude to open the draft PR and
+   **pushed branch** and hands off the branch/SHA for the authorized delivery owner to open the draft PR and
    run the gate. It must NOT merge or push to `main`, and must NOT fast-forward the operator's
    main checkout.
 

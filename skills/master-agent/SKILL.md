@@ -117,3 +117,5 @@ plan changes run plan_context_updater.py on the owner plan. Retain the required
 EPILOG_PAYLOAD: start_sha, end_sha, plan_path, committed, resolved_ideas.
 Complete the authorized lifecycle while preserving foreign changes; stop only
 at a real unresolved boundary or failed prerequisite.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

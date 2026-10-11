@@ -1,5 +1,14 @@
 # Idea Box - dotclaude-ecosystem
 
+## Active improvements
+
+- [P1] **mistake-repair-prevention-supervisor-flow** — implemented rule candidate in
+  `agent-rules/refs/operation-flow.md` and core: distinct validated repair and
+  recurrence prevention, existing custody, next-ready independent work. Plan:
+  `design/plans/2026-10-10_agents_modernization_r0.md`. Completion requires real
+  behavioral exercise, independent review and installed readback; proposal alone
+  is not closure.
+
 ## New Modules
 
 - ✅ **DONE (2026-08-04, PR #69 → `7cae806`)** — shipped as

@@ -31,7 +31,9 @@ A browser model can author concrete code/patches; if its adapter cannot access
 the local tree, assign local application and real validation separately. Local
 models may author substantive behavior and tests; no mandatory cloud-return loop
 or prior cloud failure is required. Attribute author, applier, material local
-edits and reviewer honestly. The conductor owns scope, custody and delivery.
+edits and reviewer honestly. The designated conductor owns only the assigned package and stages. Additional
+evidence does not transfer another owner's implementation/review/CI/landing;
+retain explicit transfer evidence before adopting them.
 
 ## Useful concurrency and review
 
@@ -69,6 +71,9 @@ substitute. Never widen root permissions, ACLs or sandbox to force a pass.
 Use exact source SHA and permitted source context. Verify connector access for
 GitHub-pointer tasks; do not paste connector-available source unnecessarily.
 Reject secrets and unrelated account information before external publication.
+Never send Tsignal/confidential source, secrets, account data or global AGENTS.md
+to the response-only Space Bunny/OpenRouter lane; preserve recipient-specific
+source restrictions and existing scoped exceptions.
 Record supported receipts, local diff and real test exits. Do not fabricate
 provider execution, requested/actual identity, evidence fields or test success.
 
@@ -79,6 +84,18 @@ pre-submit blocker permits an authorized qualified alternative without another
 scope GO; it never resets caps or bypasses a refusal. The current Codex session
 may perform an authorized bounded slice, but cannot relabel its work as another
 model or self-clear review.
+
+## Local blocks and mistake recovery
+
+Read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md`
+when coordinating dependencies or recovering a failure. A pending permission
+prompt, provider failure or missing review stops only its dependent operation.
+Standing scoped GO includes ordinary setup repair; actual refusals and uncertain
+submissions cannot be bypassed. Advance the next ready independent package.
+For a recognized mistake, retain separate validated repair and recurrence-
+prevention results under the existing owners/attempts. Additional evidence does
+not transfer another owner's implementation or landing rights. Status-only work
+is not progress; keep evidence bounded and use the existing record.
 
 ## Capacity and accounts
 
@@ -113,3 +130,23 @@ installed reference is `C:/Users/dszub/.codex/skills/coderpxG/references/local-i
 Install exact owned files with hash readback; no service restart, account switch
 or resubmission is needed to refresh instructions. Drafts and installed policy
 are separate states; this text installs no quota API or automatic scheduler.
+
+## Astra and operation effects
+
+Astra is for authored planning or a bounded, supervised critical decision only.
+It needs an explicit reason, read-only tool capability and empty implementation
+write-set. It is unavailable for implementation, integration, tests, monitoring,
+routine research/readback and routine review, including native spawn, Sidecar,
+CLI and browser routes. Each leaf has explicit model and supported effort; do
+not inherit an Astra parent or select it through default, Pro, Best, alias or
+fallback. Actual identity is read back from the qualified adapter. The current
+host's policy text is CONTEXT_ONLY unless its entrypoint enforces this before
+submit; do not claim unattended qualification from instructions alone.
+
+Classify status/lookup/collect from the adapter implementation. Collect may
+spawn a recovery process or call thread/resume; it is not pure readback by name.
+Any such side effect needs current owner/window/cap/resource admission, including
+after host restart. Keep a separate pure persisted-output projection when needed.
+Incident keys and caps persist across sessions and windows. Source commit,
+installed target, enforced dispatch and fresh-session behavior have separate
+evidence; install shared rules only after qualified quiescence and migration.

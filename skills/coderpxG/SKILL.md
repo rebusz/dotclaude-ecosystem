@@ -48,3 +48,5 @@ creating duplicate attempts or another delivery owner.
 Read provider quota where supported; missing telemetry stays UNKNOWN. Operator
 accounts are not automatically rotated. `/model-team` forwards the existing task,
 plan, scope and stage once; it does not reset receipts or own another closeout.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

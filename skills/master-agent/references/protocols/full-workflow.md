@@ -130,3 +130,5 @@ produkcyjnego parsera przez samo wykonanie instrukcji tekstowej.
 Nie dodawać osobnego full workflow, nowego executor CLI, obowiązkowego
 ARCHITECT/QUANT/TDD do każdej zmiany ani niezależnego cyklu `/autoplan` wewnątrz
 `/fwf`. Pomocnicze role zwracają wynik do właściciela aktualnego etapu.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

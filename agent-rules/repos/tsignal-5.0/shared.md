@@ -71,7 +71,7 @@ those platforms do not read this file.
 
 - R2/R3 code (order path, broker submit/arming, runtime, persistence,
   live-decision) lands via DRAFT PR + review gate: never direct-push to `main`,
-  never self-merge. Direct-push is for R0 docs and CI-ignored paths only.
+  never self-clear. The delivery owner merges only after independent review and required CI. Direct-push is for R0 docs and CI-ignored paths only.
 - Tests drive the REAL code path including the failure/rollback branch — no
   mocked event loop skipping the broker submit, no fixture faking
   restart-adoption, no test against a disabled path. Persistence/restart DoD is

@@ -9,9 +9,9 @@
 
 ## Claude-Only Routing
 
-- Operator decision 2026-10-10 makes `/coderpxg`, `/fwf` and `/fwp` optional. Use task-selected verified providers and supported model/effort for implementation or independent review; one Perplexity model is allowed. Claude CLI Opus 5.5/Fable is optional sparse critical-decision advice. Preserve source custody, nonself exact-head review and self-hosted CI. If the legacy `fuse.py` profile is selected, its fixed panel remains unchanged and `--synthesizer claude` records final-judge provenance only.
+- Core and the current CoderPX reference own provider selection. Explicit mode/helper requests use master-agent. The optional legacy fuse runner uses `--synthesizer claude` as provenance only.
 - `.claude/rules` = path-scoped lazy rules; `.claude/refs` = trigger-loaded procedures.
-- For cross-file impact, use actual `code-review-graph` MCP tools; never assume stale names (`get_impact_radius`, `query_graph`, `semantic_search_nodes`). If the needed operation is absent or the graph stale, run `uvx code-review-graph update --repo <repo>` then `uvx code-review-graph status --repo <repo>` before narrow `rg` fallback.
+- For cross-file impact, use actual `code-review-graph` MCP tools; never assume stale names (`get_impact_radius`, `query_graph`, `semantic_search_nodes`). If the needed operation is absent or the graph stale, refresh it when useful; otherwise state the limitation and use narrow `rg` fallback.
 
 ## Silence Policy
 
