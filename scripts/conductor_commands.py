@@ -335,6 +335,11 @@ class ConductorCommandProcessor:
             reason=payload.get("reason", "RESOURCE_RELEASED"),
         )
 
+    def _handle_resource_uncertain(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.mark_uncertain(
+            payload["request_id"], attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"], reason=payload["reason"])
+
     def _handle_resource_recover(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Clear one RECOVERY_REQUIRED request once its owner is proven gone."""
         return self.resources.recover(

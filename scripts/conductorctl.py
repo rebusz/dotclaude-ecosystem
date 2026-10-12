@@ -19,6 +19,7 @@ if str(_repo_root) not in sys.path:
 
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
+from scripts.conductor_resources import PROVIDER_SOURCES  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
     read_all_pools_live,
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_request.add_argument(
         "--purpose",
         choices=[
+            *(f"provider_{source}" for source in sorted(PROVIDER_SOURCES)),
             "pytest_full",
             "pytest_heavy",
             "pytest_focused",
@@ -111,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_resource_release = subparsers.add_parser("resource-release", help="Release a host resource request")
     p_resource_release.add_argument("--request-id", required=True)
+
+    p_resource_uncertain = subparsers.add_parser("resource-uncertain", help="Retain an uncertain provider attempt")
+    p_resource_uncertain.add_argument("--request-id", required=True)
+    p_resource_uncertain.add_argument("--attempt-id", required=True)
+    p_resource_uncertain.add_argument("--agent-instance", required=True)
+    p_resource_uncertain.add_argument("--reason", required=True)
 
     p_resource_recover = subparsers.add_parser(
         "resource-recover",
@@ -327,6 +335,16 @@ def main(argv: list[str] | None = None) -> int:
         receipt = processor.process_envelope(envelope)
         print(json.dumps(receipt.to_dict(), indent=2))
         return 0
+
+    elif args.command == "resource-uncertain":
+        envelope = CommandEnvelope(
+            command_id=f"cmd_{uuid.uuid4().hex[:12]}", command_type="resource_uncertain",
+            payload={"request_id": args.request_id, "attempt_id": args.attempt_id,
+                     "agent_instance": args.agent_instance, "reason": args.reason},
+            idempotency_key=f"idemp_resource_uncertain_{uuid.uuid4().hex[:8]}")
+        receipt = processor.process_envelope(envelope)
+        print(json.dumps(receipt.to_dict(), indent=2))
+        return 0 if receipt.status == "SUCCESS" else 1
 
     elif args.command == "resource-release":
         envelope = CommandEnvelope(
