@@ -647,6 +647,11 @@ class HostResourceManager:
                 raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_FOUND")
             if row["state"] != HostResourceRequestState.RECOVERY_REQUIRED.value:
                 raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_RECOVERABLE")
+            retained_provider = row["resource_key"] in PROVIDER_SOURCE_BY_POOL
+            if retained_provider and not (operator_attestation and reason.strip()):
+                # A dead local wrapper is not evidence that a remote provider
+                # stopped. Every provider hold requires explicit native evidence.
+                raise ResourceAdmissionError("RETAINED_PROVIDER_TERMINAL_UNPROVEN")
 
             lease_row = conn.execute(
                 "SELECT * FROM host_resource_leases WHERE request_id = ?", (request_id,)
@@ -678,7 +683,10 @@ class HostResourceManager:
                     raise ValueError("operator attestation requires a reason")
                 evidence = "OPERATOR_ATTESTED"
 
-            reason_code = "RECOVERY_ATTESTED" if evidence == "OPERATOR_ATTESTED" else "RECOVERY_OWNER_GONE"
+            if retained_provider:
+                evidence = "OPERATOR_PROVIDER_TERMINAL_ATTESTED"
+            attested = evidence in {"OPERATOR_ATTESTED", "OPERATOR_PROVIDER_TERMINAL_ATTESTED"}
+            reason_code = "RECOVERY_ATTESTED" if attested else "RECOVERY_OWNER_GONE"
             conn.execute(
                 "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
                 (HostResourceRequestState.RELEASED.value, current_utc_iso(), reason_code, request_id),
@@ -702,7 +710,7 @@ class HostResourceManager:
                 "request_id": request_id,
                 "status": "RECOVERED",
                 "evidence": evidence,
-                "attested": evidence == "OPERATOR_ATTESTED",
+                "attested": attested,
                 "promoted": promoted,
             }
 
@@ -1001,6 +1009,92 @@ class HostResourceManager:
         if pinned is not None and pinned.startswith("cdp:") and resource_key != pinned:
             raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
 
+    def retain_observed_attempt(
+        self, *, observation_key: str, original_owner: str, evidence_ref: str,
+        evidence_sha256: str, actor: str, native_attempt_id: Optional[str] = None,
+        existing_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Import trusted uncertainty into the existing resource journal.
+
+        This is a capacity hold, never a grant or a native submission. Unknown
+        native identity stays unknown; the synthetic observation identity is
+        explicitly labeled. An exact existing request is fenced in place,
+        including a request incorrectly released by an older provider wrapper.
+        The trusted caller must preserve a stable observation key and evidence.
+        """
+        source = PROVIDER_SOURCE_BY_POOL.get(self.resource_key)
+        if self.resource_key not in PROVIDER_POOLS:
+            raise ResourceAdmissionError("RETAINED_PROVIDER_SOURCE_REQUIRED")
+        for value in (observation_key, original_owner, evidence_ref, actor):
+            if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+                raise ValueError("retained observation needs bounded identity and evidence references")
+        if not isinstance(evidence_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+            raise ValueError("retained observation requires exact evidence SHA256")
+        if native_attempt_id is not None and (not isinstance(native_attempt_id, str)
+                or not native_attempt_id.strip() or len(native_attempt_id) > 4096
+                or native_attempt_id.startswith("unbound-observation:")):
+            raise ValueError("native attempt identity must be supplied only when verified")
+        if existing_request_id is not None and not native_attempt_id:
+            raise ValueError("binding an existing request requires its verified attempt identity")
+        payload = {"source": source, "observation_key": observation_key,
+                   "original_owner": original_owner, "evidence_ref": evidence_ref,
+                   "evidence_sha256": evidence_sha256, "native_attempt_id": native_attempt_id,
+                   "existing_request_id": existing_request_id}
+        observation_id = hashlib.sha256((source + "\0" + observation_key).encode()).hexdigest()
+        event_id = "hre_observed_" + observation_id
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute("SELECT request_id,details_json FROM host_resource_events WHERE event_id=?",
+                                    (event_id,)).fetchone()
+            if previous is not None:
+                if json.loads(previous["details_json"]) != payload:
+                    raise ResourceAdmissionError("RETAINED_OBSERVATION_DRIFT")
+                row = conn.execute("SELECT * FROM host_resource_requests WHERE request_id=?",
+                                   (previous["request_id"],)).fetchone()
+                return self._request_result(conn, self.store._row_to_resource_request(row), replayed=True)
+            row = None
+            if existing_request_id is not None:
+                row = conn.execute("SELECT * FROM host_resource_requests WHERE request_id=?",
+                                   (existing_request_id,)).fetchone()
+                if (row is None or row["attempt_id"] != native_attempt_id
+                        or row["agent_instance"] != original_owner
+                        or PROVIDER_SOURCE_BY_POOL.get(row["resource_key"]) != source):
+                    raise ResourceAdmissionError("RETAINED_REQUEST_IDENTITY_MISMATCH")
+            elif native_attempt_id is not None:
+                matches = [r for r in conn.execute(
+                    "SELECT * FROM host_resource_requests WHERE attempt_id=? AND agent_instance=?",
+                    (native_attempt_id, original_owner)).fetchall()
+                    if PROVIDER_SOURCE_BY_POOL.get(r["resource_key"]) == source]
+                if len(matches) > 1:
+                    raise ResourceAdmissionError("RETAINED_ATTEMPT_AMBIGUOUS")
+                row = matches[0] if matches else None
+            if row is None:
+                request = HostResourceRequest(
+                    request_id="rr_" + uuid.uuid4().hex[:12],
+                    idempotency_key="retained_observation:" + observation_id,
+                    resource_key="provider:" + source, purpose="provider_" + source,
+                    attempt_id=native_attempt_id or "unbound-observation:" + observation_id,
+                    agent_instance=original_owner, state=HostResourceRequestState.RECOVERY_REQUIRED,
+                    reason_code="PROVIDER_RETAINED_ATTEMPT", command_sha256=evidence_sha256)
+                self._insert_request(conn, request)
+                old_state = None
+                lease_id = None  # Imported uncertainty grants no execution lease.
+            else:
+                if row["state"] not in {"ACTIVE", "INHERITED", "RELEASED", "RECOVERY_REQUIRED"}:
+                    raise ResourceAdmissionError("RETAINED_REQUEST_STATE_UNQUALIFIED")
+                request = self.store._row_to_resource_request(row)
+                old_state = row["state"]
+                conn.execute("UPDATE host_resource_requests SET state=?,reason_code=? WHERE request_id=?",
+                             ("RECOVERY_REQUIRED", "PROVIDER_RETAINED_ATTEMPT", request.request_id))
+                lease = conn.execute("SELECT lease_id FROM host_resource_leases WHERE request_id=?",
+                                     (request.request_id,)).fetchone()
+                lease_id = lease[0] if lease else row["parent_lease_id"]
+                request.state = HostResourceRequestState.RECOVERY_REQUIRED
+                request.reason_code = "PROVIDER_RETAINED_ATTEMPT"
+            self._event(conn, request.request_id, lease_id, old_state, "RECOVERY_REQUIRED",
+                        actor, "PROVIDER_RETAINED_ATTEMPT", details=payload, event_id=event_id)
+            return self._request_result(conn, request)
+
     def mark_uncertain(self, request_id: str, *, attempt_id: str,
                        agent_instance: str, reason: str) -> Dict[str, Any]:
         """Fence the same provider attempt without release or replacement."""
@@ -1210,6 +1304,7 @@ class HostResourceManager:
         actor: str,
         reason: str,
         details: Optional[Mapping[str, Any]] = None,
+        event_id: Optional[str] = None,
     ) -> None:
         conn.execute(
             """
@@ -1219,7 +1314,7 @@ class HostResourceManager:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                f"hre_{uuid.uuid4().hex[:12]}",
+                event_id or f"hre_{uuid.uuid4().hex[:12]}",
                 request_id,
                 lease_id,
                 previous,
