@@ -120,6 +120,16 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_uncertain.add_argument("--agent-instance", required=True)
     p_resource_uncertain.add_argument("--reason", required=True)
 
+    p_resource_retain = subparsers.add_parser("resource-retain-observed", help="Retain a trusted historical provider attempt; no launch")
+    p_resource_retain.add_argument("--source", choices=sorted(PROVIDER_SOURCES), required=True)
+    p_resource_retain.add_argument("--observation-key", required=True)
+    p_resource_retain.add_argument("--original-owner", required=True)
+    p_resource_retain.add_argument("--evidence-ref", required=True)
+    p_resource_retain.add_argument("--evidence-sha256", required=True)
+    p_resource_retain.add_argument("--actor", required=True)
+    p_resource_retain.add_argument("--native-attempt-id")
+    p_resource_retain.add_argument("--existing-request-id")
+
     p_resource_recover = subparsers.add_parser(
         "resource-recover",
         help="Clear a RECOVERY_REQUIRED host resource request once its owner is proven gone",
@@ -335,6 +345,18 @@ def main(argv: list[str] | None = None) -> int:
         receipt = processor.process_envelope(envelope)
         print(json.dumps(receipt.to_dict(), indent=2))
         return 0
+
+    elif args.command == "resource-retain-observed":
+        envelope = CommandEnvelope(
+            command_id=f"cmd_{uuid.uuid4().hex[:12]}", command_type="resource_retain_observed",
+            payload={"resource_key": "provider:" + args.source, "observation_key": args.observation_key,
+                     "original_owner": args.original_owner, "evidence_ref": args.evidence_ref,
+                     "evidence_sha256": args.evidence_sha256, "actor": args.actor,
+                     "native_attempt_id": args.native_attempt_id, "existing_request_id": args.existing_request_id},
+            idempotency_key=f"idemp_retain_observed_{uuid.uuid4().hex[:8]}")
+        receipt = processor.process_envelope(envelope)
+        print(json.dumps(receipt.to_dict(), indent=2))
+        return 0 if receipt.status == "SUCCESS" else 1
 
     elif args.command == "resource-uncertain":
         envelope = CommandEnvelope(
