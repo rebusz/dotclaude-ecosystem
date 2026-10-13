@@ -1,0 +1,21 @@
+Command (2026-10-13 resume; native PowerShell exec):
+python D:/APPS/_worktrees/conductor-procmgmt-astra-20261013/scripts/conductorctl.py pytest --repo D:/APPS/_worktrees/conductor-procmgmt-astra-20261013 --python C:/Python314/python.exe --attempt-id conductor-procmgmt-resume-full-20261013 --agent-instance conductor-procmgmt-astra-20261013 -- -q
+
+Exit: 1. Failure occurred before admission or pytest spawn.
+Traceback (most recent call last):
+  File "D:\APPS\_worktrees\conductor-procmgmt-astra-20261013\scripts\conductorctl.py", line 26, in <module>
+    from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
+  File "D:\APPS\_worktrees\conductor-procmgmt-astra-20261013\scripts\conductor_commands.py", line 27, in <module>
+    from scripts.conductor_store import ConductorStore
+  File "D:\APPS\_worktrees\conductor-procmgmt-astra-20261013\scripts\conductor_store.py", line 16, in <module>
+    import psutil
+ModuleNotFoundError: No module named 'psutil'
+
+Related preflight:
+- C:/Python314/python.exe -m pip show psutil pytest: packages not found.
+- Worktree .venv-procmgmt created successfully.
+- Worktree pip install pytest psutil ruff==0.15.20 -r requirements-truthdeck-mcp.txt:
+  exit 1; Could not find a version that satisfies the requirement pytest (from versions: none).
+- User-site dependency-path probes returned Access denied. No bypass attempted.
+- Sidecar open_workspace preflight returned MCP -32603 Internal error; no workspace/assignment submitted.
+- TDCONDUCTOR_LEASE_ID presence: False. No heavy run started and no lease forged.

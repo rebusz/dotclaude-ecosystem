@@ -10,13 +10,14 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import pathlib
 import queue
 import re
-import subprocess
 import sys
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import psutil
@@ -1236,15 +1237,20 @@ class ConductorGatePanel(tk.Frame):
             "--reason", reason.strip(),
         ]
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=60, check=False,
+            from scripts.conductor_resources import HostResourceManager
+            from scripts.conductor_store import ConductorStore
+
+            lane_id = f"gui_recovery_{uuid.uuid4().hex}"
+            result = HostResourceManager(ConductorStore(self.root_dir)).run_bounded_command(
+                cmd, cwd=pathlib.Path(cmd[1]).resolve().parent.parent, lane_id=lane_id,
+                owner_id=f"conductor_gui:{os.getpid()}:{lane_id}", timeout_seconds=60,
+                memory_budget_gib=0.1,
             )
         except Exception as exc:
             messagebox.showerror("Recover failed", f"{type(exc).__name__}: {exc}")
             return
 
-        if proc.returncode == 0:
+        if result["status"] == "PASSED" and result["exit_code"] == 0:
             button.configure(text="RECOVERED", bg="#7CB88A")
             # Force the next tick to redraw: the content gate would otherwise
             # hold the stale card until the DB signature happens to move.
@@ -1255,7 +1261,7 @@ class ConductorGatePanel(tk.Frame):
         else:
             messagebox.showerror(
                 "Conductor refused",
-                (proc.stderr or proc.stdout or "no output").strip()[:800],
+                (result.get("stderr") or result.get("stdout") or result["status"]).strip()[:800],
             )
 
     def _render_footer(

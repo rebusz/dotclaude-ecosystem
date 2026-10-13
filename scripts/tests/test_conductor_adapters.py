@@ -18,6 +18,53 @@ from scripts.conductor_store import ConductorStore
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("module_name,class_name", [
+    ("scripts.conductor_adapter_claude", "ClaudeCodeAdapter"),
+    ("scripts.conductor_adapter_kimi", "KimiCLIAdapter"),
+])
+def test_agent_launch_uses_distinct_owner_and_explicit_attempt_identity(monkeypatch, tmp_path, module_name, class_name):
+    import importlib
+    from unittest.mock import Mock
+    from scripts import conductor_resources, conductor_store
+
+    manager = Mock()
+    manager.run_bounded_command.return_value = {"status": "PASSED", "exit_code": 0}
+    monkeypatch.setattr(conductor_store, "ConductorStore", lambda: object())
+    monkeypatch.setattr(conductor_resources, "HostResourceManager", lambda store: manager)
+    monkeypatch.delenv("CONDUCTOR_OWNER_ID", raising=False)
+    adapter = getattr(importlib.import_module(module_name), class_name)
+    assert adapter.dispatch_noninteractive("bounded packet", tmp_path)["success"]
+    first = manager.run_bounded_command.call_args.kwargs
+    assert adapter.dispatch_noninteractive("bounded packet", tmp_path)["success"]
+    second = manager.run_bounded_command.call_args.kwargs
+    assert first["owner_id"] != second["owner_id"]
+    adapter.dispatch_noninteractive("bounded packet", tmp_path, owner_id="session-owner", lane_id="attempt-once")
+    explicit = manager.run_bounded_command.call_args.kwargs
+    assert explicit["owner_id"] == "session-owner" and explicit["lane_id"] == "attempt-once"
+
+
+@pytest.mark.parametrize("module_name,class_name,executable", [
+    ("scripts.conductor_adapter_claude", "ClaudeCodeAdapter", "claude"),
+    ("scripts.conductor_adapter_kimi", "KimiCLIAdapter", "kimi"),
+])
+def test_agent_availability_probe_uses_registered_launcher(monkeypatch, module_name, class_name, executable):
+    import importlib
+    from unittest.mock import Mock
+    from scripts import conductor_resources, conductor_store
+
+    manager = Mock()
+    manager.run_bounded_command.return_value = {"status": "PASSED", "exit_code": 0}
+    monkeypatch.setattr(conductor_store, "ConductorStore", lambda: object())
+    monkeypatch.setattr(conductor_resources, "HostResourceManager", lambda store: manager)
+    adapter = getattr(importlib.import_module(module_name), class_name)
+
+    assert adapter.is_available()
+    call = manager.run_bounded_command.call_args
+    assert call.args[0] == [executable, "--version"]
+    assert call.kwargs["timeout_seconds"] == 10
+    assert call.kwargs["lane_id"].startswith("agent_probe_")
+
+
 def test_host_registry_doctor():
     report = ConductorHostRegistry.doctor_report()
     assert "claude_code" in report

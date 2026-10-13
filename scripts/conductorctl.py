@@ -17,9 +17,15 @@ _repo_root = pathlib.Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
+# Reporting can diagnose missing optional process dependencies without importing
+# or initializing the mutable store/command processor.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "process-report":
+    from scripts.conductor_reaper import main as report_main
+    raise SystemExit(report_main(sys.argv[2:]))
+
 from scripts.conductor_commands import ConductorCommandProcessor  # noqa: E402
 from scripts.conductor_model import CommandEnvelope  # noqa: E402
-from scripts.conductor_resources import PROVIDER_SOURCES  # noqa: E402
+from scripts.conductor_resources import PROVIDER_SOURCES, LANE_PRIORITIES  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
     read_all_pools_live,
@@ -39,8 +45,13 @@ def _print_receipt_exit(receipt) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "process-report":
+        from scripts.conductor_reaper import main as report_main
+        return report_main(argv[1:])
     parser = argparse.ArgumentParser(description="TruthDeck Conductor CTL")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("process-report", help="Read-only orphan report; use process-report --help")
 
     # status
     p_status = subparsers.add_parser("status", help="Show Conductor status summary")
@@ -89,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     p_resource_request.add_argument("--attempt-id", required=True)
     p_resource_request.add_argument("--agent-instance", required=True)
     p_resource_request.add_argument("--priority", type=int, default=50)
+    p_resource_request.add_argument("--lane-priority", choices=list(LANE_PRIORITIES))
+    p_resource_request.add_argument("--memory-budget-gib", type=float, default=1)
     p_resource_request.add_argument("--idempotency-key")
     p_resource_request.add_argument("--parent-lease-id")
     p_resource_request.add_argument(
@@ -155,6 +168,10 @@ def main(argv: list[str] | None = None) -> int:
     p_pytest.add_argument("--attempt-id", required=True)
     p_pytest.add_argument("--agent-instance", required=True)
     p_pytest.add_argument("--heavy", action="store_true", help="Promote a focused invocation to the heavy lease gate")
+    p_pytest.add_argument("--timeout-seconds", type=float, default=7200)
+    p_pytest.add_argument("--per-test-timeout-seconds", type=float, default=300)
+    p_pytest.add_argument("--memory-budget-gib", type=float, default=1)
+    p_pytest.add_argument("--lane-priority", choices=list(LANE_PRIORITIES))
     p_pytest.add_argument("pytest_args", nargs=argparse.REMAINDER)
 
     # enqueue
@@ -166,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     p_enq.add_argument("--risk-class", choices=["R0", "R1", "R2", "R3"], default="R1")
     p_enq.add_argument("--workflow", choices=["fwf", "fwp"], default="fwf")
     p_enq.add_argument("--priority", type=int, default=50)
+    p_enq.add_argument("--lane-priority", choices=list(LANE_PRIORITIES))
     p_enq.add_argument("--context-digest-sha256", default="", help="Digest of the bound CONTEXT.md packet")
 
     # authorize
@@ -329,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
                 "resource_key": args.resource_key,
                 "slot_key": args.slot_key or "",
                 "role": args.role,
+                "lane_priority": args.lane_priority,
+                "memory_budget_gib": args.memory_budget_gib,
             },
             idempotency_key=f"idemp_resource_request_{uuid.uuid4().hex[:8]}",
         )
@@ -439,6 +459,10 @@ def main(argv: list[str] | None = None) -> int:
                 "agent_instance": args.agent_instance,
                 "pytest_args": args.pytest_args,
                 "force_heavy": args.heavy,
+                "timeout_seconds": args.timeout_seconds,
+                "per_test_timeout_seconds": args.per_test_timeout_seconds,
+                "memory_budget_gib": args.memory_budget_gib,
+                "lane_priority": args.lane_priority,
             },
             idempotency_key=f"idemp_pytest_{uuid.uuid4().hex[:8]}",
         )
@@ -459,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
                 "workflow": args.workflow,
                 "requested_terminal_stage": "merged",
                 "job_kind": "engineering_plan_lifecycle",
-                "priority": args.priority,
+                "priority": LANE_PRIORITIES[args.lane_priority] if args.lane_priority else args.priority,
                 "context_digest_sha256": args.context_digest_sha256,
                 "created_by": "operator_cli",
             },

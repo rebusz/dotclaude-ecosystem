@@ -97,13 +97,17 @@ is not death), temporary-output failure before spawn, final output cutoff,
 named CLI priorities/budgets, observable request budgets, ini-based timer
 disablement, and TruthDeck checkpoint registration. These broader changes have
 syntax validation but still need pytest in a qualified environment.
+Adapter owner labels were also made unique per independent invocation (or
+explicitly inherited), avoiding cross-session attribution through one fixed
+provider-wide owner name; regressions were added but remain pytest-blocked.
 
 Coverage limitation: root worker launches are registered before resume; Job
 descendants are sampled every 0.5 seconds. Short-lived descendants can finish
 between samples. Job containment covers their lifetime, but the registry is not
-an exhaustive process-birth journal. Short read-only version probes and remaining
-repository/GUI/installer helpers retain their prior execution seams. Do not claim
-every ecosystem process is registered or call the implementation complete.
+an exhaustive process-birth journal. Claude/Kimi version probes and the GUI's
+Python recovery helper now use the same registered launcher. Direct Git
+subprocesses remain outside the Python/pytest/agent registry scope. Do not claim
+every ecosystem process is registered.
 
 The requested real dry-run used native Get-Process because psutil was unavailable.
 It classified 655 actual processes, all KEEP (50.491299 GiB aggregate RSS),

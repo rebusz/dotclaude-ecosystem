@@ -255,7 +255,24 @@ def test_duplicate_pytest_idempotency_never_launches_twice(manager: HostResource
     assert manager.status()["active_units"] == 0
 
 
-def test_real_pytest_timeout_releases_capacity(manager: HostResourceManager, tmp_path: pathlib.Path):
+def test_pytest_timeout_releases_capacity(manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch):
+    # Exercise the real adapter and deadline with a retained fake OS handle.
+    # This suite never terminates a real sleeping process.
+    from types import SimpleNamespace
+    from scripts import conductor_processes
+
+    class TimedChild:
+        def __init__(self, *args, **kwargs):
+            self.process = SimpleNamespace(returncode=None)
+            self.pid = 999999
+        def poll(self): return self.process.returncode
+        def wait(self, timeout): raise subprocess.TimeoutExpired("fake", timeout)
+        def member_pids(self): return []
+        def close(self):
+            self.process.returncode = 124
+            return True
+
+    monkeypatch.setattr(conductor_processes, "ContainedProcess", TimedChild)
     slow_test = tmp_path / "test_slow_resource.py"
     slow_test.write_text(
         "import os, time\n"
