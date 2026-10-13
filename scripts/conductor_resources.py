@@ -817,11 +817,12 @@ class HostResourceManager:
             WHERE state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')
               AND request_id != ?
         """, (exclude_request or "",)).fetchone()[0]
+        # Bound lanes are reserved through host_resource_requests above.
+        # Only unbound lanes (no request row) may add lane-local budget here.
         reserved += conn.execute("""
             SELECT COALESCE(SUM(l.budget_gib),0) FROM process_lanes l
             LEFT JOIN host_resource_requests r ON r.request_id=l.request_id
-            WHERE l.state != 'TERMINAL'
-              AND (r.request_id IS NULL OR r.state NOT IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED'))
+            WHERE l.state != 'TERMINAL' AND r.request_id IS NULL
         """).fetchone()[0]
         old = conn.execute("SELECT * FROM host_memory_state WHERE singleton=1").fetchone()
         samples = json.loads(old["samples_json"])

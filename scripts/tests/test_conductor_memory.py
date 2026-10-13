@@ -37,6 +37,32 @@ def test_ram_pressure_hysteresis_survives_restart(manager, monkeypatch):
     assert restarted.memory_status()["admitted"]
 
 
+def test_released_request_does_not_leave_lane_budget_reserved(manager, monkeypatch):
+    memory(monkeypatch, 12)
+    admitted = manager.request(purpose="pytest_full", attempt_id="lane", agent_instance="owner", memory_budget_gib=7)
+    lane_id = admitted["request_id"]
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO process_lanes
+                (lane_id, owner_id, owner_pid, owner_start_time, owner_session_id,
+                 owner_username, worktree, command_sha256, request_id, state,
+                 deadline, heartbeat, budget_gib, launch_provenance, launch_origin)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (lane_id, "owner", os.getpid(), 0, 0, "test", str(manager.store.root_dir),
+             "deadbeef", lane_id, "RUNNING", 0, 0, 7, "test", "interactive"),
+        )
+    manager.release(lane_id)
+    restarted = HostResourceManager(ConductorStore(manager.store.root_dir))
+    memory(monkeypatch, 12)
+    status = restarted.status()
+    assert status["active_units"] == 0
+    assert status["recovery_required"] == 0
+    assert restarted.memory_status()["reserved_gib"] == 0
+    assert restarted.memory_status()["reason"] == "RAM_ADMITTED"
+
+
 def test_reservations_are_shared_across_source_pools(manager, monkeypatch):
     memory(monkeypatch, 9)
     first = manager.request(purpose="pytest_full", attempt_id="one", agent_instance="owner", memory_budget_gib=2)
