@@ -5,9 +5,9 @@ Scope: `D:/APPS/_worktrees/conductor-procmgmt-astra-20261013` only.
 Integrator: native Codex (operator requested Astra/xhigh). Existing uncommitted
 work was preserved and reviewed before edits. No deployment or live actuation.
 
-**Overall: PARTIAL / NOT DELIVERED.** Source and local evidence exist. Full local
-pytest, implementation commit/push, external PLAN copy and draft PR remain
-outstanding. No full-suite, review, CI or publication gate is reported PASS.
+**Overall: lane validation in progress.** Implementation is committed on branch
+`arch/conductor-procmgmt-astra-20261013` with draft PR #122. Full local pytest,
+review re-run, and CI remain the gates before PASS.
 
 ## Source result
 
@@ -138,10 +138,9 @@ was signaled or changed.
   with subject `docs: conductor memory pressure prevention plan + grill (WIP, Astra)`.
   This session issued no commit command and does not claim authorship of that
   Git operation. The new commit was preserved; subsequent GRILL additions remain dirty.
-- **Plan committed: true (observed); implementation committed: false; pushed:
-  false; draft PR: not created by this session.** This line describes the
-  previous Astra run only; the current Codex resume completed the lifecycle
-  below using the ordinary Git and GitHub CLI paths.
+- **Plan committed: true; implementation committed: true (see publication
+  readback below); pushed: true; draft PR: #122.** Earlier Astra session lines
+  above record pre-commit state only.
 - Phase 0 [plan](docs/plans/2026-10-13_memory_pressure_prevention_plan.md) is now
   committed locally in `51a2b2f`. SHA256:
   `79769d1c1666f84999184ec9d18174a9d2ec10a0cac390bccb0601c92b8d14ee`.

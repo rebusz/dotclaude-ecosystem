@@ -13,7 +13,6 @@ from enum import Enum
 import json
 import os
 import pathlib
-import psutil
 import re
 import shutil
 import sqlite3
@@ -22,6 +21,11 @@ import tempfile
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 import uuid
+
+try:
+    import psutil
+except ImportError:  # operator Python without conductor deps must still import the store
+    psutil = None
 
 from scripts.conductor_model import (
     Attempt,
@@ -63,6 +67,26 @@ def get_default_conductor_dir() -> pathlib.Path:
     if env_dir:
         return pathlib.Path(env_dir).expanduser().resolve()
     return (pathlib.Path.home() / ".conductor").resolve()
+
+
+def _psutil_errors() -> tuple[type[BaseException], ...]:
+    if psutil is None:
+        return (OSError, ValueError, AttributeError)
+    return (OSError, ValueError, psutil.Error)
+
+
+def _process_alive_with_start(pid: int, expected_start: float | None, *, tolerance: float = 1.0) -> bool:
+    if psutil is None:
+        return False
+    try:
+        proc = psutil.Process(int(pid))
+        if not proc.is_running():
+            return False
+        if expected_start is None:
+            return True
+        return abs(proc.create_time() - float(expected_start)) < tolerance
+    except _psutil_errors():
+        return False
 
 
 def _file_signature(path: pathlib.Path) -> tuple[bool, int, int]:
@@ -175,13 +199,10 @@ def _read_store_status_from_conn(conn: sqlite3.Connection, db_path: pathlib.Path
     ).fetchone()
     leader_active = False
     if leader_row:
-        try:
-            process = psutil.Process(int(leader_row["pid"]))
-            leader_active = process.is_running() and abs(
-                process.create_time() - float(leader_row["process_start_time"])
-            ) < 1.0
-        except (psutil.Error, OSError, TypeError, ValueError):
-            leader_active = False
+        leader_active = _process_alive_with_start(
+            int(leader_row["pid"]),
+            float(leader_row["process_start_time"]) if leader_row["process_start_time"] is not None else None,
+        )
     return {
         "store_state": "AVAILABLE",
         "leader_id": leader_row["leader_id"] if leader_row else None,
@@ -651,6 +672,8 @@ def adjudicate_recovery(
         )
 
     try:
+        if psutil is None:
+            raise OSError("psutil unavailable")
         proc = psutil.Process(int(pid))
         observed_start = proc.create_time()
         if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
@@ -672,7 +695,7 @@ def adjudicate_recovery(
                 liveness_status="OWNER_PROCESS_ALIVE",
                 pid=int(pid),
             )
-    except (OSError, ValueError, psutil.Error):
+    except _psutil_errors():
         cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
         return RecoveryAdjudication(
             request_id=request_id,
@@ -1524,11 +1547,13 @@ class ConductorStore:
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
-        try:
-            p = psutil.Process(current_pid)
-            start_time = p.create_time()
-        except Exception:
+        if psutil is None:
             start_time = 0.0
+        else:
+            try:
+                start_time = psutil.Process(current_pid).create_time()
+            except Exception:
+                start_time = 0.0
 
         now_iso = current_utc_iso()
 
@@ -1554,14 +1579,7 @@ class ConductorStore:
                     )
                     return True
 
-                # Check if existing leader process is still alive
-                is_alive = False
-                try:
-                    proc = psutil.Process(existing_pid)
-                    if proc.is_running() and abs(proc.create_time() - existing_start_time) < 1.0:
-                        is_alive = True
-                except Exception:
-                    is_alive = False
+                is_alive = _process_alive_with_start(existing_pid, existing_start_time)
 
                 if is_alive:
                     # Another active leader exists

@@ -47,18 +47,21 @@ class TerminationCleanupUnconfirmed(ReapRefused):
 
 
 def process_session_id(pid: int) -> int:
+    """Return the Windows session id or POSIX session for ``pid``."""
+    pid = int(pid)
+    if pid <= 0:
+        raise OSError(22, "session lookup failed: invalid pid")
     if os.name != "nt":
         return os.getsid(pid)
     import ctypes
     from ctypes import wintypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
-    kernel.ProcessIdToSessionId.restype = wintypes.BOOL
-    result = wintypes.DWORD()
-    if not kernel.ProcessIdToSessionId(pid, ctypes.byref(result)):
-        raise OSError(ctypes.get_last_error(), "session lookup failed")
-    return result.value
+    kernel32 = ctypes.windll.kernel32  # stdcall; WinDLL/cdecl mismatches yield ERROR_INVALID_PARAMETER (87)
+    session = wintypes.DWORD()
+    if not kernel32.ProcessIdToSessionId(wintypes.DWORD(pid & 0xFFFFFFFF), ctypes.byref(session)):
+        err = ctypes.get_last_error() or 87
+        raise OSError(err, "session lookup failed")
+    return int(session.value)
 
 
 def command_sha256(command: Iterable[str]) -> str:

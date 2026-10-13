@@ -21,6 +21,7 @@ def manager(tmp_path):
 
 
 def memory(monkeypatch, gib):
+    monkeypatch.delenv(conductor_resources.TEST_MEMORY_ENV, raising=False)
     monkeypatch.setattr(conductor_resources.psutil, "virtual_memory",
                         lambda: SimpleNamespace(available=gib * 2**30, total=64 * 2**30))
 

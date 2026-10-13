@@ -41,5 +41,8 @@ $snapshot = @{
     memory_error = $memoryError
     rows = $rows
 }
-$snapshot | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $reportRoot 'native-process-snapshot.json') -Encoding UTF8
+$outPath = Join-Path $reportRoot 'native-process-snapshot.json'
+$json = $snapshot | ConvertTo-Json -Depth 6
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($outPath, $json, $utf8NoBom)
 Write-Output ('Observed processes: ' + $rows.Count)

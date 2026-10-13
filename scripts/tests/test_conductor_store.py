@@ -127,6 +127,16 @@ def test_context_digest_migration_replays_v2_work_item(tmp_path: pathlib.Path):
     assert request.priority == 50
 
 
+def test_store_status_without_psutil(store: ConductorStore, monkeypatch):
+    import scripts.conductor_store as conductor_store_mod
+
+    store.acquire_leader_lock("primary_coordinator")
+    monkeypatch.setattr(conductor_store_mod, "psutil", None)
+    status = read_store_status(store.root_dir)
+    assert status["leader_pid"] == os.getpid()
+    assert status["leader_active"] is False
+
+
 def test_leader_lock(store: ConductorStore):
     # Primary lock acquisition
     assert store.acquire_leader_lock("test_lock")

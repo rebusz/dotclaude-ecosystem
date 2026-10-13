@@ -3,6 +3,7 @@
 from copy import deepcopy
 import ctypes
 import json
+import os
 import sqlite3
 from types import SimpleNamespace
 import unittest
@@ -212,6 +213,31 @@ class ClassificationTests(unittest.TestCase):
             result = reaper.build_report([], snapshot, **CONTEXT)
             self.assertEqual(result["collection_error"], "PSUTIL_UNAVAILABLE")
             self.assertEqual(target(report_for())["action"], "WOULD_KILL")
+
+
+class SessionIdTests(unittest.TestCase):
+    def test_current_process_session_is_positive(self):
+        import os
+
+        session = reaper.process_session_id(os.getpid())
+        self.assertGreaterEqual(session, 0)
+
+    def test_invalid_pid_raises(self):
+        with self.assertRaises(OSError):
+            reaper.process_session_id(0)
+
+    def test_winapi_uses_stdcall_kernel32(self):
+        if os.name != "nt":
+            self.skipTest("Windows-only")
+        import ctypes
+        from ctypes import wintypes
+
+        pid = os.getpid()
+        session = wintypes.DWORD()
+        self.assertTrue(
+            ctypes.windll.kernel32.ProcessIdToSessionId(wintypes.DWORD(pid), ctypes.byref(session))
+        )
+        self.assertEqual(reaper.process_session_id(pid), int(session.value))
 
 
 class CollectorTests(unittest.TestCase):

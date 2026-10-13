@@ -37,7 +37,19 @@ RESOURCE_KEY = "host:heavy"
 LANE_PRIORITIES = {"options": 400, "cctv": 300, "bos": 200, "runtime": 100}
 MEMORY_FLOOR_GIB = 6.0
 MEMORY_RESUME_GIB = 8.0
+TEST_MEMORY_ENV = "TDCONDUCTOR_TEST_MEMORY_GIB"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
+
+
+def _pytest_memory_override_gib() -> float | None:
+    """Deterministic RAM for pytest and subprocess CLI tests; never set in production."""
+    raw = os.environ.get(TEST_MEMORY_ENV)
+    if raw is None or raw == "":
+        return None
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{TEST_MEMORY_ENV} must be a positive finite GiB value")
+    return value
 DEFAULT_LEASE_TTL_SECONDS = 300
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
@@ -815,8 +827,12 @@ class HostResourceManager:
         samples = json.loads(old["samples_json"])
         paused = bool(old["paused"])
         try:
-            memory = psutil.virtual_memory()
-            available, total = memory.available / 2**30, memory.total / 2**30
+            override_gib = _pytest_memory_override_gib()
+            if override_gib is not None:
+                available, total = override_gib, override_gib
+            else:
+                memory = psutil.virtual_memory()
+                available, total = memory.available / 2**30, memory.total / 2**30
             if not (math.isfinite(available) and math.isfinite(total) and 0 <= available <= total and total > 0):
                 raise ValueError("invalid memory observation")
         except (OSError, ValueError, psutil.Error):
