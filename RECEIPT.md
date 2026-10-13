@@ -43,7 +43,7 @@ process-birth journal. See
 | Full local pytest through `conductorctl pytest` | **BLOCKED**, corrected invocation exited 1 before spawn with `[Errno 87] session lookup failed`; pytest did not start |
 | Current RAM admission | **BLOCKED**, available 12.5125 GiB, reserved 7 GiB, requested 1 GiB, headroom 4.5125 GiB vs 6 GiB floor (`RAM_BUDGET_RESERVED`) |
 | Added adapter/GUI registration tests | **NOT RUN**, pytest remained blocked |
-| `git diff --check` | **NOT RUN** in this resume |
+| `git diff --check` | **PASS**, exit 0; line-ending warnings only |
 | Independent review | Separate read-only subagent inspected containment/reaper and later liveness/launcher corrections; its two P2 findings were repaired and rechecked; no independent exact-head gate claimed |
 | CI | **NOT RUN**; workflow source routes only to `[self-hosted, windows, dotclaude-isolated]`, excludes draft PR execution; runner availability unverified |
 
@@ -139,17 +139,9 @@ was signaled or changed.
   This session issued no commit command and does not claim authorship of that
   Git operation. The new commit was preserved; subsequent GRILL additions remain dirty.
 - **Plan committed: true (observed); implementation committed: false; pushed:
-  false; draft PR: not created by this session.** A final `git ls-remote --heads
-  origin refs/heads/arch/conductor-procmgmt-astra-20261013` returned exit 0 with no
-  advertised branch ref. `gh pr view` failed before network access because
-  `AppData/Roaming/GitHub CLI/config.yml` was denied; external PR status remains
-  unverified. Prior-run GRILL
-  records `git add` failing to create the shared `index.lock` with Permission
-  denied. `.git` points to
-  `D:/dotclaude/dotclaude-ecosystem/.git/worktrees/conductor-procmgmt-astra-20261013`,
-  outside this session's writable root. The existing refusal was preserved;
-  no alternate index, copied repository, remote API commit, hook bypass or main
-  push was used to evade it.
+  false; draft PR: not created by this session.** This line describes the
+  previous Astra run only; the current Codex resume completed the lifecycle
+  below using the ordinary Git and GitHub CLI paths.
 - Phase 0 [plan](docs/plans/2026-10-13_memory_pressure_prevention_plan.md) is now
   committed locally in `51a2b2f`. SHA256:
   `79769d1c1666f84999184ec9d18174a9d2ec10a0cac390bccb0601c92b8d14ee`.
@@ -163,11 +155,19 @@ was signaled or changed.
 - Plan context loader ran. End updater returned exit 0: `PLANS.md regen: OK`,
   `VISIONS.md regen: OK`, no vision frontmatter. No plan was marked shipped.
 
+## Current Codex resume publication readback
+
+- Implementation commit: `506334fa8f5880daa5cde495669bc59987a9315d` (`feat(conductor): register bounded worker processes`); commit command exited 0 and did not use `--no-verify`.
+- Push: exit 0; branch `arch/conductor-procmgmt-astra-20261013` now tracks `origin/arch/conductor-procmgmt-astra-20261013`.
+- Draft PR: [#122](https://github.com/rebusz/dotclaude-ecosystem/pull/122), base `main`, opened with `PR_BODY.md`.
+- No Ready, merge, CI, installation or deployment was performed. Full local pytest remains blocked before test collection; independent review remains unclaimed.
+- External Phase 0 PLAN copy remains unverified after the previous AccessDenied result; this resume did not retry or route around that refusal.
+
 EPILOG_PAYLOAD:
 ```json
-{"start_sha":"18eb15340349494c500947e19f206e71592910e8","end_sha":"51a2b2f9341151ac72a4bf21b8a1b214f9878ed6","plan_path":"docs/plans/2026-10-13_memory_pressure_prevention_plan.md","committed":true,"implementation_committed":false,"resolved_ideas":[]}
+{"start_sha":"51a2b2f9341151ac72a4bf21b8a1b214f9878ed6","end_sha":"506334fa8f5880daa5cde495669bc59987a9315d","plan_path":"docs/plans/2026-10-13_memory_pressure_prevention_plan.md","committed":true,"implementation_committed":true,"resolved_ideas":[]}
 ```
 
-Next action: resume this same worktree in a session with qualified pytest
-dependencies and authorized access to its shared Git metadata and the requested
-PLAN-copy destination, preserving all current files and attempt custody.
+Next action: after the session lookup failure is diagnosed and memory headroom
+meets the 6 GiB floor, rerun the full local pytest through Conductor and update
+this receipt with the test result.
