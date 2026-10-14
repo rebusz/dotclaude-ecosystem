@@ -227,3 +227,53 @@ def test_inaccessible_owner_never_becomes_dead_or_attested(manager, monkeypatch)
         with pytest.raises(ResourceAdmissionError, match="OWNER_LIVENESS_UNPROVEN"):
             manager.recover(admitted["request_id"], operator_attestation=attest, reason="cannot override denied owner")
     assert manager.store.get_resource_request(admitted["request_id"]).state.value == "RECOVERY_REQUIRED"
+
+
+def test_memory_override_env_is_ignored_outside_pytest(manager, monkeypatch):
+    memory(monkeypatch, 3)
+    monkeypatch.setenv(conductor_resources.TEST_MEMORY_ENV, "100")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    status = manager.memory_status()
+    assert status["paused"] and not status["admitted"]  # observed 3 GiB, not the forged 100
+
+
+def _insert_unbound_lane(manager, lane_id, state, deadline):
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO process_lanes
+                (lane_id, owner_id, owner_pid, owner_start_time, owner_session_id,
+                 owner_username, worktree, command_sha256, request_id, state,
+                 deadline, heartbeat, budget_gib, launch_provenance, launch_origin)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (lane_id, "owner", os.getpid(), 0, 0, "test", str(manager.store.root_dir),
+             "deadbeef", None, state, deadline, 0, 9, "test", "interactive"),
+        )
+
+
+def test_crashed_owner_unbound_lane_stops_reserving_after_deadline(manager, monkeypatch):
+    import time
+
+    memory(monkeypatch, 14)
+    _insert_unbound_lane(manager, "live", "RUNNING", time.time() + 600)
+    assert not manager.memory_status(required_gib=1)["admitted"]  # 9 GiB reserved
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE process_lanes SET deadline=? WHERE lane_id='live'", (time.time() - 3600,))
+    assert manager.memory_status(required_gib=1)["admitted"]  # abandoned RUNNING row expired
+
+
+def test_recovery_required_unbound_lane_keeps_reserving_past_deadline(manager, monkeypatch):
+    import time
+
+    memory(monkeypatch, 14)
+    _insert_unbound_lane(manager, "stuck", "RECOVERY_REQUIRED", time.time() - 3600)
+    assert not manager.memory_status(required_gib=1)["admitted"]
+
+
+def test_leader_lock_fails_closed_without_psutil(tmp_path, monkeypatch):
+    from scripts import conductor_store
+
+    store = ConductorStore(tmp_path / "leader")
+    monkeypatch.setattr(conductor_store, "psutil", None)
+    assert store.acquire_leader_lock() is False

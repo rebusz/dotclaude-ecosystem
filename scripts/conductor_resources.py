@@ -46,11 +46,15 @@ def _pytest_memory_override_gib() -> float | None:
     raw = os.environ.get(TEST_MEMORY_ENV)
     if raw is None or raw == "":
         return None
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        # A stray/inherited value must never forge RAM headroom for a real admission.
+        return None
     value = float(raw)
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{TEST_MEMORY_ENV} must be a positive finite GiB value")
     return value
 DEFAULT_LEASE_TTL_SECONDS = 300
+UNBOUND_LANE_GRACE_SECONDS = 60
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
 PROVIDER_POOLS = frozenset(f"provider:{source}" for source in PROVIDER_SOURCES)
@@ -823,7 +827,11 @@ class HostResourceManager:
             SELECT COALESCE(SUM(l.budget_gib),0) FROM process_lanes l
             LEFT JOIN host_resource_requests r ON r.request_id=l.request_id
             WHERE l.state != 'TERMINAL' AND r.request_id IS NULL
-        """).fetchone()[0]
+              -- an owner that died mid-launch leaves STARTING/RUNNING rows that
+              -- nothing finishes; they stop reserving after deadline + grace.
+              -- RECOVERY_REQUIRED stays sticky until explicitly resolved.
+              AND (l.state = 'RECOVERY_REQUIRED' OR l.deadline + ? > ?)
+        """, (UNBOUND_LANE_GRACE_SECONDS, time.time())).fetchone()[0]
         old = conn.execute("SELECT * FROM host_memory_state WHERE singleton=1").fetchone()
         samples = json.loads(old["samples_json"])
         paused = bool(old["paused"])
@@ -1112,7 +1120,9 @@ class HostResourceManager:
         env.pop(LEASE_ENV, None)
         if lease_id:
             env[LEASE_ENV] = lease_id
-        env["PYTHONPATH"] = str(pathlib.Path(__file__).resolve().parent)
+        plugin_dir = str(pathlib.Path(__file__).resolve().parent)
+        inherited = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = plugin_dir + os.pathsep + inherited if inherited else plugin_dir
         env["CONDUCTOR_TEST_TIMEOUT_SECONDS"] = str(per_test_timeout_seconds)
         lane_id = request_id
         sequence = 1

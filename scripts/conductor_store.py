@@ -671,9 +671,20 @@ def adjudicate_recovery(
             reason_placeholder="<why>",
         )
 
+    if psutil is None:
+        # No liveness authority: never infer OWNER_GONE, demand an attestation.
+        cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id} --attest-owner-gone --reason '<why>'"
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="OWNER_LIVENESS_UNPROVEN",
+            liveness_status="OWNER_LIVENESS_UNAVAILABLE",
+            pid=int(pid),
+            reason_placeholder="<why>",
+        )
+
     try:
-        if psutil is None:
-            raise OSError("psutil unavailable")
         proc = psutil.Process(int(pid))
         observed_start = proc.create_time()
         if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
@@ -1548,12 +1559,13 @@ class ConductorStore:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
         if psutil is None:
+            # Liveness of a competing leader cannot be proven without psutil:
+            # fail closed rather than steal or record an identity-less lock.
+            return False
+        try:
+            start_time = psutil.Process(current_pid).create_time()
+        except Exception:
             start_time = 0.0
-        else:
-            try:
-                start_time = psutil.Process(current_pid).create_time()
-            except Exception:
-                start_time = 0.0
 
         now_iso = current_utc_iso()
 
