@@ -85,7 +85,7 @@ candidate safe to terminate.
 
 Use the established Conductor heavy gate for the full suite; never substitute an
 isolated store to bypass its shared lease. Focused destructive-path tests use
-fake handles/tables. See root `RECEIPT.md` for actual runs and blockers.
+fake handles/tables. Run receipts and blockers belong in the PR description, not in the tree.
 
 No installation is part of this worktree task. Source rollback is the normal
 branch revert. A later installed rollback must first stop new admission and
