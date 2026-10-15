@@ -17,6 +17,7 @@ import os
 import pathlib
 import psutil
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -249,6 +250,15 @@ def _now() -> datetime:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _pytest_addopts_from_environment(environment: Mapping[str, str] | None = None) -> list[str]:
+    """Return argv fragments from PYTEST_ADDOPTS for conservative classification."""
+    source = environment if environment is not None else os.environ
+    raw = source.get("PYTEST_ADDOPTS")
+    if raw is None or not str(raw).strip():
+        return []
+    return [str(arg) for arg in shlex.split(str(raw), posix=os.name != "nt")]
 
 
 def classify_pytest_invocation(
@@ -823,15 +833,12 @@ class HostResourceManager:
         """, (exclude_request or "",)).fetchone()[0]
         # Bound lanes are reserved through host_resource_requests above.
         # Only unbound lanes (no request row) may add lane-local budget here.
+        self._reconcile_unbound_lanes_locked(conn, time.time())
         reserved += conn.execute("""
             SELECT COALESCE(SUM(l.budget_gib),0) FROM process_lanes l
             LEFT JOIN host_resource_requests r ON r.request_id=l.request_id
             WHERE l.state != 'TERMINAL' AND r.request_id IS NULL
-              -- an owner that died mid-launch leaves STARTING/RUNNING rows that
-              -- nothing finishes; they stop reserving after deadline + grace.
-              -- RECOVERY_REQUIRED stays sticky until explicitly resolved.
-              AND (l.state = 'RECOVERY_REQUIRED' OR l.deadline + ? > ?)
-        """, (UNBOUND_LANE_GRACE_SECONDS, time.time())).fetchone()[0]
+        """).fetchone()[0]
         old = conn.execute("SELECT * FROM host_memory_state WHERE singleton=1").fetchone()
         samples = json.loads(old["samples_json"])
         paused = bool(old["paused"])
@@ -905,6 +912,45 @@ class HostResourceManager:
                   "STARTING", now + timeout_seconds, now, budget_gib, "conductor", launch_origin()))
         return {"CONDUCTOR_LANE_ID": lane_id, "CONDUCTOR_OWNER_ID": owner_id}
 
+    def _reconcile_unbound_lanes_locked(self, conn: Any, now: float) -> None:
+        """Move expired unbound lanes into recovery custody; never drop their budget silently."""
+        rows = conn.execute(
+            """
+            SELECT lane_id, owner_pid, owner_start_time FROM process_lanes l
+            LEFT JOIN host_resource_requests r ON r.request_id = l.request_id
+            WHERE l.state IN ('STARTING', 'RUNNING') AND r.request_id IS NULL
+              AND l.deadline + ? <= ?
+            """,
+            (UNBOUND_LANE_GRACE_SECONDS, now),
+        ).fetchall()
+        for row in rows:
+            owner_gone, _ = self._owner_liveness(row["owner_pid"], row["owner_start_time"])
+            if owner_gone:
+                conn.execute(
+                    "UPDATE process_lanes SET state='RECOVERY_REQUIRED', heartbeat=? WHERE lane_id=?",
+                    (now, row["lane_id"]),
+                )
+
+    def _record_suspended_process(self, lane_id: str, process: Any, command: Sequence[str]) -> None:
+        """Durable registration before Job assignment closes the owner-crash window."""
+        from scripts.conductor_reaper import process_session_id
+
+        observed = psutil.Process(process.pid)
+        argv = list(command)
+        digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode("utf-8")).hexdigest()
+        identity = (
+            observed.pid,
+            observed.create_time(),
+            lane_id,
+            observed.ppid(),
+            process_session_id(observed.pid),
+            observed.username(),
+            digest,
+        )
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("INSERT OR IGNORE INTO process_registry VALUES (?,?,?,?,?,?,?)", identity)
+
     def _record_process(self, lane_id: str, process: Any, command: Optional[Sequence[str]] = None,
                         *, membership=None) -> None:
         from scripts.conductor_reaper import process_session_id
@@ -963,8 +1009,11 @@ class HostResourceManager:
                                 WHERE request_id=?
                             """, (process.pid, psutil.Process(process.pid).create_time(), request_id))
 
+                def suspended(process):
+                    self._record_suspended_process(lane_id, process, command)
+
                 child = ContainedProcess(command, cwd=str(cwd), env=env, stdout=out, stderr=err,
-                                         on_started=registered)
+                                         on_suspended=suspended, on_started=registered)
                 quiescent = False
                 next_heartbeat = started + heartbeat_interval_seconds
                 output_limited = False
@@ -1071,7 +1120,11 @@ class HostResourceManager:
             normalized_args = normalized_args[1:]
         if any("conductor_pytest_plugin" in arg for arg in normalized_args):
             raise ValueError("Conductor pytest timer cannot be overridden")
-        classification = classify_pytest_invocation(normalized_args, cwd=cwd_path)
+        env_source = dict(os.environ)
+        if base_environment is not None:
+            env_source.update({str(key): str(value) for key, value in base_environment.items()})
+        addopts = _pytest_addopts_from_environment(env_source)
+        classification = classify_pytest_invocation([*addopts, *normalized_args], cwd=cwd_path)
         if force_heavy and classification == "pytest_focused":
             classification = "pytest_full"
         # Ini addopts must not silently disable the timer or add unclassified
@@ -1109,15 +1162,13 @@ class HostResourceManager:
 
         request_id = admission["request_id"]
         lease_id = admission["lease_id"]
-        env_source = dict(os.environ)
-        if base_environment is not None:
-            env_source.update({str(key): str(value) for key, value in base_environment.items()})
         env = {
             str(key): str(value)
             for key, value in env_source.items()
             if str(key) in _CHILD_ENV_ALLOWLIST or str(key).startswith("TDCONDUCTOR_")
         }
         env.pop(LEASE_ENV, None)
+        env.pop("PYTEST_ADDOPTS", None)
         if lease_id:
             env[LEASE_ENV] = lease_id
         plugin_dir = str(pathlib.Path(__file__).resolve().parent)

@@ -133,6 +133,55 @@ def test_focused_pytest_is_memory_gated_before_spawn(manager, monkeypatch, tmp_p
                                    cwd=tmp_path, attempt_id="test", agent_instance="owner")
 
 
+def test_launch_registers_suspended_process_before_resume(manager, monkeypatch, tmp_path):
+    order = []
+    fake_pid = 4321
+
+    class Observed:
+        pid = fake_pid
+
+        def create_time(self):
+            return 1.0
+
+        def ppid(self):
+            return os.getppid()
+
+        def username(self):
+            return "test"
+
+    from scripts import conductor_reaper
+
+    monkeypatch.setattr(conductor_resources.psutil, "Process", lambda pid: Observed())
+    monkeypatch.setattr(conductor_reaper, "process_session_id", lambda pid: 0)
+
+    class Child:
+        def __init__(self, command, *, cwd, env, stdout, stderr, on_suspended=None, on_started=None, **kwargs):
+            self.process = SimpleNamespace(pid=fake_pid, returncode=0)
+            self.pid = fake_pid
+            if on_suspended is not None:
+                on_suspended(self.process)
+                order.append("suspended")
+            if on_started is not None:
+                on_started(self.process)
+                order.append("started")
+
+        def poll(self):
+            return 0
+
+        def close(self):
+            return True
+
+        def member_pids(self):
+            return []
+
+    monkeypatch.setattr(conductor_processes, "ContainedProcess", Child)
+    manager.run_bounded_command([sys.executable, "-c", "pass"], cwd=tmp_path,
+                                lane_id="pre-register", owner_id="owner")
+    assert order == ["suspended", "started"]
+    with manager.store._connection() as conn:
+        assert conn.execute("SELECT pid FROM process_registry WHERE pid=?", (fake_pid,)).fetchone() is not None
+
+
 def test_bounded_wall_timeout_uses_retained_fake_handle(manager, monkeypatch, tmp_path):
     calls = []
     class Child:
@@ -237,7 +286,8 @@ def test_memory_override_env_is_ignored_outside_pytest(manager, monkeypatch):
     assert status["paused"] and not status["admitted"]  # observed 3 GiB, not the forged 100
 
 
-def _insert_unbound_lane(manager, lane_id, state, deadline):
+def _insert_unbound_lane(manager, lane_id, state, deadline, *, owner_pid=None, owner_start_time=None):
+    owner = psutil.Process(os.getpid())
     with manager.store._connection() as conn:
         conn.execute(
             """
@@ -247,12 +297,14 @@ def _insert_unbound_lane(manager, lane_id, state, deadline):
                  deadline, heartbeat, budget_gib, launch_provenance, launch_origin)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (lane_id, "owner", os.getpid(), 0, 0, "test", str(manager.store.root_dir),
+            (lane_id, "owner", owner_pid if owner_pid is not None else owner.pid,
+             owner_start_time if owner_start_time is not None else owner.create_time(),
+             0, "test", str(manager.store.root_dir),
              "deadbeef", None, state, deadline, 0, 9, "test", "interactive"),
         )
 
 
-def test_crashed_owner_unbound_lane_stops_reserving_after_deadline(manager, monkeypatch):
+def test_alive_owner_unbound_lane_keeps_reserving_after_deadline(manager, monkeypatch):
     import time
 
     memory(monkeypatch, 14)
@@ -260,7 +312,18 @@ def test_crashed_owner_unbound_lane_stops_reserving_after_deadline(manager, monk
     assert not manager.memory_status(required_gib=1)["admitted"]  # 9 GiB reserved
     with manager.store._connection() as conn:
         conn.execute("UPDATE process_lanes SET deadline=? WHERE lane_id='live'", (time.time() - 3600,))
-    assert manager.memory_status(required_gib=1)["admitted"]  # abandoned RUNNING row expired
+    assert not manager.memory_status(required_gib=1)["admitted"]  # owner still alive; budget stays reserved
+
+
+def test_crashed_owner_unbound_lane_enters_recovery_and_keeps_reserving(manager, monkeypatch):
+    import time
+
+    memory(monkeypatch, 14)
+    _insert_unbound_lane(manager, "stale", "RUNNING", time.time() - 3600, owner_pid=999_999_999, owner_start_time=1.0)
+    assert not manager.memory_status(required_gib=1)["admitted"]
+    with manager.store._connection() as conn:
+        row = conn.execute("SELECT state FROM process_lanes WHERE lane_id='stale'").fetchone()
+    assert row["state"] == "RECOVERY_REQUIRED"
 
 
 def test_recovery_required_unbound_lane_keeps_reserving_past_deadline(manager, monkeypatch):

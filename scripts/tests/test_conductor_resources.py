@@ -305,6 +305,11 @@ def test_pytest_classification_is_conservative_and_focused_does_not_consume_slot
     assert classify_pytest_invocation(["-n", "auto", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy"
     assert classify_pytest_invocation(["-m", "integration", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy"
     assert classify_pytest_invocation(["--unknown-option", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy_unknown"
+    assert classify_pytest_invocation(["tests/test_one.py", "-q"], cwd=tmp_path) == "pytest_focused"
+    assert classify_pytest_invocation(
+        ["-n", "auto", "tests/test_one.py", "-q"],
+        cwd=tmp_path,
+    ) == "pytest_heavy"
 
     focused_test = tmp_path / "test_focused_resource.py"
     focused_test.write_text("def test_focused():\n    assert True\n", encoding="utf-8")
@@ -324,6 +329,23 @@ def test_pytest_classification_is_conservative_and_focused_does_not_consume_slot
         request.purpose == "pytest_focused" and request.reason_code == "PYTEST_FOCUSED_NO_HEAVY_LEASE"
         for request in manager.store.list_resource_requests()
     )
+
+
+def test_pytest_addopts_forces_heavy_admission(manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
+    test_file = tmp_path / "test_addopts_resource.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    manager.request(purpose="pytest_heavy", attempt_id="blocker", agent_instance="inst")
+    result = manager.run_bounded_pytest(
+        python_executable=sys.executable,
+        pytest_args=[str(test_file), "-q"],
+        cwd=tmp_path,
+        attempt_id="at-addopts",
+        agent_instance="inst-2",
+        timeout_seconds=60,
+    )
+    assert result["classification"] == "pytest_heavy"
+    assert result["status"] == "QUEUED"
 
 
 def test_pytest_adapter_filters_secret_environment_and_rejects_arbitrary_executable(

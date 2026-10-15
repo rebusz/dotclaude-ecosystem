@@ -112,6 +112,27 @@ class ClassificationTests(unittest.TestCase):
             with self.subTest(update=update):
                 self.assertEqual(target(report_for(record(**update)))["action"], "KEEP")
 
+    def test_active_request_states_never_qualify_for_termination(self):
+        for request_state in ("ACTIVE", "INHERITED"):
+            with self.subTest(request_state=request_state):
+                rec = record(
+                    state="RUNNING",
+                    deadline=NOW - 1,
+                    owner_pid=99,
+                    owner_start_time=900.0,
+                    request_id="req-live",
+                    request_state=request_state,
+                )
+                result = target(
+                    reaper.build_report(
+                        [rec],
+                        reaper.ProcessTable([process(90, parent_pid=0), process()], complete=True),
+                        **CONTEXT,
+                    )
+                )
+                self.assertEqual(result["action"], "KEEP")
+                self.assertEqual(result["reason"], "UNCERTAIN_ATTEMPT")
+
     def test_missing_or_invalid_metadata_are_kept(self):
         for field in ("start_time", "parent_pid", "session_id", "username", "command_sha256", "rss_bytes", "name"):
             with self.subTest(field=field):
@@ -169,6 +190,16 @@ class ClassificationTests(unittest.TestCase):
         scheduled = process(10, start_time=1500.0, protected_reason="PROTECTED_SCHEDULED_TASK")
         result = reaper.build_report([record()], table(process(), scheduled), **CONTEXT)
         self.assertEqual(target(result)["reason"], "PROTECTED_ANCESTRY")
+
+    def test_inaccessible_ancestor_blocks_candidate_termination(self):
+        inaccessible = process(10, start_time=900.0, parent_pid=0, inspection_error="AccessDenied")
+        result = reaper.build_report(
+            [record(owner_pid=11, owner_start_time=900.0)],
+            table(process(parent_pid=10), inaccessible),
+            **CONTEXT,
+        )
+        self.assertEqual(target(result)["action"], "KEEP")
+        self.assertEqual(target(result)["reason"], "PROTECTED_ANCESTRY_UNKNOWN")
 
     def test_unidentified_descendant_blocks_parent_and_propagates(self):
         records = [record(), record(pid=30, parent_pid=20)]

@@ -25,6 +25,7 @@ except ImportError:
 
 GIB = 1024**3
 _AMBIGUOUS = {"SUBMIT_UNCONFIRMED", "RECOVERY_REQUIRED", "STARTING"}
+_PROTECTED_REQUEST_STATES = _AMBIGUOUS | {"ACTIVE", "INHERITED"}
 _SCHEDULERS = {"taskeng", "taskhost", "taskhostw", "schtasks", "services", "svchost"}
 _INTERACTIVE = {"windowsterminal", "openconsole", "explorer", "code", "codex"}
 
@@ -324,7 +325,7 @@ def _keep_reason(record, process, table, *, owner_id, session_id, username, now,
     denied = protected_reason(worktree=str(record.get("worktree", "")))
     if denied:
         return denied
-    if record.get("state") in _AMBIGUOUS or record.get("request_state") in _AMBIGUOUS:
+    if record.get("state") in _AMBIGUOUS or record.get("request_state") in _PROTECTED_REQUEST_STATES:
         return "UNCERTAIN_ATTEMPT"
     if record.get("state") not in {"RUNNING", "TERMINAL"}:
         return "REGISTRY_STATE_UNKNOWN"
@@ -362,9 +363,13 @@ def _keep_reason(record, process, table, *, owner_id, session_id, username, now,
         if _timestamp(owner["start_time"]) < _timestamp(record["owner_start_time"]):
             return "OWNER_IDENTITY_CONFLICT"
     for ancestor_pid in _ancestors(process["pid"], table.by_pid) - {process["pid"]}:
-        ancestor = table.by_pid[ancestor_pid]
+        ancestor = table.by_pid.get(ancestor_pid)
+        if ancestor is None:
+            return "PROTECTED_ANCESTRY_UNKNOWN"
         if ancestor.get("protected_reason"):
             return "PROTECTED_ANCESTRY"
+        if ancestor.get("inspection_error") or not _metadata_known(ancestor):
+            return "PROTECTED_ANCESTRY_UNKNOWN"
     return None
 
 

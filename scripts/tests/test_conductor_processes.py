@@ -153,6 +153,11 @@ def test_windows_assigns_and_registers_before_payload_resume(windows):
     assert child.close() is True
 
 
+def test_suspended_registration_runs_before_job_assignment(windows):
+    launch(on_suspended=lambda process: windows.events.append("suspended"))
+    assert windows.events.index("suspended") < windows.events.index("assign")
+
+
 def test_normal_completion_cleans_descendants_and_checks_job_before_close(windows):
     child = launch()
     child.process.returncode = 0

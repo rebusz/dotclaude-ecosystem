@@ -193,6 +193,7 @@ class ContainedProcess:
         stdout: Any,
         stderr: Any,
         on_started: Callable[[subprocess.Popen[str]], None] | None = None,
+        on_suspended: Callable[[subprocess.Popen[str]], None] | None = None,
     ):
         if isinstance(command, (str, bytes)) or not command:
             raise ValueError("command must be a nonempty argument sequence")
@@ -217,6 +218,8 @@ class ContainedProcess:
                 **({"creationflags": _CREATE_SUSPENDED} if self._windows else {"start_new_session": True}),
             )
             if self._windows:
+                if on_suspended is not None:
+                    on_suspended(self.process)
                 self._api.assign(self._job, self.process)
                 self._assigned = True
                 self._thread = self._api.open_initial_thread(self.process)
