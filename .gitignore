@@ -4,6 +4,15 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.venv-procmgmt/
+# generated process-snapshot/report artifacts (collector scripts stay tracked)
+artifacts/procmgmt/*.json
+artifacts/procmgmt/*.log
+artifacts/procmgmt/*.md
+artifacts/procmgmt/process-report*/
+/GRILL.md
+/PR_BODY.md
+/RECEIPT.md
 .DS_Store
 Thumbs.db
 *.swp

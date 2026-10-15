@@ -263,6 +263,29 @@ def test_clipboard_copy_performs_no_store_access(tmp_path: pathlib.Path, tk_root
         pass  # In some headless environments clipboard_get might raise TclError
 
 
+def test_recovery_cli_uses_registered_launcher(tmp_path: pathlib.Path, tk_root: tk.Tk, monkeypatch):
+    from scripts import conductor_resources, conductor_store
+
+    manager = MagicMock()
+    manager.run_bounded_command.return_value = {
+        "status": "PASSED", "exit_code": 0, "stdout": "", "stderr": "",
+    }
+    monkeypatch.setattr(conductor_store, "ConductorStore", lambda root: object())
+    monkeypatch.setattr(conductor_resources, "HostResourceManager", lambda store: manager)
+    monkeypatch.setattr("tkinter.messagebox.askyesno", lambda *args, **kwargs: True)
+    monkeypatch.setattr("tkinter.simpledialog.askstring", lambda *args, **kwargs: "verified owner is gone")
+    panel = ConductorGatePanel(master=tk_root, root_dir=tmp_path, enable_worker=False)
+    button = MagicMock()
+
+    panel.recover_request("rr_1234567890ab", MagicMock(recover_code="OWNER_GONE"), button)
+
+    call = manager.run_bounded_command.call_args
+    assert call.args[0][2:4] == ["resource-recover", "--request-id"]
+    assert call.kwargs["timeout_seconds"] == 60
+    assert call.kwargs["lane_id"].startswith("gui_recovery_")
+    button.configure.assert_called_once_with(text="RECOVERED", bg="#7CB88A")
+
+
 def test_queue_table_caps_at_20_and_shows_more_with_true_count(tmp_path: pathlib.Path, tk_root: tk.Tk):
     """The queue table caps at 20 rows and shows '+N more' while verdict and label state true count."""
     panel = ConductorGatePanel(master=tk_root, root_dir=tmp_path, enable_worker=False)

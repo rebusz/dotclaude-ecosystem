@@ -199,6 +199,9 @@ class ConductorCommandProcessor:
 
         if item.state != WorkItemState.READY:
             raise ValueError(f"WorkItem {work_item_id} is in state {item.state.value}, not READY")
+        memory = self.resources.memory_status(required_gib=1)
+        if not memory["admitted"]:
+            raise ValueError(memory["reason"])
 
         # R2/R3 authorization check
         if item.risk_class in {"R2", "R3"}:
@@ -319,6 +322,8 @@ class ConductorCommandProcessor:
             environment=payload.get("environment"),
             lease_ttl_seconds=int(payload.get("lease_ttl_seconds", 300)),
             actor=payload.get("actor", "resource-command"),
+            memory_budget_gib=float(payload.get("memory_budget_gib", 1)),
+            lane_priority=payload.get("lane_priority"),
         )
 
     def _handle_resource_heartbeat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -377,6 +382,9 @@ class ConductorCommandProcessor:
             heartbeat_interval_seconds=float(payload.get("heartbeat_interval_seconds", 30)),
             base_environment=payload.get("environment"),
             force_heavy=bool(payload.get("force_heavy", False)),
+            per_test_timeout_seconds=float(payload.get("per_test_timeout_seconds", 300)),
+            memory_budget_gib=float(payload.get("memory_budget_gib", 1)),
+            lane_priority=payload.get("lane_priority"),
         )
 
     def _handle_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:

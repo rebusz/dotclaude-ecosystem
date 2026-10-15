@@ -8,10 +8,12 @@ All environment variables use TDCONDUCTOR_* to avoid collision with 3rd-party ho
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
 import subprocess
+import uuid
 from typing import Any, Dict, Optional, Tuple, Union
 
 
@@ -77,8 +79,9 @@ def check_truthctl_version(executable: str = "truthctl") -> Dict[str, Any]:
 class ConductorTruthDeckSeam:
     """Read-only evidence checkpoint runner calling truthctl or session_state."""
 
-    def __init__(self, repo_root: Union[str, pathlib.Path]):
+    def __init__(self, repo_root: Union[str, pathlib.Path], resource_manager=None):
         self.repo_root = pathlib.Path(repo_root).expanduser().resolve()
+        self.resource_manager = resource_manager
 
     def run_checkpoint_snapshot(self, boundary: str, plan_path: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         """Run truthctl snapshot --no-store --json.
@@ -91,26 +94,32 @@ class ConductorTruthDeckSeam:
             cmd.extend(["--plan", plan_path])
 
         try:
-            res = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
+            if self.resource_manager is None:
+                from scripts.conductor_resources import HostResourceManager
+                from scripts.conductor_store import ConductorStore
+
+                self.resource_manager = HostResourceManager(ConductorStore())
+            lane_id = f"truthdeck_{uuid.uuid4().hex}"
+            result = self.resource_manager.run_bounded_command(
+                cmd, cwd=self.repo_root, lane_id=lane_id,
+                owner_id=os.environ.get("CONDUCTOR_OWNER_ID") or lane_id, timeout_seconds=120,
             )
+            if not result["quiescent"] or result["status"] in {"TIMEOUT", "OUTPUT_LIMIT", "RECOVERY_REQUIRED"}:
+                return "UNKNOWN", {"error": result["status"], "lane_id": result["lane_id"]}
 
             # Process JSON output
-            stdout_text = res.stdout.strip()
+            stdout_text = result["stdout"].strip()
             if not stdout_text:
-                return "UNKNOWN", {"error": "truthctl produced empty output", "exit_code": res.returncode}
+                return "UNKNOWN", {"error": "truthctl produced empty output", "exit_code": result["exit_code"]}
 
             snapshot_data = json.loads(stdout_text)
             gate_status = snapshot_data.get("overall_status", "UNKNOWN")
 
             # Exit code 12 or 0 are valid snapshots per D4
-            if res.returncode in {0, 12}:
+            if result["exit_code"] in {0, 12}:
                 return gate_status, snapshot_data
             else:
-                return "UNKNOWN", {"error": f"truthctl failed with exit code {res.returncode}", "raw": stdout_text}
+                return "UNKNOWN", {"error": f"truthctl failed with exit code {result['exit_code']}", "raw": stdout_text}
 
         except Exception as err:
             return "UNKNOWN", {"error": str(err)}

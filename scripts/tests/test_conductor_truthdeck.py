@@ -12,19 +12,30 @@ from scripts.conductor_model import WorkItem
 
 def test_truthdeck_seam_exit_code_12(tmp_path: pathlib.Path):
     """Test Decision D4: exit code 12 with parseable JSON is a VALID snapshot with non-green gates."""
-    seam = ConductorTruthDeckSeam(repo_root=tmp_path)
+    manager = MagicMock()
+    seam = ConductorTruthDeckSeam(repo_root=tmp_path, resource_manager=manager)
 
-    mock_res = MagicMock()
-    mock_res.returncode = 12
-    mock_res.stdout = json.dumps({
+    output = json.dumps({
         "overall_status": "HOLD",
         "gates": {"clean_worktree": "PASS", "ci_status": "HOLD"}
     })
 
-    with patch("subprocess.run", return_value=mock_res):
-        status, data = seam.run_checkpoint_snapshot(boundary="pre_dispatch", plan_path="design/plans/test.md")
-        assert status == "HOLD"
-        assert data["overall_status"] == "HOLD"
+    manager.run_bounded_command.return_value = dict(exit_code=12, stdout=output, status="FAILED", quiescent=True)
+    status, data = seam.run_checkpoint_snapshot(boundary="pre_dispatch", plan_path="design/plans/test.md")
+    assert status == "HOLD"
+    assert data["overall_status"] == "HOLD"
+    call = manager.run_bounded_command.call_args
+    assert call.kwargs["timeout_seconds"] == 120
+    assert "--no-store" in call.args[0]
+
+
+def test_truthdeck_timeout_cannot_turn_partial_json_into_green(tmp_path):
+    manager = MagicMock()
+    manager.run_bounded_command.return_value = dict(exit_code=0, stdout='{"overall_status":"PASS"}',
+                                                    status="TIMEOUT", quiescent=True, lane_id="timed-out")
+    seam = ConductorTruthDeckSeam(tmp_path, resource_manager=manager)
+    status, data = seam.run_checkpoint_snapshot("pre_dispatch")
+    assert status == "UNKNOWN" and data["error"] == "TIMEOUT"
 
 
 def test_workflow_bridge_formatting():

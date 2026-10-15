@@ -53,8 +53,13 @@ class ConductorScheduler:
 
         eligible: List[WorkItem] = []
         rejected: List[Dict[str, Any]] = []
+        memory = self.resources.memory_status(required_gib=1)
 
         for item in all_ready:
+            if not memory["admitted"]:
+                rejected.append({"work_item_id": item.work_item_id, "title": item.title,
+                                 "reason_code": memory["reason"]})
+                continue
             # Check dependency satisfaction
             unsatisfied = [dep for dep in item.dependency_ids if dep not in all_completed]
             if unsatisfied:

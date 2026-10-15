@@ -13,7 +13,6 @@ from enum import Enum
 import json
 import os
 import pathlib
-import psutil
 import re
 import shutil
 import sqlite3
@@ -22,6 +21,11 @@ import tempfile
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 import uuid
+
+try:
+    import psutil
+except ImportError:  # operator Python without conductor deps must still import the store
+    psutil = None
 
 from scripts.conductor_model import (
     Attempt,
@@ -63,6 +67,26 @@ def get_default_conductor_dir() -> pathlib.Path:
     if env_dir:
         return pathlib.Path(env_dir).expanduser().resolve()
     return (pathlib.Path.home() / ".conductor").resolve()
+
+
+def _psutil_errors() -> tuple[type[BaseException], ...]:
+    if psutil is None:
+        return (OSError, ValueError, AttributeError)
+    return (OSError, ValueError, psutil.Error)
+
+
+def _process_alive_with_start(pid: int, expected_start: float | None, *, tolerance: float = 1.0) -> bool:
+    if psutil is None:
+        return False
+    try:
+        proc = psutil.Process(int(pid))
+        if not proc.is_running():
+            return False
+        if expected_start is None:
+            return True
+        return abs(proc.create_time() - float(expected_start)) < tolerance
+    except _psutil_errors():
+        return False
 
 
 def _file_signature(path: pathlib.Path) -> tuple[bool, int, int]:
@@ -175,13 +199,10 @@ def _read_store_status_from_conn(conn: sqlite3.Connection, db_path: pathlib.Path
     ).fetchone()
     leader_active = False
     if leader_row:
-        try:
-            process = psutil.Process(int(leader_row["pid"]))
-            leader_active = process.is_running() and abs(
-                process.create_time() - float(leader_row["process_start_time"])
-            ) < 1.0
-        except (psutil.Error, OSError, TypeError, ValueError):
-            leader_active = False
+        leader_active = _process_alive_with_start(
+            int(leader_row["pid"]),
+            float(leader_row["process_start_time"]) if leader_row["process_start_time"] is not None else None,
+        )
     return {
         "store_state": "AVAILABLE",
         "leader_id": leader_row["leader_id"] if leader_row else None,
@@ -650,6 +671,19 @@ def adjudicate_recovery(
             reason_placeholder="<why>",
         )
 
+    if psutil is None:
+        # No liveness authority: never infer OWNER_GONE, demand an attestation.
+        cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id} --attest-owner-gone --reason '<why>'"
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="OWNER_LIVENESS_UNPROVEN",
+            liveness_status="OWNER_LIVENESS_UNAVAILABLE",
+            pid=int(pid),
+            reason_placeholder="<why>",
+        )
+
     try:
         proc = psutil.Process(int(pid))
         observed_start = proc.create_time()
@@ -672,7 +706,7 @@ def adjudicate_recovery(
                 liveness_status="OWNER_PROCESS_ALIVE",
                 pid=int(pid),
             )
-    except (OSError, ValueError, psutil.Error):
+    except _psutil_errors():
         cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
         return RecoveryAdjudication(
             request_id=request_id,
@@ -1017,7 +1051,7 @@ read_resource_pool_status = read_host_resource_status
 
 # The newest schema this build knows how to migrate to. A store above it is a
 # downgrade, and downgrades corrupt (audit C9).
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 
 class ConductorStore:
@@ -1474,12 +1508,62 @@ class ConductorStore:
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (7, datetime('now'))"
                 )
 
+            if current_version < 8:
+                # Restart-safe additive migration in a single write transaction.
+                # No executescript implicit commit between schema and its marker.
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("""CREATE TABLE IF NOT EXISTS process_lanes (
+                    lane_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                    owner_pid INTEGER NOT NULL, owner_start_time REAL NOT NULL,
+                    owner_session_id INTEGER NOT NULL, owner_username TEXT NOT NULL,
+                    worktree TEXT NOT NULL, command_sha256 TEXT NOT NULL,
+                    request_id TEXT, state TEXT NOT NULL,
+                    deadline REAL NOT NULL, heartbeat REAL NOT NULL,
+                    budget_gib REAL NOT NULL, launch_provenance TEXT NOT NULL,
+                    launch_origin TEXT NOT NULL
+                )""")
+                conn.execute("""CREATE TABLE IF NOT EXISTS process_registry (
+                    pid INTEGER NOT NULL, start_time REAL NOT NULL,
+                    lane_id TEXT NOT NULL REFERENCES process_lanes(lane_id),
+                    parent_pid INTEGER NOT NULL, session_id INTEGER NOT NULL,
+                    username TEXT NOT NULL, command_sha256 TEXT NOT NULL,
+                    PRIMARY KEY (pid, start_time)
+                )""")
+                conn.execute("CREATE INDEX IF NOT EXISTS process_registry_lane ON process_registry(lane_id)")
+                conn.execute("""CREATE TABLE IF NOT EXISTS host_memory_state (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    paused INTEGER NOT NULL, samples_json TEXT NOT NULL
+                )""")
+                conn.execute("INSERT OR IGNORE INTO host_memory_state VALUES (1, 0, '[]')")
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)")}
+                if "memory_budget_gib" not in columns:
+                    conn.execute("ALTER TABLE host_resource_requests ADD COLUMN memory_budget_gib REAL NOT NULL DEFAULT 1")
+                conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES (8, datetime('now'))")
+
+    def list_process_records(self) -> List[Dict[str, Any]]:
+        """Project ownership with request fences; no command lines or env values."""
+        with self._connection() as conn:
+            rows = [dict(row) for row in conn.execute("""
+                SELECT l.*, p.pid, p.start_time, p.parent_pid, p.session_id,
+                       p.username, p.command_sha256 AS process_command_sha256, r.state AS request_state
+                FROM process_lanes l JOIN process_registry p USING(lane_id)
+                LEFT JOIN host_resource_requests r ON r.request_id=l.request_id
+                ORDER BY l.lane_id, p.pid
+            """)]
+            for row in rows:
+                row["command_sha256"] = row.pop("process_command_sha256")
+            return rows
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
+        if psutil is None:
+            # Liveness of a competing leader cannot be proven without psutil:
+            # fail closed rather than steal or record an identity-less lock.
+            return False
         try:
-            p = psutil.Process(current_pid)
-            start_time = p.create_time()
+            start_time = psutil.Process(current_pid).create_time()
         except Exception:
             start_time = 0.0
 
@@ -1507,14 +1591,7 @@ class ConductorStore:
                     )
                     return True
 
-                # Check if existing leader process is still alive
-                is_alive = False
-                try:
-                    proc = psutil.Process(existing_pid)
-                    if proc.is_running() and abs(proc.create_time() - existing_start_time) < 1.0:
-                        is_alive = True
-                except Exception:
-                    is_alive = False
+                is_alive = _process_alive_with_start(existing_pid, existing_start_time)
 
                 if is_alive:
                     # Another active leader exists

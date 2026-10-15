@@ -255,7 +255,24 @@ def test_duplicate_pytest_idempotency_never_launches_twice(manager: HostResource
     assert manager.status()["active_units"] == 0
 
 
-def test_real_pytest_timeout_releases_capacity(manager: HostResourceManager, tmp_path: pathlib.Path):
+def test_pytest_timeout_releases_capacity(manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch):
+    # Exercise the real adapter and deadline with a retained fake OS handle.
+    # This suite never terminates a real sleeping process.
+    from types import SimpleNamespace
+    from scripts import conductor_processes
+
+    class TimedChild:
+        def __init__(self, *args, **kwargs):
+            self.process = SimpleNamespace(returncode=None)
+            self.pid = 999999
+        def poll(self): return self.process.returncode
+        def wait(self, timeout): raise subprocess.TimeoutExpired("fake", timeout)
+        def member_pids(self): return []
+        def close(self):
+            self.process.returncode = 124
+            return True
+
+    monkeypatch.setattr(conductor_processes, "ContainedProcess", TimedChild)
     slow_test = tmp_path / "test_slow_resource.py"
     slow_test.write_text(
         "import os, time\n"
@@ -288,6 +305,11 @@ def test_pytest_classification_is_conservative_and_focused_does_not_consume_slot
     assert classify_pytest_invocation(["-n", "auto", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy"
     assert classify_pytest_invocation(["-m", "integration", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy"
     assert classify_pytest_invocation(["--unknown-option", "tests/test_one.py"], cwd=tmp_path) == "pytest_heavy_unknown"
+    assert classify_pytest_invocation(["tests/test_one.py", "-q"], cwd=tmp_path) == "pytest_focused"
+    assert classify_pytest_invocation(
+        ["-n", "auto", "tests/test_one.py", "-q"],
+        cwd=tmp_path,
+    ) == "pytest_heavy"
 
     focused_test = tmp_path / "test_focused_resource.py"
     focused_test.write_text("def test_focused():\n    assert True\n", encoding="utf-8")
@@ -307,6 +329,62 @@ def test_pytest_classification_is_conservative_and_focused_does_not_consume_slot
         request.purpose == "pytest_focused" and request.reason_code == "PYTEST_FOCUSED_NO_HEAVY_LEASE"
         for request in manager.store.list_resource_requests()
     )
+
+
+def test_pytest_addopts_forces_heavy_admission_and_reaches_command(
+    manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch
+):
+    from types import SimpleNamespace
+    from scripts import conductor_processes
+
+    captured_commands: list[list[str]] = []
+
+    class RecordingChild:
+        def __init__(self, command, *args, **kwargs):
+            captured_commands.append(list(command))
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def member_pids(self):
+            return []
+
+        def close(self):
+            return True
+
+        @property
+        def process(self):
+            return SimpleNamespace(returncode=0)
+
+        @property
+        def pid(self):
+            return 424242
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", '-m "not integration"')
+    monkeypatch.setattr(conductor_processes, "ContainedProcess", RecordingChild)
+    test_file = tmp_path / "test_addopts_resource.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    result = manager.run_bounded_pytest(
+        python_executable=sys.executable,
+        pytest_args=[str(test_file), "-q"],
+        cwd=tmp_path,
+        attempt_id="at-addopts",
+        agent_instance="inst",
+        timeout_seconds=60,
+        force_heavy=True,
+    )
+    assert result["classification"] == "pytest_heavy"
+    assert result["status"] == "PASSED"
+    assert captured_commands
+    command = captured_commands[0]
+    plugin_index = command.index("conductor_pytest_plugin")
+    argv_tail = command[plugin_index + 1 :]
+    assert "-m" in argv_tail
+    marker_index = argv_tail.index("-m")
+    assert argv_tail[marker_index + 1].strip('"') == "not integration"
 
 
 def test_pytest_adapter_filters_secret_environment_and_rejects_arbitrary_executable(

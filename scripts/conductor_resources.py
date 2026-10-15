@@ -9,13 +9,17 @@ liveness and never polls WMI or a process table.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from contextlib import ExitStack
 import hashlib
 import json
+import math
 import os
 import pathlib
 import psutil
 import re
+import shlex
 import subprocess
+import tempfile
 import time
 from typing import Any, Dict, Mapping, Optional, Sequence
 import uuid
@@ -31,8 +35,13 @@ from scripts.conductor_store import ConductorStore
 
 
 RESOURCE_KEY = "host:heavy"
+LANE_PRIORITIES = {"options": 400, "cctv": 300, "bos": 200, "runtime": 100}
+MEMORY_FLOOR_GIB = 6.0
+MEMORY_RESUME_GIB = 8.0
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
+
 DEFAULT_LEASE_TTL_SECONDS = 300
+UNBOUND_LANE_GRACE_SECONDS = 60
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
 PROVIDER_POOLS = frozenset(f"provider:{source}" for source in PROVIDER_SOURCES)
@@ -229,6 +238,15 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _pytest_addopts_from_environment(environment: Mapping[str, str] | None = None) -> list[str]:
+    """Return argv fragments from PYTEST_ADDOPTS for conservative classification."""
+    source = environment if environment is not None else os.environ
+    raw = source.get("PYTEST_ADDOPTS")
+    if raw is None or not str(raw).strip():
+        return []
+    return [str(arg) for arg in shlex.split(str(raw), posix=os.name != "nt")]
+
+
 def classify_pytest_invocation(
     pytest_args: Sequence[str], cwd: str | pathlib.Path | None = None
 ) -> str:
@@ -290,8 +308,24 @@ def classify_pytest_invocation(
 class HostResourceManager:
     """Single-writer resource admission over :class:`ConductorStore`."""
 
-    def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY):
+    def __init__(
+        self,
+        store: ConductorStore,
+        resource_key: str = RESOURCE_KEY,
+        *,
+        memory_floor_gib: float = MEMORY_FLOOR_GIB,
+        memory_resume_gib: float = MEMORY_RESUME_GIB,
+        memory_telemetry_override_gib: float | None = None,
+    ):
         self.store = store
+        if not (math.isfinite(memory_floor_gib) and math.isfinite(memory_resume_gib)
+                and 0 < memory_floor_gib <= memory_resume_gib):
+            raise ValueError("memory thresholds must be finite, positive and ordered")
+        self.memory_floor_gib = memory_floor_gib
+        self.memory_resume_gib = memory_resume_gib
+        if memory_telemetry_override_gib is not None:
+            self._validate_budget(memory_telemetry_override_gib)
+        self._memory_telemetry_override_gib = memory_telemetry_override_gib
         self.resource_key = resource_key
         if resource_key not in KNOWN_RESOURCE_KEYS:
             raise ValueError(
@@ -320,12 +354,19 @@ class HostResourceManager:
         environment: Optional[Mapping[str, str]] = None,
         lease_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS,
         actor: str = "resource-adapter",
+        memory_budget_gib: float = 1.0,
+        lane_priority: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Admit a named consumer, queue it, or inherit its ancestor lease.
 
         The entire decision and lease creation occurs under ``BEGIN IMMEDIATE``
         so two independent callers cannot both observe capacity as available.
         """
+        if lane_priority is not None:
+            if lane_priority not in LANE_PRIORITIES:
+                raise ValueError("unsupported lane priority")
+            priority = LANE_PRIORITIES[lane_priority]
+        self._validate_budget(memory_budget_gib)
         self._validate_request(purpose, attempt_id, agent_instance, lease_ttl_seconds, priority, self.resource_key)
         idempotency_key = idempotency_key or f"resource_{uuid.uuid4().hex}"
         slot_key = str(slot_key or "").strip()
@@ -357,9 +398,13 @@ class HostResourceManager:
             if capacity < 1 or (self.resource_key == "host:heavy" and capacity != 1):
                 raise ResourceAdmissionError("HOST_RESOURCE_CAPACITY_INVALID")
 
+            memory = self._memory_status_locked(conn, required_gib=memory_budget_gib)
             request_id = f"rr_{uuid.uuid4().hex[:12]}"
 
             if inherited_id:
+                if not memory["admitted"]:
+                    conn.commit()
+                    raise ResourceBusyError(memory["reason"])
                 if self._source_full_locked(conn, self.resource_key):
                     raise ResourceBusyError("PROVIDER_SOURCE_BUSY")
                 parent = conn.execute(
@@ -424,6 +469,8 @@ class HostResourceManager:
                         slot_key=slot_key,
                     )
                     self._insert_request(conn, request)
+                    conn.execute("UPDATE host_resource_requests SET memory_budget_gib=? WHERE request_id=?",
+                                 (memory_budget_gib, request.request_id))
                     self._event(conn, request_id, inherited_id, None, request.state.value, actor, "LEASE_INHERITED")
                     return self._request_result(conn, request, lease_id=inherited_id)
 
@@ -448,7 +495,10 @@ class HostResourceManager:
             capacity_full = (active_or_fenced_count >= capacity)
             slot_busy = bool(slot_key and slot_key in active_slot_keys)
 
-            if capacity_full:
+            if not memory["admitted"]:
+                state = HostResourceRequestState.QUEUED
+                reason = memory["reason"]
+            elif capacity_full:
                 state = HostResourceRequestState.QUEUED
                 reason = inherited_rejection or "HOST_RESOURCE_BUSY"
             elif self._source_full_locked(conn, self.resource_key):
@@ -475,6 +525,8 @@ class HostResourceManager:
                 slot_key=slot_key,
             )
             self._insert_request(conn, request)
+            conn.execute("UPDATE host_resource_requests SET memory_budget_gib=? WHERE request_id=?",
+                         (memory_budget_gib, request.request_id))
             lease_id: Optional[str] = None
             if state == HostResourceRequestState.ACTIVE:
                 lease_id = self._create_lease_locked(
@@ -677,6 +729,8 @@ class HostResourceManager:
             if not owner_gone:
                 if evidence == "OWNER_PROCESS_ALIVE":
                     raise ResourceAdmissionError("OWNER_PROCESS_ALIVE")
+                if evidence == "OWNER_LIVENESS_UNKNOWN":
+                    raise ResourceAdmissionError("OWNER_LIVENESS_UNPROVEN")
                 if not operator_attestation:
                     raise ResourceAdmissionError("OWNER_LIVENESS_UNPROVEN")
                 if not reason.strip():
@@ -721,8 +775,10 @@ class HostResourceManager:
             return False, "OWNER_UNRECORDED"
         try:
             observed_start = psutil.Process(int(pid)).create_time()
-        except (OSError, ValueError, psutil.Error):
+        except psutil.NoSuchProcess:
             return True, "OWNER_PROCESS_GONE"
+        except (OSError, ValueError, psutil.Error):
+            return False, "OWNER_LIVENESS_UNKNOWN"
         if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
             # Same pid, different process: the owner died and the OS reused it.
             return True, "OWNER_PID_REUSED"
@@ -732,6 +788,9 @@ class HostResourceManager:
         pool = self.store.get_resource_pool(self.resource_key)
         requests = self.store.list_resource_requests(resource_key=self.resource_key)
         leases = self.store.list_resource_leases(resource_key=self.resource_key)
+        with self.store._connection() as conn:
+            budgets = {row["request_id"]: row["memory_budget_gib"] for row in conn.execute(
+                "SELECT request_id,memory_budget_gib FROM host_resource_requests WHERE resource_key=?", (self.resource_key,))}
         counts: Dict[str, int] = {}
         for request in requests:
             counts[request.state.value] = counts.get(request.state.value, 0) + 1
@@ -744,9 +803,275 @@ class HostResourceManager:
             "recovery_required": counts.get(HostResourceRequestState.RECOVERY_REQUIRED.value, 0),
             "state_counts": counts,
             "storage": self.store.storage_status(),
-            "requests": [request.to_dict() for request in requests],
+            "requests": [{**request.to_dict(), "memory_budget_gib": budgets[request.request_id]} for request in requests],
             "leases": [lease.to_dict() for lease in leases],
+            "memory": self.memory_status(),
         }
+
+    @staticmethod
+    def _validate_budget(value: float) -> None:
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+            raise ValueError("memory budget must be finite and positive")
+
+    def _memory_status_locked(self, conn: Any, *, required_gib: float = 0,
+                              exclude_request: Optional[str] = None) -> Dict[str, Any]:
+        """One admission transaction for physical headroom and durable reservations.
+
+        Budgets reserve *additional* headroom, not an RSS quota. Counting the
+        complete budget throughout a lane is deliberately conservative and avoids
+        inferring reclaimable memory by summing shared working sets.
+        """
+        reserved = conn.execute("""
+            SELECT COALESCE(SUM(memory_budget_gib),0) FROM host_resource_requests
+            WHERE state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')
+              AND request_id != ?
+        """, (exclude_request or "",)).fetchone()[0]
+        # Nonterminal lanes keep their budget until termination is proven. Skip lanes
+        # whose request row is already counted above so reservations are not doubled.
+        self._reconcile_unbound_lanes_locked(conn, time.time())
+        reserved += conn.execute("""
+            SELECT COALESCE(SUM(l.budget_gib),0) FROM process_lanes l
+            WHERE l.state != 'TERMINAL'
+              AND NOT EXISTS (
+                SELECT 1 FROM host_resource_requests r
+                WHERE r.request_id = l.request_id
+                  AND r.state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')
+              )
+        """).fetchone()[0]
+        old = conn.execute("SELECT * FROM host_memory_state WHERE singleton=1").fetchone()
+        samples = json.loads(old["samples_json"])
+        paused = bool(old["paused"])
+        try:
+            override_gib = self._memory_telemetry_override_gib
+            if override_gib is not None:
+                available, total = override_gib, override_gib
+            else:
+                memory = psutil.virtual_memory()
+                available, total = memory.available / 2**30, memory.total / 2**30
+            if not (math.isfinite(available) and math.isfinite(total) and 0 <= available <= total and total > 0):
+                raise ValueError("invalid memory observation")
+        except (OSError, ValueError, psutil.Error):
+            conn.execute("UPDATE host_memory_state SET paused=1 WHERE singleton=1")
+            return {"admitted": False, "reason": "RAM_TELEMETRY_UNKNOWN", "paused": True,
+                    "available_gib": None, "reserved_gib": reserved, "sample_time": time.time()}
+        threshold = self.memory_resume_gib if paused else self.memory_floor_gib
+        # Hysteresis follows physical pressure; a large individual request must
+        # not latch all smaller requests out after RAM has recovered.
+        paused = available < threshold
+        headroom = available - reserved - required_gib
+        admitted = not paused and headroom >= self.memory_floor_gib
+        now = time.time()
+        if not samples or now - samples[-1][0] >= 1:
+            samples = (samples + [[now, available]])[-12:]
+        conn.execute("UPDATE host_memory_state SET paused=?,samples_json=? WHERE singleton=1",
+                     (int(paused), json.dumps(samples)))
+        trend = None
+        if len(samples) > 1 and samples[-1][0] > samples[0][0]:
+            trend = (samples[-1][1] - samples[0][1]) * 60 / (samples[-1][0] - samples[0][0])
+        return {"admitted": admitted, "paused": paused,
+                "reason": "RAM_ADMITTED" if admitted else "RAM_PRESSURE" if paused else "RAM_BUDGET_RESERVED",
+                "available_gib": available, "total_gib": total, "reserved_gib": reserved,
+                "required_gib": required_gib, "headroom_gib": headroom,
+                "floor_gib": self.memory_floor_gib, "resume_gib": self.memory_resume_gib,
+                "warning": available < 10, "trend_gib_per_minute": trend,
+                "sample_time": now}
+
+    def memory_status(self, required_gib: float = 0) -> Dict[str, Any]:
+        if required_gib != 0:
+            self._validate_budget(required_gib)
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._memory_status_locked(conn, required_gib=required_gib)
+
+    def _begin_lane(self, *, command: Sequence[str], cwd: pathlib.Path,
+                    lane_id: str, owner_id: str, request_id: Optional[str],
+                    timeout_seconds: float, budget_gib: float) -> Dict[str, str]:
+        from scripts.conductor_reaper import launch_origin, process_session_id
+
+        self._validate_budget(budget_gib)
+        owner = psutil.Process(os.getpid())
+        identity = (owner.pid, owner.create_time(), process_session_id(owner.pid), owner.username())
+        now = time.time()
+        digest = hashlib.sha256(json.dumps(list(command), separators=(",", ":")).encode("utf-8")).hexdigest()
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM process_lanes WHERE lane_id=?", (lane_id,)).fetchone():
+                raise ResourceAdmissionError("PROCESS_LANE_ALREADY_RECORDED")
+            memory = self._memory_status_locked(conn, required_gib=budget_gib, exclude_request=request_id)
+            if not memory["admitted"]:
+                conn.commit()
+                raise ResourceBusyError(memory["reason"])
+            conn.execute("""
+                INSERT INTO process_lanes
+                    (lane_id, owner_id, owner_pid, owner_start_time, owner_session_id,
+                     owner_username, worktree, command_sha256, request_id, state,
+                     deadline, heartbeat, budget_gib, launch_provenance, launch_origin)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (lane_id, owner_id, *identity, str(cwd), digest, request_id,
+                  "STARTING", now + timeout_seconds, now, budget_gib, "conductor", launch_origin()))
+        return {"CONDUCTOR_LANE_ID": lane_id, "CONDUCTOR_OWNER_ID": owner_id}
+
+    def _reconcile_unbound_lanes_locked(self, conn: Any, now: float) -> None:
+        """Move expired unbound lanes into recovery custody; never drop their budget silently."""
+        rows = conn.execute(
+            """
+            SELECT lane_id, owner_pid, owner_start_time FROM process_lanes l
+            LEFT JOIN host_resource_requests r ON r.request_id = l.request_id
+            WHERE l.state IN ('STARTING', 'RUNNING') AND r.request_id IS NULL
+              AND l.deadline + ? <= ?
+            """,
+            (UNBOUND_LANE_GRACE_SECONDS, now),
+        ).fetchall()
+        for row in rows:
+            owner_gone, _ = self._owner_liveness(row["owner_pid"], row["owner_start_time"])
+            if owner_gone:
+                conn.execute(
+                    "UPDATE process_lanes SET state='RECOVERY_REQUIRED', heartbeat=? WHERE lane_id=?",
+                    (now, row["lane_id"]),
+                )
+
+    def _record_suspended_process(self, lane_id: str, process: Any, command: Sequence[str]) -> None:
+        """Durable registration before Job assignment closes the owner-crash window."""
+        from scripts.conductor_reaper import process_session_id
+
+        observed = psutil.Process(process.pid)
+        argv = list(command)
+        digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode("utf-8")).hexdigest()
+        identity = (
+            observed.pid,
+            observed.create_time(),
+            lane_id,
+            observed.ppid(),
+            process_session_id(observed.pid),
+            observed.username(),
+            digest,
+        )
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("INSERT OR IGNORE INTO process_registry VALUES (?,?,?,?,?,?,?)", identity)
+
+    def _record_process(self, lane_id: str, process: Any, command: Optional[Sequence[str]] = None,
+                        *, membership=None) -> None:
+        from scripts.conductor_reaper import process_session_id
+
+        observed = psutil.Process(process.pid)
+        # Root registration runs while the Windows worker is suspended. Its
+        # initial arguments come from our Popen call, never an env/credential read.
+        argv = list(command) if command is not None else observed.cmdline()
+        digest = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode("utf-8")).hexdigest()
+        identity = (observed.pid, observed.create_time(), lane_id, observed.ppid(),
+                    process_session_id(observed.pid), observed.username(), digest)
+        if membership is not None:
+            # A Job PID snapshot does not pin an individual member. Never adopt
+            # a reused PID after it has left our containment boundary.
+            if observed.pid not in membership() or psutil.Process(observed.pid).create_time() != identity[1]:
+                return
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("INSERT OR IGNORE INTO process_registry VALUES (?,?,?,?,?,?,?)", identity)
+            conn.execute("UPDATE process_lanes SET state='RUNNING',heartbeat=? WHERE lane_id=?",
+                         (time.time(), lane_id))
+
+    def _finish_lane(self, lane_id: str, *, quiescent: bool) -> None:
+        with self.store._connection() as conn:
+            conn.execute("UPDATE process_lanes SET state=?,heartbeat=? WHERE lane_id=?",
+                         ("TERMINAL" if quiescent else "RECOVERY_REQUIRED", time.time(), lane_id))
+
+    def _run_registered(self, command: Sequence[str], *, cwd: pathlib.Path,
+                        env: Dict[str, str], lane_id: str, owner_id: str,
+                        request_id: Optional[str], timeout_seconds: float,
+                        budget_gib: float = 1, heartbeat=None,
+                        heartbeat_interval_seconds: float = 30) -> Dict[str, Any]:
+        """Shared bounded launcher: retained handles, finite output and one registry."""
+        from scripts.conductor_processes import ContainedProcess, ContainmentError
+
+        env.update(self._begin_lane(command=command, cwd=cwd, lane_id=lane_id,
+                                   owner_id=owner_id, request_id=request_id,
+                                   timeout_seconds=timeout_seconds, budget_gib=budget_gib))
+        child = None
+        quiescent = True  # No payload exists until containment succeeds.
+        timed_out = False
+        started = time.monotonic()
+        max_output = 4 * 1024 * 1024
+        # File-backed capture prevents communicate() retaining a corpus in RAM.
+        # The watchdog caps disk growth; final evidence reads at most 4 MiB/stream.
+        with ExitStack() as files:
+            try:
+                out = files.enter_context(tempfile.TemporaryFile())
+                err = files.enter_context(tempfile.TemporaryFile())
+                def registered(process):
+                    self._record_process(lane_id, process, command)
+                    if request_id:
+                        with self.store._connection() as conn:
+                            conn.execute("""
+                                UPDATE host_resource_leases SET process_pid=?, process_start_time=?
+                                WHERE request_id=?
+                            """, (process.pid, psutil.Process(process.pid).create_time(), request_id))
+
+                def suspended(process):
+                    self._record_suspended_process(lane_id, process, command)
+
+                child = ContainedProcess(command, cwd=str(cwd), env=env, stdout=out, stderr=err,
+                                         on_suspended=suspended, on_started=registered)
+                quiescent = False
+                next_heartbeat = started + heartbeat_interval_seconds
+                output_limited = False
+                while child.poll() is None:
+                    remaining = timeout_seconds - (time.monotonic() - started)
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    if os.fstat(out.fileno()).st_size + os.fstat(err.fileno()).st_size > max_output:
+                        output_limited = True
+                        break
+                    try:
+                        child.wait(timeout=min(remaining, heartbeat_interval_seconds, 0.5))
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if child.poll() is None:
+                        for pid in child.member_pids():
+                            if pid != child.pid:
+                                try:
+                                    self._record_process(lane_id, psutil.Process(pid), membership=child.member_pids)
+                                except psutil.NoSuchProcess:
+                                    pass  # Already exited within the contained tree.
+                    if child.poll() is None and time.monotonic() >= next_heartbeat:
+                        if heartbeat is not None:
+                            heartbeat()
+                        with self.store._connection() as conn:
+                            conn.execute("UPDATE process_lanes SET heartbeat=? WHERE lane_id=?",
+                                         (time.time(), lane_id))
+                        next_heartbeat = time.monotonic() + heartbeat_interval_seconds
+                output_limited = output_limited or os.fstat(out.fileno()).st_size + os.fstat(err.fileno()).st_size > max_output
+                quiescent = child.close()
+                out.seek(0)
+                err.seek(0)
+                stdout = out.read(max_output).decode("utf-8", "replace")
+                stderr = err.read(max_output).decode("utf-8", "replace")
+                code = child.process.returncode
+                return {"status": "RECOVERY_REQUIRED" if not quiescent else
+                        "TIMEOUT" if timed_out else "OUTPUT_LIMIT" if output_limited else
+                        "PASSED" if code == 0 else "FAILED", "exit_code": code,
+                        "stdout": stdout, "stderr": stderr, "quiescent": quiescent,
+                        "lane_id": lane_id, "owner_id": owner_id,
+                        "elapsed_seconds": round(time.monotonic() - started, 3)}
+            except ContainmentError as exc:
+                quiescent = exc.cleanup_confirmed
+                raise
+            finally:
+                if child is not None and not quiescent:
+                    quiescent = child.close()
+                self._finish_lane(lane_id, quiescent=quiescent)
+
+    def run_bounded_command(self, command: Sequence[str], *, cwd: str | pathlib.Path,
+                            lane_id: str, owner_id: str, timeout_seconds: float = 7200,
+                            memory_budget_gib: float = 1) -> Dict[str, Any]:
+        """Internal launch seam for agent/helper adapters, never arbitrary CLI execution."""
+        if isinstance(command, (str, bytes)) or not command or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("command and finite positive timeout required")
+        return self._run_registered(command, cwd=pathlib.Path(cwd).resolve(), env=dict(os.environ),
+                                    lane_id=lane_id, owner_id=owner_id, request_id=None,
+                                    timeout_seconds=timeout_seconds, budget_gib=memory_budget_gib)
 
     def child_environment(
         self, lease_id: str, base_environment: Optional[Mapping[str, str]] = None
@@ -775,12 +1100,16 @@ class HostResourceManager:
         heartbeat_interval_seconds: float = 30.0,
         base_environment: Optional[Mapping[str, str]] = None,
         force_heavy: bool = False,
+        per_test_timeout_seconds: float = 300.0,
+        memory_budget_gib: float = 1.0,
+        lane_priority: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run only ``<python> -m pytest`` through the real subprocess path."""
         if not python_executable or isinstance(pytest_args, (str, bytes)) or not isinstance(pytest_args, Sequence):
             raise ValueError("python executable and pytest args are required")
-        if timeout_seconds <= 0 or heartbeat_interval_seconds <= 0:
-            raise ValueError("timeouts must be positive")
+        if any(not math.isfinite(v) or v <= 0 for v in
+               (timeout_seconds, heartbeat_interval_seconds, per_test_timeout_seconds)):
+            raise ValueError("timeouts must be finite and positive")
         executable = self._validate_python_executable(python_executable)
         cwd_path = pathlib.Path(cwd).expanduser().resolve()
         if not cwd_path.is_dir():
@@ -788,10 +1117,28 @@ class HostResourceManager:
         normalized_args = [str(arg) for arg in pytest_args]
         if normalized_args and normalized_args[0] == "--":
             normalized_args = normalized_args[1:]
-        classification = classify_pytest_invocation(normalized_args, cwd=cwd_path)
+        env_source = dict(os.environ)
+        if base_environment is not None:
+            env_source.update({str(key): str(value) for key, value in base_environment.items()})
+        addopts = _pytest_addopts_from_environment(env_source)
+        if any("conductor_pytest_plugin" in arg for arg in [*addopts, *normalized_args]):
+            raise ValueError("Conductor pytest timer cannot be overridden")
+        classification = classify_pytest_invocation([*addopts, *normalized_args], cwd=cwd_path)
         if force_heavy and classification == "pytest_focused":
             classification = "pytest_full"
-        command = [str(executable), "-m", "pytest", *normalized_args]
+        # Ini addopts must not silently disable the timer or add unclassified
+        # worker fan-out. PYTEST_ADDOPTS are merged into argv after classification.
+        command = [
+            str(executable),
+            "-m",
+            "pytest",
+            "-p",
+            "conductor_pytest_plugin",
+            *addopts,
+            *normalized_args,
+            "-o",
+            "addopts=",
+        ]
         command_sha256 = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode("utf-8")).hexdigest()
         if classification == "pytest_focused":
             admission = self._log_focused_request(
@@ -809,6 +1156,8 @@ class HostResourceManager:
                 command_sha256=command_sha256,
                 parent_lease_id=parent_lease_id,
                 environment=base_environment,
+                memory_budget_gib=memory_budget_gib,
+                lane_priority=lane_priority,
             )
         if admission.get("idempotent_replay"):
             replay_state = admission["state"]
@@ -822,110 +1171,49 @@ class HostResourceManager:
 
         request_id = admission["request_id"]
         lease_id = admission["lease_id"]
-        env_source = dict(os.environ)
-        if base_environment is not None:
-            env_source.update({str(key): str(value) for key, value in base_environment.items()})
         env = {
             str(key): str(value)
             for key, value in env_source.items()
             if str(key) in _CHILD_ENV_ALLOWLIST or str(key).startswith("TDCONDUCTOR_")
         }
         env.pop(LEASE_ENV, None)
+        env.pop("PYTEST_ADDOPTS", None)
         if lease_id:
             env[LEASE_ENV] = lease_id
-        started = time.monotonic()
-        process: Optional[subprocess.Popen[str]] = None
-        stdout = ""
-        stderr = ""
-        timed_out = False
-        recovery_required = False
-        lease_lost = False
+        plugin_dir = str(pathlib.Path(__file__).resolve().parent)
+        inherited = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = plugin_dir + os.pathsep + inherited if inherited else plugin_dir
+        env["CONDUCTOR_TEST_TIMEOUT_SECONDS"] = str(per_test_timeout_seconds)
+        lane_id = request_id
+        sequence = 1
+
+        def heartbeat():
+            nonlocal sequence
+            if lease_id:
+                sequence += 1
+                self.heartbeat(lease_id, sequence)
+
+        result = None
         try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(pathlib.Path(cwd).resolve()),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
+            result = self._run_registered(
+                command, cwd=cwd_path, env=env, lane_id=lane_id, owner_id=agent_instance,
+                request_id=request_id, timeout_seconds=timeout_seconds,
+                budget_gib=memory_budget_gib, heartbeat=heartbeat,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
             )
-            process_start_time: Optional[float]
-            try:
-                process_start_time = psutil.Process(process.pid).create_time()
-            except (OSError, psutil.Error):
-                process_start_time = None
-            if admission["state"] == HostResourceRequestState.ACTIVE.value:
-                with self.store._connection() as conn:
-                    conn.execute(
-                        "UPDATE host_resource_leases SET process_pid = ?, process_start_time = ? WHERE lease_id = ?",
-                        (process.pid, process_start_time, lease_id),
-                    )
-            sequence = 1
-            while True:
-                try:
-                    stdout, stderr = process.communicate(timeout=heartbeat_interval_seconds)
-                    break
-                except subprocess.TimeoutExpired:
-                    if time.monotonic() - started >= timeout_seconds:
-                        timed_out = True
-                        process.terminate()
-                        try:
-                            stdout, stderr = process.communicate(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            # Try the retained handle once more. If the
-                            # terminal state still cannot be observed, keep
-                            # the lease recovery-required instead of releasing
-                            # capacity while an unknown child may be alive.
-                            try:
-                                process.kill()
-                                stdout, stderr = process.communicate(timeout=10)
-                            except (OSError, subprocess.TimeoutExpired):
-                                recovery_required = True
-                                stdout, stderr = "", "child termination could not be observed"
-                        break
-                    if lease_id:
-                        sequence += 1
-                        try:
-                            self.heartbeat(lease_id, sequence)
-                        except Exception:
-                            # The lease was fenced or released while our child
-                            # ran; left alone the pytest process kept running
-                            # unattended on the host (audit C11). Take it down.
-                            lease_lost = True
-                            try:
-                                process.kill()
-                                process.communicate(timeout=10)
-                            except (OSError, subprocess.TimeoutExpired):
-                                recovery_required = True  # death not observed
-                            raise
-            return {
-                **admission,
-                "classification": classification,
-                "status": "TIMEOUT" if timed_out else ("PASSED" if process.returncode == 0 else "FAILED"),
-                "exit_code": process.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-            }
+            return {**admission, **result, "classification": classification}
         finally:
-            # A failed Popen before a child exists is safe to release. Once a
-            # child ran, release is still explicit and the retained handle above
-            # has observed its terminal state.
-            if recovery_required or (process is not None and process.poll() is None):
+            with self.store._connection() as conn:
+                lane = conn.execute("SELECT state FROM process_lanes WHERE lane_id=?", (lane_id,)).fetchone()
+            if lane and lane["state"] != "TERMINAL":
                 self._mark_recovery(request_id, reason="PYTEST_TERMINATION_AMBIGUOUS")
-            elif lease_id and lease_lost:
-                # We killed the child and observed its exit, but the request may
-                # already be fenced -- and `release` refuses RECOVERY_REQUIRED by
-                # design, which would raise from inside this `finally` and mask
-                # the lease-lost error. Release only what is still ours.
-                current = self.store.get_resource_request(request_id)
-                if current is not None and current.state == HostResourceRequestState.ACTIVE:
-                    self.release(request_id, reason="PYTEST_LEASE_LOST")
             elif lease_id:
-                self.release(request_id, reason="PYTEST_TIMEOUT" if timed_out else "PYTEST_COMPLETED")
+                current = self.store.get_resource_request(request_id)
+                if current and current.state in {
+                    HostResourceRequestState.ACTIVE, HostResourceRequestState.INHERITED
+                }:
+                    self.release(request_id, reason="PYTEST_TIMEOUT" if result and
+                                 result["status"] == "TIMEOUT" else "PYTEST_COMPLETED")
 
     @staticmethod
     def _validate_python_executable(python_executable: str) -> pathlib.Path:
@@ -1277,6 +1565,11 @@ class HostResourceManager:
             if req_slot and req_slot in active_slot_keys:
                 # Documented choice: When the head of the queue is blocked only by slot exclusivity,
                 # promotion skips it and takes the next eligible request (non-strict FIFO for slot exclusivity).
+                continue
+            memory = self._memory_status_locked(conn, required_gib=float(qrow["memory_budget_gib"]))
+            if not memory["admitted"]:
+                conn.execute("UPDATE host_resource_requests SET reason_code=? WHERE request_id=?",
+                             (memory["reason"], qrow["request_id"]))
                 continue
             eligible_row = qrow
             break
