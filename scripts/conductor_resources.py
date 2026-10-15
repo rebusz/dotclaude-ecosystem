@@ -38,22 +38,8 @@ RESOURCE_KEY = "host:heavy"
 LANE_PRIORITIES = {"options": 400, "cctv": 300, "bos": 200, "runtime": 100}
 MEMORY_FLOOR_GIB = 6.0
 MEMORY_RESUME_GIB = 8.0
-TEST_MEMORY_ENV = "TDCONDUCTOR_TEST_MEMORY_GIB"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 
-
-def _pytest_memory_override_gib() -> float | None:
-    """Deterministic RAM for pytest and subprocess CLI tests; never set in production."""
-    raw = os.environ.get(TEST_MEMORY_ENV)
-    if raw is None or raw == "":
-        return None
-    if "PYTEST_CURRENT_TEST" not in os.environ:
-        # A stray/inherited value must never forge RAM headroom for a real admission.
-        return None
-    value = float(raw)
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{TEST_MEMORY_ENV} must be a positive finite GiB value")
-    return value
 DEFAULT_LEASE_TTL_SECONDS = 300
 UNBOUND_LANE_GRACE_SECONDS = 60
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
@@ -322,15 +308,24 @@ def classify_pytest_invocation(
 class HostResourceManager:
     """Single-writer resource admission over :class:`ConductorStore`."""
 
-    def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY,
-                 *, memory_floor_gib: float = MEMORY_FLOOR_GIB,
-                 memory_resume_gib: float = MEMORY_RESUME_GIB):
+    def __init__(
+        self,
+        store: ConductorStore,
+        resource_key: str = RESOURCE_KEY,
+        *,
+        memory_floor_gib: float = MEMORY_FLOOR_GIB,
+        memory_resume_gib: float = MEMORY_RESUME_GIB,
+        memory_telemetry_override_gib: float | None = None,
+    ):
         self.store = store
         if not (math.isfinite(memory_floor_gib) and math.isfinite(memory_resume_gib)
                 and 0 < memory_floor_gib <= memory_resume_gib):
             raise ValueError("memory thresholds must be finite, positive and ordered")
         self.memory_floor_gib = memory_floor_gib
         self.memory_resume_gib = memory_resume_gib
+        if memory_telemetry_override_gib is not None:
+            self._validate_budget(memory_telemetry_override_gib)
+        self._memory_telemetry_override_gib = memory_telemetry_override_gib
         self.resource_key = resource_key
         if resource_key not in KNOWN_RESOURCE_KEYS:
             raise ValueError(
@@ -831,19 +826,23 @@ class HostResourceManager:
             WHERE state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')
               AND request_id != ?
         """, (exclude_request or "",)).fetchone()[0]
-        # Bound lanes are reserved through host_resource_requests above.
-        # Only unbound lanes (no request row) may add lane-local budget here.
+        # Nonterminal lanes keep their budget until termination is proven. Skip lanes
+        # whose request row is already counted above so reservations are not doubled.
         self._reconcile_unbound_lanes_locked(conn, time.time())
         reserved += conn.execute("""
             SELECT COALESCE(SUM(l.budget_gib),0) FROM process_lanes l
-            LEFT JOIN host_resource_requests r ON r.request_id=l.request_id
-            WHERE l.state != 'TERMINAL' AND r.request_id IS NULL
+            WHERE l.state != 'TERMINAL'
+              AND NOT EXISTS (
+                SELECT 1 FROM host_resource_requests r
+                WHERE r.request_id = l.request_id
+                  AND r.state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')
+              )
         """).fetchone()[0]
         old = conn.execute("SELECT * FROM host_memory_state WHERE singleton=1").fetchone()
         samples = json.loads(old["samples_json"])
         paused = bool(old["paused"])
         try:
-            override_gib = _pytest_memory_override_gib()
+            override_gib = self._memory_telemetry_override_gib
             if override_gib is not None:
                 available, total = override_gib, override_gib
             else:
@@ -1118,18 +1117,28 @@ class HostResourceManager:
         normalized_args = [str(arg) for arg in pytest_args]
         if normalized_args and normalized_args[0] == "--":
             normalized_args = normalized_args[1:]
-        if any("conductor_pytest_plugin" in arg for arg in normalized_args):
-            raise ValueError("Conductor pytest timer cannot be overridden")
         env_source = dict(os.environ)
         if base_environment is not None:
             env_source.update({str(key): str(value) for key, value in base_environment.items()})
         addopts = _pytest_addopts_from_environment(env_source)
+        if any("conductor_pytest_plugin" in arg for arg in [*addopts, *normalized_args]):
+            raise ValueError("Conductor pytest timer cannot be overridden")
         classification = classify_pytest_invocation([*addopts, *normalized_args], cwd=cwd_path)
         if force_heavy and classification == "pytest_focused":
             classification = "pytest_full"
         # Ini addopts must not silently disable the timer or add unclassified
-        # worker fan-out. Explicit command-line options remain supported.
-        command = [str(executable), "-m", "pytest", "-p", "conductor_pytest_plugin", *normalized_args, "-o", "addopts="]
+        # worker fan-out. PYTEST_ADDOPTS are merged into argv after classification.
+        command = [
+            str(executable),
+            "-m",
+            "pytest",
+            "-p",
+            "conductor_pytest_plugin",
+            *addopts,
+            *normalized_args,
+            "-o",
+            "addopts=",
+        ]
         command_sha256 = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode("utf-8")).hexdigest()
         if classification == "pytest_focused":
             admission = self._log_focused_request(

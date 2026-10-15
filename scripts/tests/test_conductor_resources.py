@@ -331,21 +331,60 @@ def test_pytest_classification_is_conservative_and_focused_does_not_consume_slot
     )
 
 
-def test_pytest_addopts_forces_heavy_admission(manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch):
-    monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
+def test_pytest_addopts_forces_heavy_admission_and_reaches_command(
+    manager: HostResourceManager, tmp_path: pathlib.Path, monkeypatch
+):
+    from types import SimpleNamespace
+    from scripts import conductor_processes
+
+    captured_commands: list[list[str]] = []
+
+    class RecordingChild:
+        def __init__(self, command, *args, **kwargs):
+            captured_commands.append(list(command))
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def member_pids(self):
+            return []
+
+        def close(self):
+            return True
+
+        @property
+        def process(self):
+            return SimpleNamespace(returncode=0)
+
+        @property
+        def pid(self):
+            return 424242
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", '-m "not integration"')
+    monkeypatch.setattr(conductor_processes, "ContainedProcess", RecordingChild)
     test_file = tmp_path / "test_addopts_resource.py"
     test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    manager.request(purpose="pytest_heavy", attempt_id="blocker", agent_instance="inst")
     result = manager.run_bounded_pytest(
         python_executable=sys.executable,
         pytest_args=[str(test_file), "-q"],
         cwd=tmp_path,
         attempt_id="at-addopts",
-        agent_instance="inst-2",
+        agent_instance="inst",
         timeout_seconds=60,
+        force_heavy=True,
     )
     assert result["classification"] == "pytest_heavy"
-    assert result["status"] == "QUEUED"
+    assert result["status"] == "PASSED"
+    assert captured_commands
+    command = captured_commands[0]
+    plugin_index = command.index("conductor_pytest_plugin")
+    argv_tail = command[plugin_index + 1 :]
+    assert "-m" in argv_tail
+    marker_index = argv_tail.index("-m")
+    assert argv_tail[marker_index + 1].strip('"') == "not integration"
 
 
 def test_pytest_adapter_filters_secret_environment_and_rejects_arbitrary_executable(

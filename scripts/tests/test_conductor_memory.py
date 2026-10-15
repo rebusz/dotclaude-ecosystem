@@ -21,7 +21,6 @@ def manager(tmp_path):
 
 
 def memory(monkeypatch, gib):
-    monkeypatch.delenv(conductor_resources.TEST_MEMORY_ENV, raising=False)
     monkeypatch.setattr(conductor_resources.psutil, "virtual_memory",
                         lambda: SimpleNamespace(available=gib * 2**30, total=64 * 2**30))
 
@@ -37,7 +36,7 @@ def test_ram_pressure_hysteresis_survives_restart(manager, monkeypatch):
     assert restarted.memory_status()["admitted"]
 
 
-def test_released_request_does_not_leave_lane_budget_reserved(manager, monkeypatch):
+def test_released_request_keeps_lane_budget_until_terminal(manager, monkeypatch):
     memory(monkeypatch, 12)
     admitted = manager.request(purpose="pytest_full", attempt_id="lane", agent_instance="owner", memory_budget_gib=7)
     lane_id = admitted["request_id"]
@@ -59,6 +58,10 @@ def test_released_request_does_not_leave_lane_budget_reserved(manager, monkeypat
     status = restarted.status()
     assert status["active_units"] == 0
     assert status["recovery_required"] == 0
+    assert restarted.memory_status()["reserved_gib"] == 7
+    assert restarted.memory_status()["reason"] == "RAM_BUDGET_RESERVED"
+    with restarted.store._connection() as conn:
+        conn.execute("UPDATE process_lanes SET state='TERMINAL' WHERE lane_id=?", (lane_id,))
     assert restarted.memory_status()["reserved_gib"] == 0
     assert restarted.memory_status()["reason"] == "RAM_ADMITTED"
 
@@ -278,12 +281,17 @@ def test_inaccessible_owner_never_becomes_dead_or_attested(manager, monkeypatch)
     assert manager.store.get_resource_request(admitted["request_id"]).state.value == "RECOVERY_REQUIRED"
 
 
-def test_memory_override_env_is_ignored_outside_pytest(manager, monkeypatch):
+def test_memory_telemetry_override_is_explicit_not_from_environment(manager, monkeypatch):
     memory(monkeypatch, 3)
-    monkeypatch.setenv(conductor_resources.TEST_MEMORY_ENV, "100")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("TDCONDUCTOR_TEST_MEMORY_GIB", "100")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake::test")
     status = manager.memory_status()
-    assert status["paused"] and not status["admitted"]  # observed 3 GiB, not the forged 100
+    assert status["paused"] and not status["admitted"]  # observed 3 GiB, not a forged env value
+    explicit = HostResourceManager(
+        manager.store,
+        memory_telemetry_override_gib=100,
+    )
+    assert explicit.memory_status()["available_gib"] == 100
 
 
 def _insert_unbound_lane(manager, lane_id, state, deadline, *, owner_pid=None, owner_start_time=None):

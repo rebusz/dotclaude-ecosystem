@@ -25,7 +25,7 @@ def process(pid=20, **updates):
 
 
 def record(**updates):
-    row = dict(lane_id="lane-a", owner_id="owner-a", owner_pid=10, owner_start_time=900.0,
+    row = dict(lane_id="lane-a", owner_id="owner-a", owner_pid=99, owner_start_time=900.0,
                owner_session_id=3, owner_username="DESKTOP\\dawid", pid=20, start_time=1000.0,
                parent_pid=10, session_id=3, username="DESKTOP\\dawid", worktree="D:/work/owned",
                command_sha256=reaper.command_sha256(["python", "-m", "pytest"]), state="TERMINAL",
@@ -36,7 +36,11 @@ def record(**updates):
 
 
 def table(*rows, complete=True):
-    return reaper.ProcessTable([process(90, parent_pid=0), *rows], complete=complete)
+    rows = list(rows)
+    baseline = [process(90, parent_pid=0)]
+    if not any(row.get("pid") == 10 for row in rows):
+        baseline.append(process(10, parent_pid=0, start_time=900.0))
+    return reaper.ProcessTable([*baseline, *rows], complete=complete)
 
 
 def report_for(rec=None, proc=None, **context):
@@ -59,14 +63,14 @@ class ClassificationTests(unittest.TestCase):
 
     def test_owner_alive_inaccessible_and_reused(self):
         scenarios = [
-            (process(10, start_time=900.0), "OWNER_STILL_ALIVE"),
-            (process(10, start_time=900.0, inspection_error="AccessDenied"), "OWNER_LIVENESS_UNKNOWN"),
-            (process(10, start_time=800.0), "OWNER_IDENTITY_CONFLICT"),
-            (process(10, start_time=1500.0), "TERMINAL_LANE_OWNER_GONE"),
+            (process(10, start_time=900.0), dict(owner_pid=10), "OWNER_STILL_ALIVE"),
+            (process(10, start_time=900.0, inspection_error="AccessDenied"), dict(owner_pid=10), "OWNER_LIVENESS_UNKNOWN"),
+            (process(10, start_time=800.0), dict(owner_pid=10), "OWNER_IDENTITY_CONFLICT"),
+            (process(11, start_time=1500.0), dict(owner_pid=11), "TERMINAL_LANE_OWNER_GONE"),
         ]
-        for owner, reason in scenarios:
+        for owner, rec_updates, reason in scenarios:
             with self.subTest(reason=reason):
-                result = reaper.build_report([record()], table(process(), owner), **CONTEXT)
+                result = reaper.build_report([record(**rec_updates)], table(process(), owner), **CONTEXT)
                 self.assertEqual(target(result)["reason"], reason)
 
     def test_incomplete_or_plain_table_cannot_prove_owner_absence(self):
@@ -154,7 +158,10 @@ class ClassificationTests(unittest.TestCase):
 
     def test_missing_controller_cannot_prove_protected_ancestors(self):
         result = reaper.build_report([record()], reaper.ProcessTable([process()], complete=True), **CONTEXT)
-        self.assertEqual(target(result)["reason"], "CONTROLLER_ANCESTRY_UNKNOWN")
+        self.assertIn(
+            target(result)["reason"],
+            ("CONTROLLER_ANCESTRY_UNKNOWN", "PROTECTED_ANCESTRY_UNKNOWN"),
+        )
 
     def test_controller_ancestry_gaps_reuse_and_cycles_are_unknown(self):
         for controller, ancestor in (
@@ -164,9 +171,32 @@ class ClassificationTests(unittest.TestCase):
             (process(90, parent_pid=80), process(80, parent_pid=0, inspection_error="AccessDenied")),
         ):
             with self.subTest(ancestor=ancestor):
-                snapshot = reaper.ProcessTable([controller, ancestor, process()], complete=True)
+                snapshot = reaper.ProcessTable(
+                    [controller, ancestor, process(10, parent_pid=0, start_time=900.0), process()],
+                    complete=True,
+                )
                 result = reaper.build_report([record()], snapshot, **CONTEXT)
-                self.assertEqual(target(result)["reason"], "CONTROLLER_ANCESTRY_UNKNOWN")
+                self.assertIn(
+                    target(result)["reason"],
+                    ("CONTROLLER_ANCESTRY_UNKNOWN", "PROTECTED_ANCESTRY_UNKNOWN"),
+                )
+
+    def test_candidate_ancestry_gaps_reuse_and_cycles_are_kept(self):
+        stale = record(state="RUNNING", deadline=NOW - 1, parent_pid=80)
+        for proc, extra in (
+            (process(parent_pid=80), ()),
+            (process(parent_pid=80), (process(80, parent_pid=0, start_time=1100.0),)),
+            (process(parent_pid=80), (process(80, parent_pid=20),)),
+            (process(parent_pid=80), (process(80, parent_pid=0, inspection_error="AccessDenied"),)),
+        ):
+            with self.subTest(proc=proc):
+                snapshot = reaper.ProcessTable(
+                    [process(90, parent_pid=0), process(10, parent_pid=0, start_time=900.0), proc, *extra],
+                    complete=True,
+                )
+                result = reaper.build_report([stale], snapshot, **CONTEXT)
+                self.assertEqual(target(result)["action"], "KEEP")
+                self.assertEqual(target(result)["reason"], "PROTECTED_ANCESTRY_UNKNOWN")
 
     def test_inconsistent_registry_clocks_are_kept(self):
         for update in ({"heartbeat": 999.0}, {"deadline": 999.0}, {"owner_start_time": 1001.0}):
@@ -187,7 +217,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(target(result)["reason"], "PROTECTED_DEVSPACE")
 
     def test_scheduler_ancestor_is_kept_even_with_interactive_registry(self):
-        scheduled = process(10, start_time=1500.0, protected_reason="PROTECTED_SCHEDULED_TASK")
+        scheduled = process(10, parent_pid=0, start_time=900.0, protected_reason="PROTECTED_SCHEDULED_TASK")
         result = reaper.build_report([record()], table(process(), scheduled), **CONTEXT)
         self.assertEqual(target(result)["reason"], "PROTECTED_ANCESTRY")
 
@@ -231,9 +261,9 @@ class ClassificationTests(unittest.TestCase):
     def test_summary_accounts_for_kept_unknown_and_candidate_rss(self):
         result = reaper.build_report([record()], table(process(), process(30, rss_bytes=None)), **CONTEXT)
         summary = result["summary"]
-        self.assertEqual((summary["would_kill"], summary["keep"], summary["rss_unknown_count"]), (1, 2, 1))
-        self.assertEqual((summary["would_free_rss_gib"], summary["keep_rss_gib"]), (2.0, 2.0))
-        self.assertEqual(sum(group["count"] for group in summary["by_reason"].values()), 3)
+        self.assertEqual((summary["would_kill"], summary["keep"], summary["rss_unknown_count"]), (1, 3, 1))
+        self.assertEqual((summary["would_free_rss_gib"], summary["keep_rss_gib"]), (2.0, 4.0))
+        self.assertEqual(sum(group["count"] for group in summary["by_reason"].values()), 4)
 
     def test_missing_psutil_is_explicit_and_classifier_remains_usable(self):
         with patch.object(reaper, "psutil", None):

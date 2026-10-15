@@ -362,10 +362,10 @@ def _keep_reason(record, process, table, *, owner_id, session_id, username, now,
             return "OWNER_STILL_ALIVE"
         if _timestamp(owner["start_time"]) < _timestamp(record["owner_start_time"]):
             return "OWNER_IDENTITY_CONFLICT"
+    if not _ancestry_known(process["pid"], table.by_pid):
+        return "PROTECTED_ANCESTRY_UNKNOWN"
     for ancestor_pid in _ancestors(process["pid"], table.by_pid) - {process["pid"]}:
-        ancestor = table.by_pid.get(ancestor_pid)
-        if ancestor is None:
-            return "PROTECTED_ANCESTRY_UNKNOWN"
+        ancestor = table.by_pid[ancestor_pid]
         if ancestor.get("protected_reason"):
             return "PROTECTED_ANCESTRY"
         if ancestor.get("inspection_error") or not _metadata_known(ancestor):
