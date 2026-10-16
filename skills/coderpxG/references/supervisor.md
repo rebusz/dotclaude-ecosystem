@@ -85,10 +85,29 @@ different. Reject empty, truncated or overwritten specifications before submit.
 After execution compare the input hash and inspect the real diff and test exits.
 An output narrative or provider exit zero alone cannot prove implementation.
 
+For inline manual-review packets, measure the complete rendered payload before
+any CDP connection or composer input. Enforce both limits: 128 KiB (131,072 UTF-8
+bytes) and 40,000 UTF-16 code units. Record both counts and the packet hash;
+exceeding either limit is PRE_SUBMIT_BLOCKED before provider work. Do not
+automatically truncate the packet or drop code. A complete code-diff packet may
+omit full documentation/plan prose only with an explicit contract summary,
+exact reviewed head and source/packet hashes, while preserving all source and
+context required to review the change completely.
+
 Preserve refusals. Do not remove a sandbox, widen permission grants, change ACLs
 or reroute the same denied action to obtain a pass. Report the precise denied
 operation and continue independent permitted work. Never copy a historical
 catch-all permission recipe into the current environment.
+
+Classify a typed, proven pre-Send refusal as PRE_SUBMIT_BLOCKED, not automatically
+SUBMIT_UNCONFIRMED. For example, `send_control_disabled` qualifies only when the
+current actual `_send_prompt_reason` source proves that branch returns before
+any submit activation, and the attempt receipt identifies that branch with no
+activation or accepted response. Preserve the raw error and its evidence.
+Unknown click outcomes or acknowledgement remain SUBMIT_UNCONFIRMED: no retry
+or replacement. This guidance does not recover or reclassify older held records,
+reset caps, waive gates or establish operator attestation. Reconcile an existing
+held review separately through its documented same-attempt process.
 
 SUBMIT_UNCONFIRMED holds the exact assignment and its reservation. A smaller
 packet, new model, new account or fresh task name is still a duplicate retry.
