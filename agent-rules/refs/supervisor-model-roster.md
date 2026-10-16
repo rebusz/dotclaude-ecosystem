@@ -43,7 +43,7 @@ the three, it does not average them.
 - On any quota hit (HTTP 429, "usage limit", RESOURCE_EXHAUSTED, repeated
   SUBMIT_UNCONFIRMED) tell the operator at once: source, time, reset time if
   known, and where the work was rerouted. `agy`: ask the operator to switch to
-  another of the 5 accounts. z.ai GLM: report the window reset time. Codex:
+  another of the 5 accounts. z.ai GLM: report the window reset time (the 429 message prints it in UTC; e.g. 18:53 UTC = 12:53 MDT). Codex:
   report the reset time. Never queue work to wait for a reset while another
   source is free.
 - `CONDUCTOR_UNAVAILABLE` / `HOST_RESOURCE_BUSY` is a slot problem to fix
@@ -75,7 +75,8 @@ the three, it does not average them.
 - ChatGPT CDP: `D:/APPS/WatchF/scripts/cdp_chatgpt_code.py --prompt-file F --write <rel> --repo-root <worktree> --model "GPT-6 Astra" --reasoning-effort pro --reasoning-fallback xhigh --escalation-reason "<why>"` (pro requires `--escalation-reason`).
 - Gemini Argon: `D:/APPS/WatchF/scripts/cdp_gemini_oneshot.py --prompt-file F --model "Argon" --timeout-s 1500 --out r.json` (paste only, no tools; ~165 KB worked).
 - Perplexity: `D:/APPS/WatchF/scripts/coderpx.py <packet> --model "<fragment>" --output out.md`; packet = `coderpx.packet.v2`, sections `## 0.`..`## 7.` between `=== CODERPX PACKET ===` and `=== END PACKET ===`; composer cap ~50k chars; `--probe-models` lists the live picker.
-- agy: `agy --mode plan --model gemini-3.8-flash --effort high --log-file L -p="<one line: read task file X>"` from the worktree (flags before `-p=`; the `.cmd` truncates multi-line prompts, so always use a task file).
+- agy review (read-only): `agy --mode plan --model gemini-3.8-flash --effort high --log-file L -p="<one line: read task file X>"` from the worktree (flags before `-p=`; always a task file).
+- agy implementation (headless): `agy --mode accept-edits --sandbox --model gemini-3.8-flash --effort high --add-dir <worktree> --log-file L -p="<one line>"`. Print mode cannot confirm tools: commands must match `userSettings.globalPermissionGrants.allow` in `C:/Users/dszub/.gemini/config/config.json` (NOT `permissions.allow`, which is ignored); since 2026-10-16 it holds `command(*)`, `write_file(*)`, `edit(*)`, `read_file(*)` plus venv/python/pytest patterns, so agy edits and runs tests without prompts. After each run check `git status` in the live checkout for stray writes.
 - z.ai GLM: `glm.cmd -p --permission-mode acceptEdits --allowedTools "Bash Read Edit Write Grep Glob" < task.md` from the worktree.
 - Cursor: `cursor-agent.cmd -p --trust --force --workspace <worktree> "<one line: read task file X>"`.
 - Codex: `codex exec -m gpt-6-luna -C <worktree> --sandbox workspace-write -o out.md - < task.md` (its sandbox cannot write `.git`; the supervisor does git).
@@ -83,5 +84,6 @@ the three, it does not average them.
 
 ## 6. Changelog
 
+- v1.1 2026-10-16: agy headless implementation recipe (globalPermissionGrants), z.ai reset times are UTC.
 - v1 2026-10-16: initial, from the operator directive after the roster
   confusion (z.ai GLM CLI and Perplexity's GLM entry are two sources).
