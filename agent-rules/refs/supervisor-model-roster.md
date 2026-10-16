@@ -50,9 +50,7 @@ the three, it does not average them.
   (receipts over quota -> archive; stale `RECOVERY_REQUIRED` rows ->
   `conductorctl.py resource-recover --request-id <rr> --attest-owner-gone
   --reason "<why the owner cannot exist>"`), never a reason to skip the source.
-- A Chrome CDP role missing after a reboot is relaunched with
-  `WatchF/scripts/cdp_watchdog.py --role <role> --recover-once` (or
-  `--ensure-all`).
+- App restarts (operator GO 2026-10-16 "chciałbym abyś dostał możliwość resetu appek samemu"): the supervisor restarts registry services itself through EcosystemControl's drop-file CLI - `cd D:/APPS/EcosystemControl && .venv/Scripts/python.exe -m ecosystem_control.cli restart <tsignal|watchf|lab|tsu|...> --reason "<why>" --actor "claude-supervisor" --wait 120` (`status <svc>` is read-only). A Tsignal restart still requires a fresh broker-flat readback on IBKR AND ProjectX first, and the checkout must equal origin/main. The CDP fleet (chrome_gpt/gemini/ppl) must come up with WatchF and be kept alive by the watchdog/Conductor; a role missing after a restart is relaunched with `cdp_watchdog.py --role <role> --recover-once`.
 
 ## 4. The workflow is the default, not a command
 
@@ -84,6 +82,7 @@ the three, it does not average them.
 
 ## 6. Changelog
 
+- v1.2 2026-10-16: supervisor may restart apps via the EcosystemControl CLI (operator GO); fleet comes up with WatchF.
 - v1.1 2026-10-16: agy headless implementation recipe (globalPermissionGrants), z.ai reset times are UTC.
 - v1 2026-10-16: initial, from the operator directive after the roster
   confusion (z.ai GLM CLI and Perplexity's GLM entry are two sources).
