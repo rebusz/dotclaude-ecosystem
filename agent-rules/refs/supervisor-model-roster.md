@@ -43,7 +43,7 @@ the three, it does not average them.
 - On any quota hit (HTTP 429, "usage limit", RESOURCE_EXHAUSTED, repeated
   SUBMIT_UNCONFIRMED) tell the operator at once: source, time, reset time if
   known, and where the work was rerouted. `agy`: ask the operator to switch to
-  another of the 5 accounts. z.ai GLM: report the window reset time (the 429 message prints it in UTC; e.g. 18:53 UTC = 12:53 MDT). Codex:
+  another of the 5 accounts. z.ai GLM: report the window reset time (the 429 message prints it in UTC; e.g. 18:53 UTC = 12:53 MDT); error [1310] is the WEEKLY cap (reset date in the message) - tell the operator, who may hold resets. agy task specs: distinct read-only `spec_*.md` names and the instruction "never write to the task file" (a spec was overwritten by a lane once). Codex:
   report the reset time. Never queue work to wait for a reset while another
   source is free.
 - `CONDUCTOR_UNAVAILABLE` / `HOST_RESOURCE_BUSY` is a slot problem to fix
