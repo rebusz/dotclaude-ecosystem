@@ -11,6 +11,15 @@ It preserves their source, permission, attempt,
 independence and evidence boundaries. If the roster is unavailable, report the
 missing policy source and continue independent read-only preparation.
 
+Operator correction (2026-10-16): no named model is mandatory for progress,
+including Argon. Model-specific roster routes are preferences. After a proven
+pre-submit blocker or confirmed terminal quota/failure, choose a qualified
+fallback that meets the task's capability and reviewer-independence needs.
+Preserve requested and observed model/effort, source reservations and the
+original attempt's terminal evidence. An uncertain submission is not a
+fallback trigger: do not retry or replace `SUBMIT_UNCONFIRMED` work. Do not
+rotate accounts automatically or bypass a permission refusal.
+
 Operational recipes in the roster remain subject to these preserved boundaries:
 neither its busy-slot target nor its recovery/permission examples authorize an
 uncertain retry, permission bypass, unproven owner attestation or account switch.
@@ -33,18 +42,20 @@ next gate. Mark unknown facts UNKNOWN rather than filling them from a catalog.
 
 ## Route useful work
 
-Use the shared roster's large-capacity ChatGPT, Argon and Perplexity CDP routes
-for plans, grills, research and independent reviews. Prefer AGY, z.ai and Cursor
-with verified local edit/test access for implementation. Codex and Claude own
-supervision, synthesis and critical decisions; Codex implementation follows the
-roster's fallback order. Haiku does not author code or audit it. Top-weight
-decisions use the roster's Astra, Fable/Opus and Argon escalation after admission.
+Use qualified CDP routes for plans, grills, research and independent reviews.
+Prefer AGY, z.ai and Cursor with verified local edit/test access for
+implementation. Codex and Claude own supervision, synthesis and critical
+decisions. Select a ready, capable source after admission; the roster's model
+order must not stall an otherwise qualified independent lane. Haiku does not
+author code or audit it. Escalate top-weight decisions to qualified strong
+models when available, recording the actual model and effort.
 
-Select the highest supported effort for important plans/reviews; verify actual
-model and effort through the qualified adapter. A request string, echoed model
-name or responding browser port is insufficient. If Argon exposes no verified
-effort control, record EFFORT_UNVERIFIED and the missing check; do not call it
-high. Use only supported selectors and flags. Distinguish an operator's account
+Select an effort appropriate to important plans/reviews and verify actual model
+and effort through the qualified adapter. A request string, echoed model name
+or responding browser port is insufficient. If effort cannot be verified,
+record EFFORT_UNVERIFIED and the missing check; do not claim a higher effort.
+Use a qualified fallback when that proof is required for the assignment. Use
+only supported selectors and flags. Distinguish an operator's account
 entitlement declaration from observed picker/adapter capability.
 
 Plan for three useful slots per declared source. Admission uses the lower of
@@ -102,9 +113,10 @@ and existing scope gates. R0 follows its repository's documentation route.
 The installed fixed-panel `fuse.py` is unchanged. A newer prose roster does not
 add model selectors or executable lanes. Use a qualified adapter for each stage
 and retain missing-stage evidence if it cannot run. Review the actual current
-diff with the roster's required independent families; for R3 preserve the two-
-family requirement including Argon. Verified blockers beat a majority SHIP vote.
-Repairs require review of the corrected head, not reuse of the previous verdict.
+diff with independent qualified families; for R3 preserve the two-family
+requirement without making Argon mandatory. Verified blockers beat a majority
+SHIP vote. Repairs require review of the corrected head, not reuse of the
+previous verdict.
 
 Report local validation, review, CI, merge, installed instructions and runtime
 separately. Public code cannot use a trusted workstation CI runner. Missing
