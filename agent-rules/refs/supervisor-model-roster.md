@@ -27,6 +27,26 @@ Highest-weight decisions and plans run in parallel at the highest efforts on
 **Astra (Pro/max), Fable/Opus (xhigh), and Argon**; the supervisor synthesizes
 the three, it does not average them.
 
+## 1a. Model map by task and R-class (v1.3, operator 2026-10-16)
+
+The supervisor sets model and effort for every lane it dispatches; it cannot change its own session model or effort (`/model`, `/effort` belong to the operator).
+
+**Model guard (every session, every resume):** read the session model with `get_session` (`session_context.model`, `last_served_model`). If it is Fable, stop and ask the operator for `/model claude-opus-5-5` (Fable is banned for supervision since 2026-10-16 ~05:15 MDT). A one-off Fable plan runs in a separate session that ends after the plan, so an auto-resume can never pull Fable into supervision.
+
+| Task | R0/R1 | R2 | R3 |
+|---|---|---|---|
+| **Supervisor** | one Claude session, Opus 5.5, effort medium for routine dispatch/readback, high only at decisions | same | same |
+| **Sub-supervisors** | none | none | only for an independent program with >=3 lanes and its own repo/worktree set: one Codex chat (Sol high) owns that program's integration; the Claude supervisor keeps cross-program custody and the handoff ledger |
+| **Plan author** | any capable cheap model: Perplexity GLM 5.3 / Kimi K3 / Grok 4.7, ChatGPT Sol, z.ai GLM | Astra xhigh or Sol high; Kimi K3 / GLM 5.3 as fallback | **brainstorm**: Astra pro + Argon (High) + Opus high write independent proposals; Opus synthesises one plan; Fable only on explicit operator request in a separate session |
+| **Grill** | one model of a different family than the author | two families other than the author | >=3 families other than the author, at least one with code access (agy); pick from Argon, Astra, Kimi K3, GLM 5.3, Grok 4.7, Nemotron, AGY |
+| **Code + tests** | agy, z.ai GLM, Cursor, Codex Luna | agy high, Codex Luna/Sol high | agy high or Codex Sol high; one author per lane with an exclusive write-set (own worktree/branch, disjoint files); a second author never touches a held lane |
+| **Review** | one model, other family | one strong model, other family | two families, neither the author's: Astra pro + Argon (<=50 KB paste) or Kimi K3; AGY for code-grounded review; Claude never reviews its own work; Haiku never reviews |
+| **Root cause when local lanes are down** | Sonnet subagent | Sonnet subagent | Opus subagent |
+
+Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason required), `xhigh` otherwise; Argon at High with readback; Codex `high` for R3, `medium` routine; agy `high`; Perplexity Thinking variants. `/coderpxC` = Opus writes the packet, Perplexity/Astra answer, a local CLI implements; `/fwf` = fixed matrix (Astra + Argon/Gemini + Perplexity) with Claude Opus only as final synthesiser.
+
+**Custody:** SUBMIT_UNCONFIRMED / RECOVERY_REQUIRED attempts are reconciled on the same attempt, never retried or replaced by another model; a lane handed to another supervisor (e.g. a Codex chat) stays with it until an explicit written release.
+
 ## 2. Slots
 
 - Every source gets **3 slots**; the supervisor keeps all slots busy. A free
@@ -86,3 +106,4 @@ the three, it does not average them.
 - v1.1 2026-10-16: agy headless implementation recipe (globalPermissionGrants), z.ai reset times are UTC.
 - v1 2026-10-16: initial, from the operator directive after the roster
   confusion (z.ai GLM CLI and Perplexity's GLM entry are two sources).
+- v1.3 (2026-10-16): model map by task and R-class, session model guard (Fable banned again), R3 plan brainstorm, grill coverage of other families, sub-supervisor rule, custody of handed-over lanes.
