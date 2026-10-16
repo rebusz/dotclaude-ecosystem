@@ -25,15 +25,15 @@
 ## Execution Defaults
 
 - Assess whether work splits into independent lanes; run or delegate them concurrently when the tooling supports it.
-- GPT coding, plan-audit, and implementation-review work uses signed-in `chrome_gpt` ChatGPT CDP and fails closed; Codex CLI is allowed only when resolver-owned policy stamps `purpose=latency_critical_runtime` plus a registered runtime context (initially advisory OpusF scenario production). Use the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost. Perplexity Max is the bounded **CoderPX** on-demand lane: an agent submits one validated packet through WatchF's Conductor-gated `chrome_ppl` lifecycle, records response + manifest, then verifies and lands any justified result. CoderPX never auto-retries, marks Ready, merges, or bypasses repo gates. Protocol + packet template: `D:/APPS/_shared/coderpx/README.md`.
+- **Supervisor model and roster (binding, newest version, 2026-10-16): `agent-rules/refs/supervisor-model-roster.md`.** High-limit CDP lanes (ChatGPT GPT-6 Astra, Gemini 4 Argon, Perplexity) carry plans, grills, reviews and research; local CLIs with repo access (Antigravity `agy`, z.ai GLM CLI, Cursor; Codex last) write code and tests; Claude and Codex high-effort models manage, supervise, decide and plan (top decisions: Astra + Fable/Opus + Argon at highest effort). Three slots per source, all kept busy; every quota hit is reported to the operator at once and rerouted. Plans pass automatically through grill -> fwf matrix -> cross-family review -> self-hosted CI; `/coderpxC` and `/fwf` are helpers, not prerequisites. CoderPX packets: `D:/APPS/_shared/coderpx/README.md`.
 - An approved audited plan (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carries standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens. Re-ask only for scope expansion, unresolved failure/conflict, a real-money/Combine trigger, a destructive action, or a pause.
 - Validate each slice; final reports state changes, tests, remaining work, and repo state.
 
 ## Conductor Host-Resource Gate
 
-- TruthDeck Conductor owns the durable `host:heavy` capacity-one lease for
-  cooperative heavy pytest, Playwright, and CDP-provider work; adapters must
-  request it before launch and remain visible in Conductor readback.
+- Only heavy pytest runs use Conductor's capacity-one `host:heavy` lease.
+- CDP uses its independent `cdp:*` pools and never waits for `host:heavy`.
+- Playwright/browser work, builds, replays, docs, Git and readback are not heavy tasks; focused pytest keeps its existing lightweight classification.
 - A bounded child may inherit an active attempt-scoped
   `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
   stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There
@@ -57,7 +57,7 @@
 - ONE clean path per change: branch -> validate -> commit -> draft PR -> risk-routed review gate -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout. Report it in one line.
 - Never create avoidable divergence (no cherry-pick onto local main alongside a PR for the same change). An agent usually works in a `.claude/worktrees/...` branch while the operator runs from `D:/APPS/<repo>`; after merge, fast-forward that checkout.
 - R2/R3 lands via draft PR + review gate — never direct-push or self-merge to `main`; R0 docs and CI-ignored paths may use the normal flow. Real-money/Combine triggers, production deploys, and destructive actions still need just-in-time GO. Details -> `agent-rules/refs/delegated-execution-protocol.md`.
-- CI Discipline: Tsignal and TSU CI runs on the workstation's self-hosted runner pool — unmetered, but each runner is capacity-one and shares the box with the live trading stack. Keep implementation PRs draft while work moves, batch pushes, validate locally, then `gh pr ready` once — one CI pass per change instead of occupying a runner on every push. Small repos still on GitHub-hosted free tier do spend hosted minutes; the same batching keeps them inside it. State draft-vs-ready and what validation ran in the final summary.
+- **CI is self-hosted ONLY in EVERY operator-owned repository (2026-09-17).** No GitHub-hosted/cloud CI, including free tiers, matrix jobs, reusable workflows and release builds; no cloud fallback. GitHub may store code and orchestrate local jobs. Before push/ready/rerun, verify workflow routes and local runner; unavailable means BLOCKED, never switch to hosted or claim PASS. Keep drafts and batch pushes for local capacity. Public/untrusted code must not run on the trusted workstation. Full policy: `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/self-hosted-ci-only.md`.
 
 ## Commit And Push Defaults
 
