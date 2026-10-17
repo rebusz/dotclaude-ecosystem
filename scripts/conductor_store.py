@@ -39,6 +39,7 @@ from scripts.conductor_model import (
     WorkItemState,
     can_transition,
     current_utc_iso,
+    parse_iso_or_expired,
 )
 
 
@@ -270,6 +271,36 @@ def _read_resource_live_snapshot_from_conn(
     for freq in fenced_reqs:
         fenced.append(_join_request_lease(freq, leases_by_request_id.get(freq["request_id"])))
 
+    sweepable_count = 0
+    ttl_env = os.environ.get("TDCONDUCTOR_STALE_SLOT_TTL_S")
+    ttl_s = 900 if ttl_env is None else max(0, int(ttl_env)) if ttl_env.isdigit() else 900
+    if ttl_s > 0:
+        now_dt = datetime.now(timezone.utc)
+        for freq in fenced:
+            req_id = freq["request_id"]
+            timestamps = [parse_iso_or_expired(freq["created_at_utc"])]
+            if freq.get("last_heartbeat_utc"):
+                timestamps.append(parse_iso_or_expired(freq["last_heartbeat_utc"]))
+            max_ev = conn.execute(
+                "SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events WHERE request_id = ?",
+                (req_id,),
+            ).fetchone()
+            if max_ev and max_ev["max_ev"]:
+                timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
+            age = (now_dt - max(timestamps)).total_seconds()
+            if age >= ttl_s:
+                pid = freq.get("process_pid")
+                start_time = freq.get("process_start_time")
+                if pid is None:
+                    sweepable_count += 1
+                else:
+                    try:
+                        obs = psutil.Process(int(pid)).create_time()
+                        if start_time is not None and abs(obs - float(start_time)) > 1.0:
+                            sweepable_count += 1
+                    except (OSError, ValueError, psutil.Error):
+                        sweepable_count += 1
+
     return {
         "resource_key": resource_key,
         "capacity": capacity,
@@ -277,6 +308,7 @@ def _read_resource_live_snapshot_from_conn(
         "pool_present": pool_present,
         "live_counts": live_counts,
         "terminal_count": terminal_count,
+        "sweepable_count": sweepable_count,
         "holder": holder,
         "holders": holders,
         "inherited": inherited_reqs,
@@ -338,6 +370,7 @@ def read_resource_live_snapshot(
                 "QUARANTINED": 0,
             },
             "terminal_count": 0,
+            "sweepable_count": 0,
             "holder": None,
             "inherited": [],
             "queue": [],
@@ -1565,11 +1598,11 @@ class ConductorStore:
         files = sorted([p for p in self.inbox_dir.glob("env_*.json") if p.is_file()])
         return files
 
-    def save_receipt(self, receipt: Receipt) -> pathlib.Path:
+    def save_receipt(self, receipt: Receipt, conn: Optional[sqlite3.Connection] = None) -> pathlib.Path:
         """Save receipt to database and write atomic receipt file."""
         receipt_data = receipt.to_dict()
 
-        with self._connection() as conn:
+        if conn is not None:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO receipts (
@@ -1587,6 +1620,25 @@ class ConductorStore:
                     receipt.schema_version,
                 ),
             )
+        else:
+            with self._connection() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO receipts (
+                        receipt_id, command_id, idempotency_key, status, result_json, error_message, processed_at_utc, schema_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        receipt.receipt_id,
+                        receipt.command_id,
+                        receipt.idempotency_key,
+                        receipt.status,
+                        json.dumps(receipt.result),
+                        receipt.error_message,
+                        receipt.processed_at_utc,
+                        receipt.schema_version,
+                    ),
+                )
 
         receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(self.receipts_dir), prefix="rcp_", suffix=".tmp")

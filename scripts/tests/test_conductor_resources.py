@@ -1143,3 +1143,99 @@ def test_occupied_heavy_does_not_block_resolved_cdp_chatgpt(tmp_path: pathlib.Pa
     assert admitted["state"] == "ACTIVE"
     assert admitted["resource_key"] == "cdp:chatgpt"
     assert heavy.status()["active_units"] == 1
+
+
+# ── Stale Slot TTL Auto-Release Tests (binding 2026-10-17) ───────────────────
+
+def test_stale_slot_recovery_required_older_than_ttl_no_pid_released_with_receipt(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 1000)
+    result = manager.reconcile(now=future)
+    assert result["stale_released_count"] == 1
+    req = manager.store.get_resource_request(wedged["request_id"])
+    assert req.state == HostResourceRequestState.RELEASED
+    assert req.reason_code == "STALE_SLOT_AUTO_RELEASED"
+    receipt = manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}")
+    assert receipt is not None
+    assert receipt.status == "SUCCESS"
+    assert receipt.result["reason"] == "STALE_SLOT_AUTO_RELEASED"
+    assert receipt.result["previous_state"] == "RECOVERY_REQUIRED"
+    assert receipt.result["previous_reason_code"] == "LEASE_EXPIRED"
+
+
+def test_stale_slot_recovery_required_younger_than_ttl_kept(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    # State change happened at +360s. At +360 + 200s, age is 200s < 900s TTL.
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 200)
+    result = manager.reconcile(now=future)
+    assert result["stale_released_count"] == 0
+    req = manager.store.get_resource_request(wedged["request_id"])
+    assert req.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}") is None
+
+
+def test_stale_slot_recovery_required_pid_alive_matching_start_time_kept(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    pid = os.getpid()
+    start_time = psutil.Process(pid).create_time()
+    _set_lease_process(manager, wedged["lease_id"], pid, start_time)
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 1000)
+    result = manager.reconcile(now=future)
+    assert result["stale_released_count"] == 0
+    req = manager.store.get_resource_request(wedged["request_id"])
+    assert req.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}") is None
+
+
+def test_stale_slot_recovery_required_pid_alive_different_start_time_released(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    pid = os.getpid()
+    start_time = psutil.Process(pid).create_time() - 500.0  # reused pid with different start time
+    _set_lease_process(manager, wedged["lease_id"], pid, start_time)
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 1000)
+    result = manager.reconcile(now=future)
+    assert result["stale_released_count"] == 1
+    req = manager.store.get_resource_request(wedged["request_id"])
+    assert req.state == HostResourceRequestState.RELEASED
+    assert req.reason_code == "STALE_SLOT_AUTO_RELEASED"
+    receipt = manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}")
+    assert receipt is not None
+    assert receipt.status == "SUCCESS"
+
+
+def test_stale_slot_full_pool_with_stale_request_admits_new_request_same_call(manager: HostResourceManager):
+    wedged = _wedge(manager)
+    assert manager.status()["recovery_required"] == 1
+    past_iso = "2026-10-17T00:00:00+00:00"
+    with manager.store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            (past_iso, wedged["request_id"]),
+        )
+        conn.execute(
+            "UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE lease_id = ?",
+            (past_iso, past_iso, wedged["lease_id"]),
+        )
+        conn.execute(
+            "UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?",
+            (past_iso, wedged["request_id"]),
+        )
+    # Calling request() directly on the full pool:
+    # Stale request must be auto-released during admission, admitting the new request in the SAME call.
+    new_req = manager.request(purpose="pytest_full", attempt_id="at-fresh", agent_instance="inst-fresh")
+    assert new_req["state"] == "ACTIVE"
+    old_req = manager.store.get_resource_request(wedged["request_id"])
+    assert old_req.state == HostResourceRequestState.RELEASED
+    assert old_req.reason_code == "STALE_SLOT_AUTO_RELEASED"
+
+
+def test_stale_slot_ttl_zero_disables_release(manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "0")
+    wedged = _wedge(manager)
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 2000)
+    result = manager.reconcile(now=future)
+    assert result["stale_released_count"] == 0
+    req = manager.store.get_resource_request(wedged["request_id"])
+    assert req.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}") is None
+
