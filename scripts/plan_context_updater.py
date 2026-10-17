@@ -78,6 +78,15 @@ def _parse_plan_meta(plan: Path) -> dict:
     return meta
 
 
+def _catalog_diagnostics(stdout: str | bytes | None, stderr: str | bytes | None) -> str:
+    def tail(value: str | bytes | None) -> str:
+        if isinstance(value, bytes):
+            value = value[-8192:].decode("utf-8", errors="replace")
+        return (value or "")[-2048:]
+
+    return f"stdout_tail={tail(stdout)!r}; stderr_tail={tail(stderr)!r}"
+
+
 def _regen_catalog(name: str) -> tuple[bool, str]:
     script = SCRIPTS / f"{name}.py"
     if not script.exists():
@@ -88,8 +97,11 @@ def _regen_catalog(name: str) -> tuple[bool, str]:
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
-            return False, (r.stderr or r.stdout or "unknown error")[:300]
+            return False, ((r.stderr or r.stdout or "unknown error")[:300]
+                           + "; " + _catalog_diagnostics(r.stdout, r.stderr))
         return True, "ok"
+    except subprocess.TimeoutExpired as exc:
+        return False, str(exc)[:300] + "; " + _catalog_diagnostics(exc.stdout, exc.stderr)
     except Exception as exc:
         return False, str(exc)[:300]
 
