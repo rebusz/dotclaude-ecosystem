@@ -9,16 +9,23 @@ Hard safety invariants (the gap that produced the recurring mess):
     work). If any such commit looks R3 -> escalate to a loud ALARM. Report only,
     never switch/delete.
   - NEVER deletes a branch that is checked out in ANY worktree.
-  - NEVER deletes a branch with unique commits not merged into base (uses
-    `git branch -d`, which itself refuses unmerged, as a second seatbelt).
+  - NEVER deletes a branch with unique commits not merged into base. The
+    candidate set is proven ancestors of base; `git branch -d` is tried first,
+    and when it refuses (it measures "merged" against the current HEAD, not
+    base) the ancestry is re-verified against base before `git branch -D`.
+    So the second seatbelt is that re-check, not git's own -d refusal.
   - NEVER removes a worktree that is locked, dirty (tracked OR untracked), or
     holds unique unmerged commits. Those hold real work -> preserved + reported.
-  - NEVER mutates the PRIMARY working tree's branch or files.
+  - NEVER switches the PRIMARY working tree's branch. Plain --apply never
+    touches its files either; --deploy --apply DOES: it overlays the DEPLOY
+    file set from base into the primary checkout (see do_deploy).
 
 What --apply does, and nothing else:
-  - `git branch -d` on fully-merged, not-checked-out local branches.
+  - `git branch -d` (or the re-verified `-D` above) on fully-merged,
+    not-checked-out local branches.
   - `git worktree remove` on dead worktrees (merged HEAD + clean + unlocked).
   - `git worktree prune` for worktrees whose directory already vanished.
+  - with --deploy: `git checkout <base> -- <DEPLOY set>` into the primary.
 
 Usage:
   python git_hygiene.py --repo "D:/APPS/Tsignal 5.0"           # dry-run report

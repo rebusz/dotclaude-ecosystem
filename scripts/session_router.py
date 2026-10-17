@@ -30,6 +30,7 @@ from session_state import (
     write_session_plan,
 )
 from session_title_janitor import MONTHS, repo_from_cwd
+from untrusted_text import clean_fact
 
 if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -69,10 +70,7 @@ def _state_dir(value: Path | None) -> Path:
     return Path(override).expanduser() if override else Path.home() / ".claude" / "state"
 
 
-def _clean_fact(value: object, limit: int = 140) -> str:
-    text = " ".join(str(value).replace("\x00", "").split())
-    text = text.replace("<", "‹").replace(">", "›")
-    return text[:limit]
+_clean_fact = clean_fact  # one sanitizer for every injected fact (untrusted_text)
 
 
 def _run_git(

@@ -212,9 +212,55 @@ def cmd_by_vision(args: argparse.Namespace) -> None:
         print("(no items found)")
 
 
-def _resolve_trigger_path(path: str, base: Path) -> Path:
-    p = Path(path)
-    return p if p.is_absolute() else base / p
+# The revisit-trigger file is repository content, and the TsignalGitHygiene
+# scheduled task evaluates it daily, unattended, as the operator, on the box
+# that runs the live trading stack. So every predicate is contained to the
+# repository it came from (audit security F1):
+#
+#   * paths must resolve inside `base` -- absolute paths used to be returned
+#     unchanged, giving a file-existence and needle oracle over the whole disk;
+#   * `command_exit_zero` used to pass a full argv from the JSON straight to
+#     subprocess.run, so one commit editing that file turned into arbitrary code
+#     execution on a schedule. It may now only run an allowlisted read-only
+#     probe (script + subcommand) from the repository's scripts/ directory,
+#     with this interpreter, under a timeout. "Any script in scripts/" was not
+#     enough: git_hygiene --apply --deploy and sync_ecosystem_context --push
+#     live there too.
+_INTERPRETER_TOKENS = frozenset({"python", "python3", "py", sys.executable})
+_ALLOWED_PROBES = {
+    "session_cost_probe.py": frozenset({"b0-status"}),
+}
+_TRIGGER_COMMAND_TIMEOUT_S = 120
+
+
+def _resolve_trigger_path(path: str, base: Path) -> Path | None:
+    """Resolve `path` against `base`; None if it escapes the repository."""
+    root = base.resolve()
+    candidate = Path(path)
+    candidate = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _contained_script(argv: list[str], base: Path) -> list[str] | None:
+    """The argv to run for a command predicate, or None if it is not allowed."""
+    if len(argv) < 3 or argv[0] not in _INTERPRETER_TOKENS:
+        return None
+    script = _resolve_trigger_path(argv[1], base)
+    if script is None or argv[2] not in _ALLOWED_PROBES.get(script.name, ()):
+        return None
+    scripts_dir = (base.resolve() / "scripts")
+    if (
+        script is None
+        or script.suffix != ".py"
+        or not script.is_file()
+        or scripts_dir not in script.parents
+    ):
+        return None
+    return [sys.executable, str(script), *argv[2:]]
 
 
 def evaluate_trigger(predicate: dict, base: Path) -> tuple[str, str]:
@@ -224,18 +270,32 @@ def evaluate_trigger(predicate: dict, base: Path) -> tuple[str, str]:
     if kind == "file_contains":
         path = _resolve_trigger_path(str(predicate.get("path", "")), base)
         needle = str(predicate.get("needle", ""))
+        if path is None:
+            return "blocked", "path escapes the repository"
         if not path.exists():
             return "deferred", f"missing file: {path}"
         text = path.read_text(encoding="utf-8-sig", errors="replace")
         return ("triggered", f"found needle in {path}") if needle in text else ("deferred", f"needle not found in {path}")
     if kind == "file_exists":
         path = _resolve_trigger_path(str(predicate.get("path", "")), base)
+        if path is None:
+            return "blocked", "path escapes the repository"
         return ("triggered", f"file exists: {path}") if path.exists() else ("deferred", f"missing file: {path}")
     if kind == "command_exit_zero":
         cmd = predicate.get("command", [])
         if not isinstance(cmd, list) or not all(isinstance(part, str) for part in cmd):
             return "blocked", "invalid command predicate"
-        cp = subprocess.run(cmd, cwd=base, capture_output=True, text=True, check=False)
+        argv = _contained_script(cmd, base)
+        if argv is None:
+            return "blocked", (
+                "command predicates may only run an allowlisted probe from the "
+                "repository's scripts/ directory with this interpreter"
+            )
+        try:
+            cp = subprocess.run(argv, cwd=base, capture_output=True, text=True, check=False,
+                                timeout=_TRIGGER_COMMAND_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return "blocked", f"timed out after {_TRIGGER_COMMAND_TIMEOUT_S}s: {' '.join(cmd)}"
         return ("triggered", f"exit 0: {' '.join(cmd)}") if cp.returncode == 0 else ("deferred", f"exit {cp.returncode}: {' '.join(cmd)}")
     if kind == "github_pr_state":
         repo = str(predicate.get("repo", ""))
@@ -243,6 +303,10 @@ def evaluate_trigger(predicate: dict, base: Path) -> tuple[str, str]:
         expected = str(predicate.get("state", "")).upper()
         if not repo or not pr or not expected:
             return "blocked", "invalid github_pr_state predicate"
+        # `pr` is a positional argv element: a value like "--repo=other/x" would
+        # be parsed by gh as a flag. And `repo` becomes the cwd.
+        if not pr.isdigit() or not Path(repo).is_dir():
+            return "blocked", "github_pr_state needs a numeric pr and an existing repo directory"
         cp = subprocess.run(
             ["gh", "pr", "view", pr, "--json", "state", "--jq", ".state"],
             cwd=repo,

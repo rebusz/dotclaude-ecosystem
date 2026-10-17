@@ -16,7 +16,22 @@ $ErrorActionPreference = 'Stop'
 
 $lockPath = Join-Path $EcoRoot 'skills/taste-skill.lock.json'
 if (-not (Test-Path $lockPath)) { throw "Lockfile not found: $lockPath" }
-$lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+# Every lockfile value reaches git, npx or Remove-Item -Recurse, so it goes
+# through the one validator first. $ErrorActionPreference does not trap a
+# native exit code, hence the explicit $LASTEXITCODE checks throughout.
+$validator = Join-Path $EcoRoot 'install/taste_lock.py'
+function Get-LockField([string]$field) {
+  $out = @(& python $validator $lockPath $field)
+  if ($LASTEXITCODE -ne 0) { throw "taste lockfile rejected (field $field)" }
+  return $out
+}
+$lock = [pscustomobject]@{
+  source        = (Get-LockField 'source')[0]
+  pinned_commit = (Get-LockField 'commit')[0]
+  cli_package   = (Get-LockField 'cli')[0]
+  installed     = Get-LockField 'installed'
+  agents        = Get-LockField 'agents'
+}
 
 $home_ = $env:USERPROFILE
 $vendor = Join-Path $EcoRoot 'vendor/taste-skill'
@@ -25,13 +40,17 @@ Write-Host "taste-skill restore -> commit $($lock.pinned_commit)"
 
 # 1. Clone + pin
 if (Test-Path $vendor) { Remove-Item $vendor -Recurse -Force }
-git clone $lock.source $vendor | Out-Null
-git -C $vendor checkout $lock.pinned_commit | Out-Null
+git clone --quiet -- $lock.source $vendor
+if ($LASTEXITCODE -ne 0) { throw "git clone failed ($LASTEXITCODE)" }
+git -C $vendor -c advice.detachedHead=false checkout --quiet --detach $lock.pinned_commit
+if ($LASTEXITCODE -ne 0) { throw "git checkout failed ($LASTEXITCODE)" }
+if ((git -C $vendor rev-parse HEAD) -ne $lock.pinned_commit) { throw "checkout is not $($lock.pinned_commit)" }
 
 # 2. CLI install (copy, global) for the registered agents
 $skillArgs = @(); foreach ($s in $lock.installed) { $skillArgs += @('--skill', $s) }
 $agentArgs = @(); foreach ($a in $lock.agents)    { $agentArgs += @('-a', $a) }
-& npx --yes skills add $vendor @skillArgs @agentArgs --global --copy -y
+& npx --yes $lock.cli_package add $vendor @skillArgs @agentArgs --global --copy -y
+if ($LASTEXITCODE -ne 0) { throw "skills CLI failed ($LASTEXITCODE)" }
 
 # 3. Manual copy into Codex + Cursor native dirs (CLI copy-mode gap)
 $canonical = Join-Path $home_ '.agents/skills'

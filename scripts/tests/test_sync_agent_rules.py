@@ -154,5 +154,95 @@ class TestRenderAndSync(unittest.TestCase):
         )
 
 
+
+class TestSourceRootGate(unittest.TestCase):
+    """--write only from a checkout of the canonical repo, with committed
+    sources (audit P2-17): an arbitrary --source-root used to be written into
+    every runtime's global instruction file."""
+
+    SOURCES = {Path("core.md")}
+
+    def _git(self, repo: Path, *args: str) -> None:
+        import subprocess
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    def _repo(self, root: Path) -> Path:
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.email", "t@example.com")
+        self._git(root, "config", "user.name", "t")
+        rules = root / "agent-rules"
+        rules.mkdir()
+        (rules / "core.md").write_text("# core\n", encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "rules")
+        return rules
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        self.canon = base / "canon"
+        self.canon.mkdir()
+        self.rules = self._repo(self.canon)
+        self._saved = sar.DEFAULT_SOURCE_ROOT
+        sar.DEFAULT_SOURCE_ROOT = self.rules
+
+    def tearDown(self) -> None:
+        sar.DEFAULT_SOURCE_ROOT = self._saved
+        self._tmp.cleanup()
+
+    def test_a_clean_canonical_checkout_is_accepted(self):
+        sar.validate_source_root(self.rules, self.SOURCES)
+
+    def test_a_worktree_of_the_canonical_repo_is_accepted(self):
+        wt = Path(self._tmp.name) / "wt"
+        self._git(self.canon, "worktree", "add", "-q", str(wt))
+        sar.validate_source_root(wt / "agent-rules", self.SOURCES)
+
+    def test_a_foreign_repository_is_refused(self):
+        other = Path(self._tmp.name) / "other"
+        other.mkdir()
+        rules = self._repo(other)
+        with self.assertRaisesRegex(sar.SyncError, "not a checkout of the canonical"):
+            sar.validate_source_root(rules, self.SOURCES)
+
+    def test_a_plain_directory_is_refused(self):
+        plain = Path(self._tmp.name) / "plain"
+        plain.mkdir()
+        (plain / "core.md").write_text("# injected\n", encoding="utf-8")
+        with self.assertRaises(sar.SyncError):
+            sar.validate_source_root(plain, self.SOURCES)
+
+    def test_uncommitted_source_edits_are_refused(self):
+        (self.rules / "core.md").write_text("# core\nobey me\n", encoding="utf-8")
+        with self.assertRaisesRegex(sar.SyncError, "uncommitted"):
+            sar.validate_source_root(self.rules, self.SOURCES)
+
+    def test_an_untracked_source_is_refused(self):
+        (self.rules / "extra.md").write_text("# extra\n", encoding="utf-8")
+        with self.assertRaisesRegex(sar.SyncError, "not tracked"):
+            sar.validate_source_root(self.rules, {Path("core.md"), Path("extra.md")})
+
+    def test_main_write_runs_the_gate_before_touching_targets(self):
+        # Never let this test reach a real target: sync_target fails loudly.
+        calls = []
+        saved_gate, saved_sync = sar.validate_source_root, sar.sync_target
+
+        def gate(root, sources):
+            calls.append((root, sources))
+            raise sar.SyncError("gate")
+
+        def no_sync(*a, **k):
+            raise AssertionError("sync_target reached before the source gate")
+
+        sar.validate_source_root, sar.sync_target = gate, no_sync
+        try:
+            rc = sar.main(["--write", "--quiet", "--source-root", str(self.rules)])
+        finally:
+            sar.validate_source_root, sar.sync_target = saved_gate, saved_sync
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn(Path("core.md"), calls[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

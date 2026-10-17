@@ -34,6 +34,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from untrusted_text import clean_fact, neutralize
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -249,7 +251,7 @@ def _loader_block(cwd: Path) -> str:
         return "_(plan_context_loader.py not found — vision/IDEA_BOX/PLANS context unavailable)_"
     try:
         r = subprocess.run(
-            ["python", str(LOADER), "--cwd", str(cwd), "--quiet-empty"],
+            [sys.executable, str(LOADER), "--cwd", str(cwd), "--quiet-empty"],
             capture_output=True, text=True, timeout=10,
             encoding="utf-8", errors="replace",
         )
@@ -301,13 +303,14 @@ def build(cwd: Path, days: int) -> str:
 
     # ── render ──
     out: list[str] = []
-    out.append(f'<steer-context cwd="{cwd.as_posix()}" repo="{repo_root.name if repo_root else "?"}" window="{days}d">')
+    repo_label = clean_fact(repo_root.name, 80) if repo_root else "?"
+    out.append(f'<steer-context cwd="{clean_fact(cwd.as_posix(), 300)}" repo="{repo_label}" window="{days}d">')
     out.append("[steer] fired")  # dead != silent: proves the steer path ran
     out.append("_Auto-composed by steer_context.py — the raw material for a STEERING BRIEF._")
     out.append("")
 
     out.append("## North Star (income lens)")
-    out.append(north_star)
+    out.append(neutralize(north_star, 2000))
     out.append("")
     out.append("_Prioritization lens for every track below: **does this slice move toward "
                "live-trading income, or is it polish?**_")
@@ -321,7 +324,7 @@ def build(cwd: Path, days: int) -> str:
         out.append("_(no commits found in window across scanned repos)_")
     if plan_slugs:
         uniq_slugs = list(dict.fromkeys(plan_slugs))
-        out.append("Recent plan slugs: " + "; ".join(uniq_slugs[:12]))
+        out.append("Recent plan slugs: " + "; ".join(clean_fact(s, 80) for s in uniq_slugs[:12]))
     out.append("")
 
     out.append("## Coverage map (DoD aspect x recent activity) — HEURISTIC, LOW-CONFIDENCE")
@@ -333,8 +336,12 @@ def build(cwd: Path, days: int) -> str:
         out.append("|---|---|---|")
         for r in rows:
             mark = "yes" if r["active"] else "**no — candidate gap**"
-            ev = (r["evidence"][:60] + "…") if len(r["evidence"]) > 60 else (r["evidence"] or "—")
-            out.append(f"| {r['aspect']} | {mark} | {ev} |")
+            # Evidence is a commit subject or plan slug; the aspect is vision
+            # text. Both are repository-authored -- one line, no tags, no pipes.
+            evidence = clean_fact(r["evidence"], 200).replace("|", "¦")
+            ev = (evidence[:60] + "…") if len(evidence) > 60 else (evidence or "—")
+            aspect = clean_fact(r["aspect"], 120).replace("|", "¦")
+            out.append(f"| {aspect} | {mark} | {ev} |")
         out.append("")
         if insufficient:
             out.append("> **insufficient-signal:** activity corpus is sparse — treat EVERY gap "
@@ -347,7 +354,7 @@ def build(cwd: Path, days: int) -> str:
         if under and not insufficient:
             out.append("")
             out.append("**Candidate under-served aspects:** "
-                       + "; ".join(r["aspect"] for r in under))
+                       + "; ".join(clean_fact(r["aspect"], 120) for r in under))
     out.append("")
 
     out.append("## Loaded plan context (vision Why+DoD / IDEA_BOX / PLANS)")

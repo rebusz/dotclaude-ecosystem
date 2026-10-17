@@ -42,6 +42,23 @@ class ImplementationReviewPacketTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_a_secret_in_validation_evidence_is_refused(self) -> None:
+        """`--validation` / `--validation-file` text -- pytest output, CI logs,
+        env dumps -- was interpolated into the published packet with no scan at
+        all: the one input that walked past the gate documented as failing
+        closed (audit F3). The whole rendered packet is scanned now."""
+        leaked = "".join(("gh", "p_", "a1B2" * 9))  # assembled: no literal token in the repo
+        with self.assertRaisesRegex(PacketError, "high-confidence secret"):
+            build_packet(
+                repo=self.repo,
+                start_sha=self.start,
+                end_sha=self.end,
+                mode="IMPLEMENT",
+                risk="R2",
+                validation=f"pytest: 12 passed\nGITHUB_TOKEN={leaked}\n",
+                external_publication_approved=True,
+            )
+
     def test_packet_pins_identity_diff_and_validation(self) -> None:
         packet = build_packet(
             repo=self.repo,

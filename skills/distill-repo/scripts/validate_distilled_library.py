@@ -8,6 +8,17 @@ import re
 import sys
 from pathlib import Path
 
+# The shared detector lives in <root>/scripts, both in the repository and in an
+# installed ~/.claude (skills and scripts are siblings in each layout). A
+# standalone copy of this skill without it keeps its local patterns only.
+_SHARED = Path(__file__).resolve().parents[3] / "scripts"
+if (_SHARED / "secret_patterns.py").is_file() and str(_SHARED) not in sys.path:
+    sys.path.insert(0, str(_SHARED))
+try:
+    from secret_patterns import find_high_confidence as _find_high_confidence
+except ImportError:  # pragma: no cover - standalone copy of the skill
+    _find_high_confidence = None
+
 
 REQUIRED_SKILL_TERMS = (
     "description:",
@@ -69,6 +80,11 @@ def _check_text_for_secrets(path: Path, text: str) -> list[str]:
         match = pattern.search(text)
         if match:
             failures.append(f"{path}: possible {label} near {match.group(1)!r}")
+    # Token shapes the local list never covered (audit F14). Reported by label
+    # only: echoing the match into a failure message would print the secret.
+    if _find_high_confidence is not None:
+        for label in _find_high_confidence(text):
+            failures.append(f"{path}: {label} (high-confidence secret shape)")
     return failures
 
 

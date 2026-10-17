@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from untrusted_text import clean_fact, neutralize
+
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -94,7 +96,7 @@ def _load_vision_index() -> dict:
     if not VISION_INDEX.exists():
         try:
             subprocess.run(
-                ["python", str(HOME / "scripts" / "vision_catalog.py")],
+                [sys.executable, str(HOME / "scripts" / "vision_catalog.py")],
                 capture_output=True, timeout=15,
             )
         except Exception:
@@ -317,7 +319,7 @@ def main() -> int:
         repo_root = _detect_repo(cwd)
 
     if not repo_root or not repo_root.exists():
-        print(f"<plan-context>\n_(could not detect repo from cwd={cwd})_\n</plan-context>")
+        print(f"<plan-context>\n_(could not detect repo from cwd={clean_fact(cwd.as_posix(), 300)})_\n</plan-context>")
         return 0
 
     repo_slugs = _repo_slug_variants(repo_root)
@@ -329,15 +331,18 @@ def main() -> int:
             p = (repo_root / p).resolve()
         plan_path = p
 
+    # The three sections quote repository files any contributor can edit, so
+    # they are neutralized before they sit inside the <plan-context> tag: quoted
+    # text must not be able to close the block or open a harness-looking tag.
     sections = [
-        f"<plan-context repo=\"{repo_slugs[0]}\" cwd=\"{cwd.as_posix()}\">",
+        f"<plan-context repo=\"{clean_fact(repo_slugs[0], 80)}\" cwd=\"{clean_fact(cwd.as_posix(), 300)}\">",
         "_Auto-loaded by plan_context_loader.py — read this BEFORE designing/coding._",
         "",
-        _section_vision(plan_path, repo_slugs, repo_root),
+        neutralize(_section_vision(plan_path, repo_slugs, repo_root)),
         "",
-        _section_idea_box(repo_root),
+        neutralize(_section_idea_box(repo_root)),
         "",
-        _section_plans(repo_slugs),
+        neutralize(_section_plans(repo_slugs)),
         "",
         "## How to use",
         "1. Reference vision Why+DoD when scoping the plan.",
