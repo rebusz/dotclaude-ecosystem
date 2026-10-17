@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -28,6 +29,7 @@ MAX_SESSION_BINDING_BYTES = 64 * 1024
 MAX_REGISTRY_BYTES = 128 * 1024
 MAX_ERROR_LOG_BYTES = 128 * 1024
 MAX_ERROR_LINE_CHARS = 1000
+MAX_COUNTER_BYTES = 16 * 1024
 
 _ATOMIC_REPLACE_ATTEMPTS = 12
 _ATOMIC_REPLACE_INITIAL_BACKOFF_S = 0.005
@@ -260,7 +262,7 @@ def read_session_binding(
     except FileNotFoundError:
         return None
     except (OSError, RuntimeError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-        append_hook_error("SESSION_BINDING_INVALID", type(exc).__name__, state_dir=target_dir)
+        append_hook_error("SESSION_BINDING_INVALID", exception_detail(exc), state_dir=target_dir)
         return None
 
     normalized = _normalize_binding(raw, safe_session_id)
@@ -309,13 +311,68 @@ def write_session_binding(
         return path
 
 
+def exception_detail(exc: BaseException, limit: int = 200) -> str:
+    """`Class @ file:line` for the innermost frame (plus errno for OSError).
+
+    The error channel used to record `type(exc).__name__` alone: on the live
+    box 1244 of its lines read just `ValueError`, which says something failed
+    and nothing about where (Slice F item 3). The innermost site is enough to
+    tell those apart. The message is deliberately NOT recorded: exceptions from
+    the session delegates can carry transcript text, and this log must never
+    hold it (pinned by the adapter tests).
+    """
+    head = type(exc).__name__
+    if isinstance(exc, OSError) and exc.errno is not None:
+        head += f"[errno={exc.errno}]"
+    frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ else []
+    if frames:
+        last = frames[-1]
+        head += f" @ {Path(last.filename).name}:{last.lineno}"
+    return head[:limit]
+
+
+def bump_hook_counter(code: str, *, state_dir: Path | None = None) -> None:
+    """Count a routine condition instead of logging a line per occurrence.
+
+    LIFECYCLE_TRANSCRIPT_INCOMPLETE fired on most SessionEnds (164 of the
+    log's lines) and pushed real failures out of a 128 KB ring. A counter keeps
+    the signal -- how often, and when last -- at a fixed size.
+    """
+    target_dir = Path(state_dir) if state_dir is not None else _default_state_dir()
+    path = target_dir / "hook_counters.json"
+    safe_code = re.sub(r"[^A-Z0-9_.-]+", "_", str(code).upper())[:80] or "HOOK_COUNTER"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = path.read_bytes()
+            counters = json.loads(raw) if len(raw) <= MAX_COUNTER_BYTES else {}
+        except (FileNotFoundError, ValueError):
+            counters = {}
+        if not isinstance(counters, dict):
+            counters = {}
+        entry = counters.get(safe_code)
+        count = entry.get("count", 0) if isinstance(entry, dict) else 0
+        counters[safe_code] = {
+            "count": (count if isinstance(count, int) else 0) + 1,
+            "last": _utc_now(),
+        }
+        atomic_write_bytes(path, json.dumps(counters, sort_keys=True).encode("utf-8"))
+    except OSError:
+        return
+
+
 def append_hook_error(
     code: str,
     detail: str = "",
     *,
     state_dir: Path | None = None,
 ) -> None:
-    """Append one bounded diagnostic line without surfacing an exception."""
+    """Append one bounded diagnostic line without surfacing an exception.
+
+    One O_APPEND write per line -- concurrent hooks cannot lose each other's
+    lines, and the common case no longer reads and rewrites the whole file.
+    Only when the file passes the ceiling is it compacted to its newest half.
+    """
 
     target_dir = Path(state_dir) if state_dir is not None else _default_state_dir()
     path = target_dir / "hook_errors.log"
@@ -328,17 +385,15 @@ def append_hook_error(
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        previous = b""
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
         try:
-            previous = path.read_bytes()
-        except FileNotFoundError:
-            pass
-        combined = previous + encoded
-        if len(combined) > MAX_ERROR_LOG_BYTES:
-            combined = combined[-MAX_ERROR_LOG_BYTES:]
-            newline = combined.find(b"\n")
-            combined = combined[newline + 1 :] if newline >= 0 else encoded[-MAX_ERROR_LOG_BYTES:]
-        atomic_write_bytes(path, combined)
+            os.write(fd, encoded)
+        finally:
+            os.close(fd)
+        if path.stat().st_size > MAX_ERROR_LOG_BYTES:
+            keep = path.read_bytes()[-(MAX_ERROR_LOG_BYTES // 2):]
+            newline = keep.find(b"\n")
+            atomic_write_bytes(path, keep[newline + 1 :] if newline >= 0 else encoded)
     except OSError:
         # Hooks fail open toward the session. The debug log is best-effort when
         # the state directory itself is unavailable.
@@ -384,7 +439,7 @@ def _load_registry(
     except FileNotFoundError:
         return None
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-        append_hook_error("REGISTRY_INVALID", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("REGISTRY_INVALID", exception_detail(exc), state_dir=state_dir)
         return None
 
 
@@ -423,7 +478,7 @@ def resolve_repository(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        append_hook_error("GIT_RESOLVE_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("GIT_RESOLVE_FAILED", exception_detail(exc), state_dir=state_dir)
         return None
     if result.returncode != 0:
         return None
@@ -455,7 +510,7 @@ def resolve_repository(
             if plan_paths is None or vision_paths is None or idea_paths is None:
                 raise ValueError("entry paths must be safe relative paths")
         except (OSError, ValueError, TypeError) as exc:
-            append_hook_error("REGISTRY_INVALID", type(exc).__name__, state_dir=state_dir)
+            append_hook_error("REGISTRY_INVALID", exception_detail(exc), state_dir=state_dir)
             return None
 
         if _path_key(canonical_root) in candidate_keys:
@@ -507,7 +562,7 @@ def read_session_plan(
     except FileNotFoundError:
         return None
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-        append_hook_error("SESSION_PLAN_INVALID", type(exc).__name__, state_dir=target_dir)
+        append_hook_error("SESSION_PLAN_INVALID", exception_detail(exc), state_dir=target_dir)
         return None
 
     if isinstance(raw, dict) and raw.get("schema_version") != SESSION_PLAN_SCHEMA:

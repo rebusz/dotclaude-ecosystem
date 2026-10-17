@@ -21,6 +21,7 @@ from typing import Any, Iterable
 from session_lifecycle import consume_pending_verdict, pending_verdict
 from session_state import (
     append_hook_error,
+    exception_detail,
     atomic_write_bytes,
     parse_nul_paths,
     read_session_binding,
@@ -1017,7 +1018,7 @@ def prepare_curator_report(
             transcript_status = "unreadable"
             append_hook_error(
                 "CURATOR_TRANSCRIPT_MISSING",
-                type(exc).__name__,
+                exception_detail(exc),
                 state_dir=target_state,
             )
         if window is None:

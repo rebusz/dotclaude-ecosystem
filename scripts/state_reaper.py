@@ -12,11 +12,22 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from session_state import append_hook_error, atomic_write_bytes, read_session_binding
+from session_state import (
+    append_hook_error,
+    atomic_write_bytes,
+    exception_detail,
+    read_session_binding,
+)
 
 
 RETENTION_DAYS = 7
-VERDICT_OUTER_BOUND_DAYS = 90
+# Only `/curator` writes consumed_at (surfacing into a session is not the
+# operator reading it -- design C4, kept). In practice nothing is ever curated:
+# on 2026-10-17 the live box held 1632 verdicts, 0 consumed, so this bound was
+# the only exit and every SessionStart read all of them to find 0 candidates
+# (~100 ms). 30 days stays well past RETENTION_DAYS and caps that backlog at
+# about a month (Slice F items 1-2).
+VERDICT_OUTER_BOUND_DAYS = 30
 MAX_VERDICT_BYTES = 64 * 1024
 MAX_SCAN_FILES = 5000
 MAX_CURSOR_BYTES = 1024
@@ -361,7 +372,7 @@ def reap_state(
     except FileNotFoundError:
         return summary
     except OSError as exc:
-        append_hook_error("REAPER_SCAN_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("REAPER_SCAN_FAILED", exception_detail(exc), state_dir=state_dir)
         summary["errors"] = 1
         return summary
 
@@ -439,5 +450,5 @@ def reap_state(
             _write_scan_cursor(state_dir, last_scanned)
         except (OSError, ValueError) as exc:
             summary["errors"] = int(summary["errors"]) + 1
-            append_hook_error("REAPER_CURSOR_WRITE_FAILED", type(exc).__name__, state_dir=state_dir)
+            append_hook_error("REAPER_CURSOR_WRITE_FAILED", exception_detail(exc), state_dir=state_dir)
     return summary
