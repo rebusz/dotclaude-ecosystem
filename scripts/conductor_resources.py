@@ -618,7 +618,7 @@ class HostResourceManager:
             f"""
             SELECT * FROM host_resource_requests
             WHERE state IN {state_filter} {rk_filter}
-            ORDER BY CASE WHEN state = 'INHERITED' THEN 0 ELSE 1 END, created_at_utc
+            ORDER BY created_at_utc, request_id
             """,
             params,
         ).fetchall()
@@ -665,25 +665,35 @@ class HostResourceManager:
             if age_seconds < ttl_seconds:
                 continue
 
-            # (b) Check owner process liveness:
-            # "no recorded owner process is alive (no PID recorded, or the PID is dead,
-            # or PID alive but its start time differs from the recorded one).
-            # A live matching owner process keeps the slot."
-            pid = lease_row["process_pid"] if lease_row else None
-            start_time = lease_row["process_start_time"] if lease_row else None
-
-            if pid is None:
-                owner_alive = False
-                evidence = "OWNER_UNRECORDED"
+            # (b) Check INHERITED request and owner process liveness:
+            # Never auto-release an INHERITED request unless the inheriting worker is proven gone.
+            if state == HostResourceRequestState.INHERITED.value:
+                child_lease = conn.execute(
+                    "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                ).fetchone()
+                if not child_lease or not child_lease["process_pid"]:
+                    continue
+                is_gone, evidence = self._owner_liveness(
+                    child_lease["process_pid"], child_lease["process_start_time"]
+                )
+                if not is_gone:
+                    continue
             else:
-                is_gone, evidence = self._owner_liveness(pid, start_time)
-                owner_alive = (evidence == "OWNER_PROCESS_ALIVE")
+                pid = lease_row["process_pid"] if lease_row else None
+                start_time = lease_row["process_start_time"] if lease_row else None
 
-            if owner_alive:
-                continue
+                if pid is None:
+                    is_gone = True
+                    evidence = "OWNER_UNRECORDED"
+                else:
+                    is_gone, evidence = self._owner_liveness(pid, start_time)
 
+                if not is_gone:
+                    continue
+
+            # Never auto-release any parent that still has surviving INHERITED children.
             lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
-            if state == HostResourceRequestState.ACTIVE.value and lease_id:
+            if lease_id:
                 child_count = conn.execute(
                     "SELECT COUNT(*) FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
                     (lease_id, HostResourceRequestState.INHERITED.value),
@@ -823,6 +833,7 @@ class HostResourceManager:
                         HostResourceRequestState.RECOVERY_REQUIRED.value,
                         "reconciler",
                         "LEASE_EXPIRED",
+                        event_time=now,
                     )
             return {
                 "expired_count": len(rows),
@@ -938,9 +949,13 @@ class HostResourceManager:
             return False, "OWNER_UNRECORDED"
         try:
             observed_start = psutil.Process(int(pid)).create_time()
-        except (OSError, ValueError, psutil.Error):
+        except psutil.NoSuchProcess:
             return True, "OWNER_PROCESS_GONE"
-        if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
+        except (OSError, ValueError, psutil.Error):
+            return False, "OWNER_LIVENESS_UNPROVEN"
+        if start_time is None:
+            return False, "OWNER_LIVENESS_UNPROVEN"
+        if abs(observed_start - float(start_time)) > 1.0:
             # Same pid, different process: the owner died and the OS reused it.
             return True, "OWNER_PID_REUSED"
         return False, "OWNER_PROCESS_ALIVE"

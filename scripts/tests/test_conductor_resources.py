@@ -23,6 +23,8 @@ from scripts.conductor_resources import (
     ResourceAdmissionError,
     ResourceBusyError,
     classify_pytest_invocation,
+    get_stale_slot_ttl_seconds,
+    _iso,
 )
 from scripts.conductor_store import (
     ConductorStore,
@@ -363,7 +365,7 @@ def _set_lease_process(manager: HostResourceManager, lease_id: str, pid, start_t
 def _events(manager: HostResourceManager, request_id: str) -> list:
     with manager.store._connection() as conn:
         return conn.execute(
-            "SELECT * FROM host_resource_events WHERE request_id = ? ORDER BY recorded_at_utc",
+            "SELECT * FROM host_resource_events WHERE request_id = ? ORDER BY rowid",
             (request_id,),
         ).fetchall()
 
@@ -1238,4 +1240,204 @@ def test_stale_slot_ttl_zero_disables_release(manager: HostResourceManager, monk
     req = manager.store.get_resource_request(wedged["request_id"])
     assert req.state == HostResourceRequestState.RECOVERY_REQUIRED
     assert manager.store.get_receipt(f"stale_slot_auto_release_{wedged['request_id']}") is None
+
+
+def test_stale_slot_ttl_env_bogus_and_negative_handling(manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch):
+    # Finding 6: env tests for 'bogus' -> default 900 and '-1' -> disabled (0)
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "-1")
+    assert get_stale_slot_ttl_seconds() == 0
+    wedged_neg = _wedge(manager)
+    future_neg = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 2000)
+    result_neg = manager.reconcile(now=future_neg)
+    assert result_neg["stale_released_count"] == 0
+    req_neg = manager.store.get_resource_request(wedged_neg["request_id"])
+    assert req_neg.state == HostResourceRequestState.RECOVERY_REQUIRED
+
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "bogus")
+    assert get_stale_slot_ttl_seconds() == 900
+    future_bogus = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60 + 1000)
+    result_bogus = manager.reconcile(now=future_bogus)
+    assert result_bogus["stale_released_count"] == 1
+    req_bogus = manager.store.get_resource_request(wedged_neg["request_id"])
+    assert req_bogus.state == HostResourceRequestState.RELEASED
+
+
+def test_snapshot_sweepable_count_uses_get_stale_slot_ttl_seconds(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    # Finding 5: snapshot/status path uses get_stale_slot_ttl_seconds()
+    store = ConductorStore(root_dir=tmp_path)
+    mgr = HostResourceManager(store)
+    wedged = _wedge(mgr)
+
+    past_iso = "2026-10-17T00:00:00+00:00"
+    with mgr.store._connection() as conn:
+        conn.execute("UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?", (past_iso, wedged["request_id"]))
+        conn.execute("UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE lease_id = ?", (past_iso, past_iso, wedged["lease_id"]))
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (past_iso, wedged["request_id"]))
+
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "-1")
+    snap_neg = read_resource_live_snapshot(root_dir=tmp_path)
+    assert snap_neg["sweepable_count"] == 0
+
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "bogus")
+    snap_bogus = read_resource_live_snapshot(root_dir=tmp_path)
+    assert snap_bogus["sweepable_count"] == 1
+
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "+900")
+    snap_plus = read_resource_live_snapshot(root_dir=tmp_path)
+    assert snap_plus["sweepable_count"] == 1
+
+
+def test_stale_slot_fence_event_uses_reconcile_now(manager: HostResourceManager):
+    # Finding 4: fence event uses event_time=now
+    req = manager.request(purpose="pytest_heavy", attempt_id="at-fence-clk", agent_instance="clk-test")
+    fence_now = datetime(2026, 10, 17, 18, 0, 0, tzinfo=timezone.utc)
+    manager.reconcile(now=fence_now)
+    with manager.store._connection() as conn:
+        ev = conn.execute(
+            "SELECT recorded_at_utc FROM host_resource_events WHERE request_id = ? AND reason_code = 'LEASE_EXPIRED'",
+            (req["request_id"],),
+        ).fetchone()
+    assert ev is not None
+    assert ev["recorded_at_utc"] == _iso(fence_now)
+
+
+def test_stale_slot_age_is_later_of_created_heartbeat_event(manager: HostResourceManager):
+    # Finding 3: real-store test where created_at is old but recent heartbeat / event exists -> kept;
+    # age is the later of created / last heartbeat / last event.
+    now = datetime(2026, 10, 17, 12, 0, 0, tzinfo=timezone.utc)
+    wedged = _wedge(manager)
+    req_id = wedged["request_id"]
+    lease_id = wedged["lease_id"]
+
+    created_old = _iso(now - timedelta(seconds=2000))       # 2000s old > 900s TTL
+    recent_activity = _iso(now - timedelta(seconds=100))    # 100s old < 900s TTL
+
+    # Case A: created is old, but last_heartbeat_utc is recent -> KEPT
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?", (created_old, req_id))
+        conn.execute("UPDATE host_resource_leases SET last_heartbeat_utc = ? WHERE lease_id = ?", (recent_activity, lease_id))
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (created_old, req_id))
+
+    res_a = manager.reconcile(now=now)
+    assert res_a["stale_released_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+
+    # Case B: created and heartbeat are old, but host_resource_event is recent -> KEPT
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE host_resource_leases SET last_heartbeat_utc = ? WHERE lease_id = ?", (created_old, lease_id))
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (recent_activity, req_id))
+
+    res_b = manager.reconcile(now=now)
+    assert res_b["stale_released_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+
+    # Case C: created, heartbeat, AND event are all old (2000s > 900s) -> RELEASED
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (created_old, req_id))
+
+    res_c = manager.reconcile(now=now)
+    assert res_c["stale_released_count"] == 1
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RELEASED
+
+
+def test_stale_slot_owner_liveness_unproven_cases_kept(manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch):
+    # Finding 2: PID alive with missing start_time => unproven (keep the slot, do not auto-release);
+    # only a hard "no such process" maps to gone; psutil AccessDenied / transient errors => unproven (keep).
+    now = datetime(2026, 10, 17, 12, 0, 0, tzinfo=timezone.utc)
+    wedged = _wedge(manager)
+    req_id = wedged["request_id"]
+    lease_id = wedged["lease_id"]
+
+    old_iso = _iso(now - timedelta(seconds=2000))
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?", (old_iso, req_id))
+        conn.execute("UPDATE host_resource_leases SET last_heartbeat_utc = ? WHERE lease_id = ?", (old_iso, lease_id))
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (old_iso, req_id))
+
+    # Case A: PID alive with start_time=None -> unproven -> KEPT
+    live_pid = os.getpid()
+    _set_lease_process(manager, lease_id, live_pid, None)
+    is_gone, evidence = manager._owner_liveness(live_pid, None)
+    assert not is_gone
+    assert evidence == "OWNER_LIVENESS_UNPROVEN"
+
+    res_a = manager.reconcile(now=now)
+    assert res_a["stale_released_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+    # recover() without attestation raises OWNER_LIVENESS_UNPROVEN
+    with pytest.raises(ResourceAdmissionError, match="OWNER_LIVENESS_UNPROVEN"):
+        manager.recover(req_id)
+
+    # Case B: psutil AccessDenied / transient error -> unproven -> KEPT
+    def _mock_proc(*args, **kwargs):
+        raise psutil.AccessDenied()
+
+    monkeypatch.setattr(psutil, "Process", _mock_proc)
+    is_gone_ad, evidence_ad = manager._owner_liveness(live_pid, 12345.0)
+    assert not is_gone_ad
+    assert evidence_ad == "OWNER_LIVENESS_UNPROVEN"
+
+    res_b = manager.reconcile(now=now)
+    assert res_b["stale_released_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+
+    # Case C: psutil NoSuchProcess (hard no such process) -> GONE -> RELEASED
+    def _mock_no_such_proc(*args, **kwargs):
+        raise psutil.NoSuchProcess(pid=999999)
+
+    monkeypatch.setattr(psutil, "Process", _mock_no_such_proc)
+    is_gone_gone, evidence_gone = manager._owner_liveness(999999, 12345.0)
+    assert is_gone_gone
+    assert evidence_gone == "OWNER_PROCESS_GONE"
+
+    res_c = manager.reconcile(now=now)
+    assert res_c["stale_released_count"] == 1
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.RELEASED
+
+
+def test_stale_slot_never_auto_releases_inherited_or_parent_with_active_child(manager: HostResourceManager):
+    # Finding 1: never auto-release an INHERITED request, or a parent that still has INHERITED children,
+    # unless the inheriting worker is proven gone; keep the recover() INHERITED_CHILD_ACTIVE invariant inside the sweeper.
+    base_time = datetime.now(timezone.utc)
+    parent = manager.request(purpose="pytest_heavy", attempt_id="at-p1", agent_instance="ag-p")
+    p_req_id = parent["request_id"]
+    p_lease_id = parent["lease_id"]
+
+    child = manager.request(
+        purpose="pytest_focused",
+        attempt_id="at-c1",
+        agent_instance="ag-c",
+        parent_lease_id=p_lease_id,
+    )
+    c_req_id = child["request_id"]
+    assert child["state"] == HostResourceRequestState.INHERITED.value
+
+    # Fence parent into RECOVERY_REQUIRED
+    fence_time = base_time + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60)
+    manager.reconcile(now=fence_time)
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
+
+    # Age past TTL relative to fence time (> 900s)
+    future = fence_time + timedelta(seconds=1000)
+
+    # Sweeper runs: NEITHER parent nor child is auto-released
+    res = manager.sweep_stale_slots(now=future)
+    assert res["swept_count"] == 0
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
+
+    # recover() refuses because child is active
+    with pytest.raises(ResourceBusyError, match="INHERITED_CHILD_ACTIVE"):
+        manager.recover(p_req_id, operator_attestation=True, reason="manual cleanup attempt")
+
+    # Release child explicitly
+    manager.release(c_req_id)
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.RELEASED
+
+    # Now sweeper runs again: parent is now auto-released because child is no longer active
+    res_after = manager.sweep_stale_slots(now=future)
+    assert res_after["swept_count"] == 1
+    assert p_req_id in res_after["swept_request_ids"]
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RELEASED
 

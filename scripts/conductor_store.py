@@ -272,8 +272,8 @@ def _read_resource_live_snapshot_from_conn(
         fenced.append(_join_request_lease(freq, leases_by_request_id.get(freq["request_id"])))
 
     sweepable_count = 0
-    ttl_env = os.environ.get("TDCONDUCTOR_STALE_SLOT_TTL_S")
-    ttl_s = 900 if ttl_env is None else max(0, int(ttl_env)) if ttl_env.isdigit() else 900
+    from scripts.conductor_resources import get_stale_slot_ttl_seconds
+    ttl_s = get_stale_slot_ttl_seconds()
     if ttl_s > 0:
         now_dt = datetime.now(timezone.utc)
         for freq in fenced:
@@ -289,6 +289,14 @@ def _read_resource_live_snapshot_from_conn(
                 timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
             age = (now_dt - max(timestamps)).total_seconds()
             if age >= ttl_s:
+                lease_id = freq.get("lease_id")
+                if lease_id:
+                    child_count = conn.execute(
+                        "SELECT COUNT(*) FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
+                        (lease_id, HostResourceRequestState.INHERITED.value),
+                    ).fetchone()[0]
+                    if child_count > 0:
+                        continue
                 pid = freq.get("process_pid")
                 start_time = freq.get("process_start_time")
                 if pid is None:
@@ -298,8 +306,10 @@ def _read_resource_live_snapshot_from_conn(
                         obs = psutil.Process(int(pid)).create_time()
                         if start_time is not None and abs(obs - float(start_time)) > 1.0:
                             sweepable_count += 1
-                    except (OSError, ValueError, psutil.Error):
+                    except psutil.NoSuchProcess:
                         sweepable_count += 1
+                    except (OSError, ValueError, psutil.Error):
+                        pass
 
     return {
         "resource_key": resource_key,
