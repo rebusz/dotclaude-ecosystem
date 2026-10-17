@@ -159,7 +159,7 @@ def _section_vision(plan: Path | None, repo_slugs: list[str], repo_root: Path) -
             status = v.get("status", "?")
             title = v.get("title", s)
             out.append(f"- `{s}` — {title} ({status})")
-        out.append("\n→ Po wyborze: dodaj `vision: <slug>` do frontmatter planu, lub `python ~/.claude/scripts/vision.py attach <plan-path> <slug>`.")
+        out.append("\n→ Po wyborze: dodaj `vision: SLUG` do frontmatter planu, lub `python ~/.claude/scripts/vision.py attach PLAN_PATH SLUG`.")
         return "\n".join(out)
 
     item = visions.get(slug)
