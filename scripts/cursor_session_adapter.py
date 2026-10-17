@@ -16,6 +16,7 @@ import session_router
 from session_state import (
     RepositoryRegistration,
     append_hook_error,
+    exception_detail,
     read_session_binding,
     resolve_repository,
     validate_session_id,
@@ -237,14 +238,14 @@ def handle_event(
     except (TypeError, ValueError) as exc:
         append_hook_error(
             "CURSOR_ADAPTER_INVALID_INPUT",
-            type(exc).__name__,
+            exception_detail(exc),
             state_dir=state_dir,
         )
         return {}
     except Exception as exc:  # noqa: BLE001 - host hooks must fail open
         append_hook_error(
             "CURSOR_ADAPTER_FAILED",
-            type(exc).__name__,
+            exception_detail(exc),
             state_dir=state_dir,
         )
         return {}

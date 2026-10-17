@@ -176,6 +176,20 @@ class LeakedTempTests(unittest.TestCase):
         self.assertFalse(check.ok)
         self.assertIn("orphaned", check.detail)
 
+    def test_old_orphans_of_our_own_writers_are_swept_and_others_left(self) -> None:
+        ours = ["PLANS.md.tmp.4242", ".hook_errors.log.uvzmrnaw.tmp"]
+        for name in ours + ["someone-elses.tmp"]:
+            self._leak(name, age_hours=48)
+        self._leak("VISIONS.md.tmp.77", age_hours=1)  # a writer may still own it
+        check = doc._check_leaked_temp(self.home, _state(self.home), self.now)
+        state = _state(self.home)
+        self.assertTrue(check.ok)
+        self.assertIn("2 swept", check.detail)
+        for name in ours:
+            self.assertFalse((state / name).exists(), name)
+        self.assertTrue((state / "someone-elses.tmp").exists())
+        self.assertTrue((state / "VISIONS.md.tmp.77").exists())
+
 
 class JanitorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -315,6 +329,16 @@ class SessionRouterWiringTests(unittest.TestCase):
         with mock.patch.object(doc, "build_report", side_effect=RuntimeError("boom")):
             line = session_router._ecosystem_health_line(_state(self.home), home=self.home)
         self.assertEqual(line, "")
+
+
+class CeilingCoherenceTests(unittest.TestCase):
+    def test_the_backlog_ceiling_sits_above_the_reapers_steady_state(self) -> None:
+        """At 400 the ceiling was below one 30-day bound of real traffic (403),
+        so the doctor would have flagged a healthy reaper forever."""
+        import state_reaper
+
+        busy_day = 20
+        self.assertGreater(doc.VERDICT_BACKLOG_CEILING, busy_day * state_reaper.VERDICT_OUTER_BOUND_DAYS)
 
 
 if __name__ == "__main__":

@@ -263,11 +263,12 @@ def _replace_auto_state(text: str, block: str) -> str:
 def _write_text_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
     try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
         os.replace(tmp, path)
     except PermissionError as exc:
         print(f"vision_catalog: permission denied replacing {path}: {exc}", file=sys.stderr)
+    finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:

@@ -54,8 +54,9 @@ every track must trace to a vision DoD bullet, a PLANS entry, or an IDEA_BOX row
    |---|---|---|---|---|
 
    - **risk** = R0 (docs/prompts) · R1 (non-live tooling/tests) · R2 (contracts/persistence
-     — plan+GO) · R3 (execution/order path — plan+GO+rollback+validation). LLM agents never
-     touch broker API / order path.
+     — plan+GO) · R3 (execution/order path — plan+GO+rollback+validation). R-class scales
+     care, not access: agents may design, edit and test broker/order-path code at R3 care;
+     only real-money/Combine triggers need a just-in-time operator GO.
    - **V (difficulty V0-V10)** sets the executor — **hard operator rule**:
 
      | V | task class | executor |

@@ -23,6 +23,7 @@ from _catalog_common import parse_yaml_block
 from session_state import (
     RepositoryRegistration,
     append_hook_error,
+    exception_detail,
     parse_git_status_v2_z,
     read_session_plan,
     resolve_repository,
@@ -91,7 +92,7 @@ def _run_git(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        append_hook_error("ROUTER_GIT_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("ROUTER_GIT_FAILED", exception_detail(exc), state_dir=state_dir)
         return None
     if result.returncode != 0:
         append_hook_error("ROUTER_GIT_FAILED", f"exit={result.returncode}", state_dir=state_dir)
@@ -302,7 +303,7 @@ def _persist_session_binding(session_id: str, *, state_dir: Path) -> None:
             with path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(line)
     except OSError as exc:
-        append_hook_error("ROUTER_ENV_BIND_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("ROUTER_ENV_BIND_FAILED", exception_detail(exc), state_dir=state_dir)
 
 
 def _record_worktree_start(
@@ -333,7 +334,7 @@ def _record_worktree_start(
     except Exception as exc:  # noqa: BLE001 - hooks stay fail-open
         append_hook_error(
             "ROUTER_WORKTREE_RECORD_FAILED",
-            type(exc).__name__,
+            exception_detail(exc),
             state_dir=state_dir,
         )
 
@@ -400,7 +401,7 @@ def _maintenance(
     except ImportError:
         pass
     except Exception as exc:  # noqa: BLE001 - hook must fail open
-        append_hook_error("ROUTER_REAP_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("ROUTER_REAP_FAILED", exception_detail(exc), state_dir=state_dir)
 
     try:
         from session_lifecycle import surface_pending_verdict
@@ -414,7 +415,7 @@ def _maintenance(
     except ImportError:
         return None
     except Exception as exc:  # noqa: BLE001 - hook must fail open
-        append_hook_error("ROUTER_VERDICT_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("ROUTER_VERDICT_FAILED", exception_detail(exc), state_dir=state_dir)
         return None
 
 
@@ -634,7 +635,7 @@ def handle_event(
             title = _title(cwd, facts.branch, current_time)
         return _output(context, title=title)
     except Exception as exc:  # noqa: BLE001 - hook must fail open
-        append_hook_error("ROUTER_INVALID_INPUT", type(exc).__name__, state_dir=target_state)
+        append_hook_error("ROUTER_INVALID_INPUT", exception_detail(exc), state_dir=target_state)
         return {}
 
 
@@ -653,6 +654,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - never break SessionStart
-        append_hook_error("ROUTER_UNHANDLED", type(exc).__name__)
+        append_hook_error("ROUTER_UNHANDLED", exception_detail(exc))
         print("{}")
         raise SystemExit(0)

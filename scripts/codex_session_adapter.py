@@ -13,6 +13,7 @@ import session_lifecycle
 import session_router
 from session_state import (
     append_hook_error,
+    exception_detail,
     read_session_binding,
     validate_session_id,
 )
@@ -99,7 +100,7 @@ def handle_event(
     except Exception as exc:  # noqa: BLE001 - host lifecycle hooks must fail open
         append_hook_error(
             "CODEX_ADAPTER_DELEGATE_FAILED",
-            type(exc).__name__,
+            exception_detail(exc),
             state_dir=state_dir,
         )
         return {}

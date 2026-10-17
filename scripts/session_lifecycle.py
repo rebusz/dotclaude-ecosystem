@@ -19,6 +19,8 @@ from hook_stdio import read_stdin_text
 from session_state import (
     RepositoryRegistration,
     append_hook_error,
+    bump_hook_counter,
+    exception_detail,
     atomic_write_bytes,
     parse_git_status_v2_z,
     parse_nul_paths,
@@ -125,7 +127,7 @@ def _verdict_lock(
         except OSError as exc:
             append_hook_error(
                 "VERDICT_LOCK_FAILED",
-                type(exc).__name__,
+                exception_detail(exc),
                 state_dir=state_dir,
             )
             yield False
@@ -507,7 +509,7 @@ def _git(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        append_hook_error("LIFECYCLE_GIT_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("LIFECYCLE_GIT_FAILED", exception_detail(exc), state_dir=state_dir)
         return None
     if result.returncode not in allowed_returncodes:
         append_hook_error(
@@ -642,11 +644,7 @@ def collect_evidence(
         repo_root=root,
     )
     if not transcript_scan_complete:
-        append_hook_error(
-            "LIFECYCLE_TRANSCRIPT_INCOMPLETE",
-            "scan",
-            state_dir=state_dir,
-        )
+        bump_hook_counter("LIFECYCLE_TRANSCRIPT_INCOMPLETE", state_dir=state_dir)
     # The hook contract says the transcript may lag the in-memory
     # conversation. A syntactically complete file therefore cannot prove that
     # the newest write tool call is present. Keep attribution fail-closed when
@@ -684,7 +682,7 @@ def _run_reaper(
             time_budget_s=0.15,
         )
     except Exception as exc:  # noqa: BLE001 - SessionEnd must finish
-        append_hook_error("LIFECYCLE_REAP_FAILED", type(exc).__name__, state_dir=state_dir)
+        append_hook_error("LIFECYCLE_REAP_FAILED", exception_detail(exc), state_dir=state_dir)
 
 
 def _record_worktree_close(
@@ -719,7 +717,7 @@ def _record_worktree_close(
     except Exception as exc:  # noqa: BLE001 - hooks stay fail-open
         append_hook_error(
             "LIFECYCLE_WORKTREE_RECORD_FAILED",
-            type(exc).__name__,
+            exception_detail(exc),
             state_dir=state_dir,
         )
 
@@ -848,7 +846,7 @@ def handle_event(
         )
         _run_reaper(state_dir=target_state, session_id=session_id, now=current_time)
     except Exception as exc:  # noqa: BLE001 - SessionEnd must fail open
-        append_hook_error("LIFECYCLE_FAILED", type(exc).__name__, state_dir=target_state)
+        append_hook_error("LIFECYCLE_FAILED", exception_detail(exc), state_dir=target_state)
     return None
 
 

@@ -22,6 +22,7 @@ from typing import Any, Iterable
 
 from session_state import (
     append_hook_error,
+    exception_detail,
     atomic_write_bytes,
     parse_git_status_v2_z,
     validate_session_id,
@@ -369,7 +370,7 @@ def record_session_start(
         }
         return _write_record(payload, state_dir=target_state)
     except Exception as exc:  # noqa: BLE001 - hook recorder is fail-open
-        append_hook_error("WORKTREE_START_RECORD_FAILED", type(exc).__name__, state_dir=target_state)
+        append_hook_error("WORKTREE_START_RECORD_FAILED", exception_detail(exc), state_dir=target_state)
         return None
 
 
@@ -422,7 +423,7 @@ def record_session_close(
         }
         return _write_record(payload, state_dir=target_state)
     except Exception as exc:  # noqa: BLE001 - hook recorder is fail-open
-        append_hook_error("WORKTREE_CLOSE_RECORD_FAILED", type(exc).__name__, state_dir=target_state)
+        append_hook_error("WORKTREE_CLOSE_RECORD_FAILED", exception_detail(exc), state_dir=target_state)
         return None
 
 

@@ -196,8 +196,13 @@ def log_completion(slug: str, entry_tsv: str, vision_file: Path) -> bool:
         text = _read_text(vision_file) if vision_file.exists() else ""
         updated = _append_inside_auto_log(text, line)
         tmp = vision_file.with_suffix(f"{vision_file.suffix}.tmp.{os.getpid()}")
-        tmp.write_text(updated, encoding="utf-8", newline="\n")
-        os.replace(tmp, vision_file)
+        try:
+            tmp.write_text(updated, encoding="utf-8", newline="\n")
+            os.replace(tmp, vision_file)
+        finally:
+            # A failed write or replace must not leave PLANS.md.tmp.<pid> behind
+            # (six of them had piled up in ~/.claude). After a replace it is gone.
+            tmp.unlink(missing_ok=True)
         return True
     except OSError as exc:
         print(f"vision_context: log write failed for {slug}: {exc}", file=sys.stderr)

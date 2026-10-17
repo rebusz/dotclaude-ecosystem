@@ -504,6 +504,45 @@ class TestSessionState(unittest.TestCase):
                 all(len(line) <= state.MAX_ERROR_LINE_CHARS for line in log_path.read_text().splitlines())
             )
 
+    def test_error_log_appends_and_compacts_to_its_newest_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            state.append_hook_error("FIRST", "a", state_dir=state_dir)
+            state.append_hook_error("SECOND", "b", state_dir=state_dir)
+            lines = (state_dir / "hook_errors.log").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([line.split()[1] for line in lines], ["FIRST", "SECOND"])
+
+            for index in range(400):
+                state.append_hook_error("FILL", f"{index} " + "y" * 500, state_dir=state_dir)
+            state.append_hook_error("NEWEST", "z", state_dir=state_dir)
+            text = (state_dir / "hook_errors.log").read_text(encoding="utf-8")
+            self.assertLessEqual(len(text.encode("utf-8")), state.MAX_ERROR_LOG_BYTES)
+            self.assertNotIn(" FIRST ", text)
+            self.assertTrue(text.rstrip().splitlines()[-1].split()[1] == "NEWEST")
+            self.assertTrue(all(len(line.split()) >= 2 for line in text.splitlines()))  # no torn line
+
+    def test_exception_detail_names_the_site_and_never_the_message(self):
+        def fails() -> None:
+            raise ValueError("transcript says: secret plan text")
+
+        try:
+            fails()
+        except ValueError as exc:
+            detail = state.exception_detail(exc)
+        self.assertTrue(detail.startswith("ValueError @ test_session_state.py:"), detail)
+        self.assertNotIn("secret", detail)
+        os_detail = state.exception_detail(FileNotFoundError(2, "gone"))
+        self.assertEqual(os_detail, "FileNotFoundError[errno=2]")
+
+    def test_routine_conditions_are_counted_not_logged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            for _ in range(3):
+                state.bump_hook_counter("LIFECYCLE_TRANSCRIPT_INCOMPLETE", state_dir=state_dir)
+            counters = json.loads((state_dir / "hook_counters.json").read_text(encoding="utf-8"))
+            self.assertEqual(counters["LIFECYCLE_TRANSCRIPT_INCOMPLETE"]["count"], 3)
+            self.assertFalse((state_dir / "hook_errors.log").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

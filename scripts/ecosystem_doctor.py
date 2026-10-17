@@ -52,10 +52,12 @@ from typing import Any
 
 LINE_BUDGET = 200
 
-# A verdict backlog is normal; an unbounded one means the consumer is dead.
-# 1,601 unconsumed verdicts is what the audit measured, so the ceiling sits far
-# below that and far above a busy week.
-VERDICT_BACKLOG_CEILING = 400
+# A verdict backlog is normal; an unbounded one means the reaper is dead.
+# Nothing is ever curated, so the steady state is one outer bound's worth of
+# verdicts: ~13/day measured (403 in 30 days, 2026-10-17) x the 30-day bound in
+# state_reaper. The ceiling sits above a busy month (20/day) and far below the
+# 1,632 the box held when the bound was 90 days.
+VERDICT_BACKLOG_CEILING = 800
 # Atomic writes clean up after themselves; a hook killed at its harness timeout
 # cannot. A handful is noise, a pile means something is dying repeatedly.
 LEAKED_TMP_CEILING = 3
@@ -208,9 +210,22 @@ def _check_verdict_backlog(state: Path) -> Check:
     return Check("verdicts", True, str(count))
 
 
-def _check_leaked_temp(home: Path, state: Path, now: float) -> Check:
-    """Atomic writes clean up after themselves; a SIGKILLed hook does not."""
+# The two temp shapes this repository's own writers create:
+#   PLANS.md.tmp.<pid>        path.with_suffix(".tmp.<pid>")  (catalog writers)
+#   .<name>.<random>.tmp      tempfile.mkstemp(prefix=".<name>.", suffix=".tmp")
+# Only these are swept -- another program's temp file is not ours to delete.
+_OWN_TEMP = re.compile(r"^(?:[^.][^/\\]*\.tmp\.\d+|\.[^/\\]+\.[a-z0-9_]{6,12}\.tmp)$")
+
+
+def _check_leaked_temp(home: Path, state: Path, now: float, *, sweep: bool = True) -> Check:
+    """Atomic writes clean up after themselves; a SIGKILLed hook does not.
+
+    Orphans of our own writers older than a day are swept (Slice F item 4):
+    a writer killed mid-write never comes back for its temp file, and a check
+    that only counts them reported the same pile forever.
+    """
     stale: list[str] = []
+    swept = 0
     cutoff = now - 86400
     seen_dirs: set[str] = set()
     for directory in (home / ".claude", state):
@@ -230,15 +245,21 @@ def _check_leaked_temp(home: Path, state: Path, now: float) -> Check:
                 if ".tmp" not in entry.name:
                     continue
                 try:
-                    if entry.stat(follow_symlinks=False).st_mtime < cutoff:
-                        stale.append(entry.name)
+                    if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                        continue
+                    if sweep and _OWN_TEMP.match(entry.name):
+                        os.unlink(entry.path)
+                        swept += 1
+                        continue
+                    stale.append(entry.name)
                 except OSError:
                     continue
         except OSError as exc:
             return Check("temp", False, f"unreadable ({type(exc).__name__})", checked=False)
+    note = f" ({swept} swept)" if swept else ""
     if len(stale) > LEAKED_TMP_CEILING:
-        return Check("temp", False, f"{len(stale)} orphaned .tmp files")
-    return Check("temp", True, str(len(stale)))
+        return Check("temp", False, f"{len(stale)} orphaned .tmp files{note}")
+    return Check("temp", True, f"{len(stale)}{note}")
 
 
 def _check_janitor(state: Path, now: float) -> Check:
