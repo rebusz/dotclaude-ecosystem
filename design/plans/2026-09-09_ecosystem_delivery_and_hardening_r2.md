@@ -2,7 +2,7 @@
 title: Ecosystem delivery seam and hardening
 date: 2026-09-09
 risk: R2
-status: draft-awaiting-go
+status: in-progress
 audit: design/audits/2026-09-09_ecosystem_state_audit_r1.md
 supersedes: none
 amends:
@@ -226,7 +226,7 @@ was silencing the gate that would have reported it.
 5. Add `scripts/truthctl.py` to `truthdeck-ci`'s `paths:`.
 6. Align CI Python with the box (3.12 vs local 3.14) or test both.
 
-#### Slice D — conductor authority invariants (R2)
+#### Slice D — conductor authority invariants (R2) — **SHIPPED 2026-09-09** (446bdf6, with C)
 
 C1 `resolve_resource_key` validates against a closed set and `__init__` refuses
 unknown pools · C2 attestation refused inside `process_envelope` regardless of
@@ -245,7 +245,13 @@ files.
 Fix the three tests that currently assert the wrong invariant (T1/T2/T3) in the
 same slice — they are why this was invisible.
 
-#### Slice E — security hardening (R1/R2)
+#### Slice E — security hardening (R1/R2) — **SHIPPED 2026-10-17** (PR #117, `aa48cbf`)
+
+Landed as planned, plus two review fixes: trigger commands need an
+allowlisted script + subcommand (scripts/ alone still exposed `git_hygiene
+--apply --deploy`), and one shared fact sanitizer. Fix-later: the rule-sync
+gate accepts commits on any branch, not only `origin/main`. CI BLOCKED by
+policy (public repo, 0 runners); merged on local validation (871 passed).
 
 1. `scripts/secret_patterns.py` — one module, union of the five current sets
    plus `sk-[A-Za-z0-9_-]{12,}`, `AIza`, `github_pat_`, JWT, PEM, connection
@@ -263,7 +269,28 @@ same slice — they are why this was invisible.
    and the `uvx` package in `overlays/claude-global.md`.
 8. `sys.executable` instead of bare `python` in the five hook call sites.
 
-#### Slice F — state, hygiene and prose (R1)
+#### Slice F — state, hygiene and prose (R1) — **items 1-5 SHIPPED, 6 partial, 7 operator**
+
+Decisions and deviations, against live readback on 2026-10-17:
+
+- **1-2.** 1632 verdicts, **0 consumed**, ~100 ms scan per SessionStart for 0
+  candidates. Kept C4 (surfacing is not operator delivery); the outer bound
+  went 90 → 30 days, which is the cost fix — an mtime pre-filter would have
+  broken the pinned outer-bound invariants. Doctor ceiling 400 → 800 to sit
+  above the new steady state.
+- **3.** Site, not message: the adapter tests pin that exception messages can
+  carry transcript text. `exception_detail` = class + innermost `file:line`
+  (+errno). O_APPEND writes; TRANSCRIPT_INCOMPLETE is a counter.
+- **4.** try/finally in all six pid-tmp writers; the doctor sweeps day-old
+  orphans of those two shapes only.
+- **5.** `detect_repo` via `git rev-parse --git-common-dir`; this repo had no
+  plan context at all before.
+- **6.** Only `whatnext` was rewritten. `core.md`, both overlays and
+  `IDEA_BOX.md` are being rewritten by PR #119 and the operator's roster
+  branch; folding them now would conflict with or regress that work. The
+  163/162 line-limit breach is already gone in the live globals.
+- **Deferred from A:** `force_utf8_stdio()` landed (live log had
+  `LIFECYCLE_FAILED UnicodeEncodeError`).
 
 1. **Verdict delivery.** Either consume verdicts on the next SessionStart
    (delivery becomes automatic) or drop `VERDICT_OUTER_BOUND_DAYS` for
