@@ -614,6 +614,18 @@ def test_recovery_command_builder_scenarios(tmp_path: pathlib.Path):
     assert adj3.command is None
     assert build_recovery_command(fenced_alive_pid, repo_path=tmp_path) is None
 
+    # Scenario 3b: alive pid without a recorded start time -> unproven, attestation required
+    fenced_alive_no_start = {
+        "request_id": "rr_00000000003b",
+        "agent_instance": "agent_alive_nostart",
+        "process_pid": os.getpid(),
+        "process_start_time": None,
+    }
+    adj3b = adjudicate_recovery(fenced_alive_no_start, repo_path=tmp_path)
+    assert adj3b.recover_code == "OWNER_LIVENESS_UNPROVEN"
+    assert adj3b.liveness_status == "OWNER_LIVENESS_UNPROVEN"
+    assert adj3b.command is not None and "--attest-owner-gone" in adj3b.command
+
     # Scenario 4: surviving inherited child
     fenced_with_child = {
         "request_id": "rr_000000000004",
