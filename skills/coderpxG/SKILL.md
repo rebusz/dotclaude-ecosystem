@@ -1,9 +1,19 @@
 ---
-name: coderpxG
-description: Conserve local Codex tokens by assigning implementation and independent review to Perplexity CDP and ChatGPT CDP. Astra authors the plan and key decisions; Codex owns local files, tests and Git. Handles /coderpxG, /coderpxg and model-team compatibility.
+name: coderpxg
+description: Coordinate Codex-led parallel work using the shared supervisor roster, qualified CDP planning and review, local implementation workers, and preserved attempt custody. Use for /coderpxg, model-team coordination, or an ecosystem supervisor request.
 ---
 
-# CoderPX G v1 — subscription CDP work, local execution
+# CoderPX G — supervisor workflow
+
+## Current supervisor entry — 2026-10-16
+
+For new assignments, read [supervisor.md](references/supervisor.md) first.
+It connects Codex to the shared supervisor roster and supersedes the older
+provider-role, effort, activation and workflow-selection guidance below for
+new jobs. The remaining body is legacy context, not a second routing policy.
+Preserve existing owners, attempts, permissions and review contracts. This entry
+is available without an explicit command; it does not start background jobs by
+itself or migrate an active attempt.
 
 The operator's objective is efficient local token use. Astra writes the plan
 and resolves the most important architectural, scope and conflicting-evidence
