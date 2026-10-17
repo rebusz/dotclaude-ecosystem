@@ -48,13 +48,38 @@ def _read_text(p: Path, limit_lines: int | None = None) -> str:
         return ""
 
 
-def _detect_repo(cwd: Path) -> Path | None:
-    """Walk up from cwd to find repo root under d:/APPS."""
-    cwd = cwd.resolve()
+def detect_repo(cwd: Path) -> Path | None:
+    """The main checkout root for `cwd`, or None.
+
+    Git answers first: the common dir of any worktree is the main checkout's
+    `.git`, so `.claude/worktrees/<x>` resolves to its repository, and repos
+    outside D:/APPS (this one lives in D:/dotclaude) resolve at all. The old
+    rule -- "a directory whose parent is D:/APPS" -- stays only as the fallback
+    for a cwd that is not inside a git checkout (Slice F item 5).
+    """
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace",
+        )
+        if cp.returncode == 0 and cp.stdout.strip():
+            common = Path(cp.stdout.strip()).resolve()
+            if common.name == ".git" and common.parent.is_dir():
+                return common.parent
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        cwd = cwd.resolve()
+        base = BASE.resolve()
+    except OSError:
+        return None
     for parent in [cwd, *cwd.parents]:
-        if parent.parent.resolve() == BASE.resolve():
+        if parent.parent == base:
             return parent
     return None
+
+
+_detect_repo = detect_repo
 
 
 def _slugify_repo(name: str) -> str:
@@ -319,6 +344,9 @@ def main() -> int:
         repo_root = _detect_repo(cwd)
 
     if not repo_root or not repo_root.exists():
+        # Loud, not silent: an empty plan context reads as "nothing relevant",
+        # which is the wrong conclusion when detection simply failed.
+        print(f"plan_context_loader: could not resolve a repository for {cwd}", file=sys.stderr)
         print(f"<plan-context>\n_(could not detect repo from cwd={clean_fact(cwd.as_posix(), 300)})_\n</plan-context>")
         return 0
 

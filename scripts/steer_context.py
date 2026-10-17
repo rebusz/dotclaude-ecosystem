@@ -87,18 +87,13 @@ def _read_text(p: Path, limit_lines: int | None = None) -> str:
 
 
 def _detect_repo(cwd: Path) -> Path | None:
-    """Walk up from cwd to find a repo root directly under d:/APPS."""
+    """Same resolution as the loader (git first, D:/APPS walk as fallback)."""
+    from plan_context_loader import detect_repo
+
     try:
-        cwd = cwd.resolve()
-    except Exception:
+        return detect_repo(cwd)
+    except Exception:  # noqa: BLE001 - fail-open, see module docstring
         return None
-    for parent in [cwd, *cwd.parents]:
-        try:
-            if parent.parent.resolve() == BASE.resolve():
-                return parent
-        except Exception:
-            continue
-    return None
 
 
 def _extract_section(text: str, header: str) -> str:
