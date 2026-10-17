@@ -151,7 +151,7 @@ def looks_r3(subjects: list[str]) -> bool:
 DESIGN_PATHS = ("design/plans/", "design/audits/", "design/visions/", "design/mockups/")
 
 
-def orphan_design_docs(repo: str, base: str) -> list[dict]:
+def orphan_design_docs(repo: str, base: str, unscanned: list[str] | None = None) -> list[dict]:
     """Design docs that exist on some branch and on NO other ref, including base.
 
     The blind spot this closes: the design-doc auto-backup hook commits plans to
@@ -175,7 +175,16 @@ def orphan_design_docs(repo: str, base: str) -> list[dict]:
         if not b or b == base.replace("origin/", "") or is_ancestor(repo, b, base):
             continue
         # Only files this branch ADDS relative to base — cheap, and the ones at risk.
-        added = git_out(repo, ["diff", "--name-only", "--diff-filter=A", f"{base}...{b}"]).splitlines()
+        # One branch git cannot diff (no merge base, a ref rewritten by a live
+        # session mid-scan) must not take the whole report down with it: on
+        # 2026-10-17 a single exit-128 diff on Tsignal aborted the dry-run. It
+        # is recorded instead, so a skipped branch is never mistaken for clean.
+        cp = run_git(repo, ["diff", "--name-only", "--diff-filter=A", f"{base}...{b}"], check=False)
+        if cp.returncode != 0:
+            if unscanned is not None:
+                unscanned.append(b)
+            continue
+        added = cp.stdout.strip().splitlines()
         for f in (x.strip() for x in added if x.strip()):
             if f.startswith(DESIGN_PATHS) and f not in base_files:
                 carriers.setdefault(f, []).append(b)
@@ -337,7 +346,13 @@ def analyze(repo: str, base: str, protect: Optional[set[str]] = None) -> Report:
             r.reap_branches.append(b)
 
     # ── Design docs stranded on a single unmerged branch ────────────────────
-    r.orphan_docs = orphan_design_docs(repo, base)
+    unscanned: list[str] = []
+    r.orphan_docs = orphan_design_docs(repo, base, unscanned)
+    if unscanned:
+        r.alarms.append(
+            f"ORPHAN DOC SCAN: {len(unscanned)} branch(es) could not be diffed against "
+            f"{base} and were NOT checked for stranded docs: " + ", ".join(unscanned[:5])
+        )
     stranded = [d for d in r.orphan_docs if d["single_ref"]]
     if stranded:
         by_branch: dict[str, int] = {}
