@@ -3,8 +3,9 @@
 ## Prompt
 
 Prowadź jeden pełny cykl dla wskazanego planu. `/fwf` wybiera istniejący koszyk
-OpenRouter free, `/fwp` paid. Pozostały panel i obowiązujące trasy autorstwa
-pozostają bez zmian. Samo wspomnienie komendy podczas analizy jej tekstu nie
+OpenRouter free, `/fwp` paid dla opcjonalnego legacy runnera. Decyzja operatora
+2026-10-10 pozwala też na manualny workflow z kwalifikowanymi providerami i jednym
+modelem Perplexity; komendy są opcjonalne. Role/model/effort dobieraj do trudności. Samo wspomnienie komendy podczas analizy jej tekstu nie
 jest uruchomieniem workflow.
 
 **Przyjęcie.** Przyjmij jeden plan zgodnie z publiczną składnią komendy.
@@ -19,8 +20,9 @@ decyzje produktowe/ryzyka. KILL/DEFER kończy zależny cykl. REFRAME aktualizuje
 plan, a dopiero ustalony zakres przechodzi dalej.
 
 **2. Audyt i synteza.** Przygotuj zamrożony pakiet planu, aktualnych kontraktów
-i dowodów oraz manifest dostępności. Przekaż role [audytu CDP](cdp-plan-audit.md)
-i [syntezy](synthesis.md) przez **obecny** jedyny runner `audit/fuse.py`.
+i dowodów oraz manifest dostępności. Wybierz niezależny audyt i syntezę przez
+obsługiwane adaptery. Jeżeli kontrakt wybiera legacy panel, przekaż role
+[audytu CDP](cdp-plan-audit.md) i [syntezy](synthesis.md) przez `audit/fuse.py`.
 Codex przekazuje `--synthesizer gpt`, Claude `--synthesizer claude`; to zapis
 pochodzenia, nie selektor panelu. Ustal pełną ścieżkę katalogu `references/protocols`
 obok faktycznie wczytanego skilla master-agent; użyj jej jako `<protocol-root>`.
@@ -38,18 +40,14 @@ Sprawdź lokalne `--help` i obecność kontraktu v2 przed panelem. Brak wdrożon
 renderera/konsumenta jest brakiem kompatybilności; nie zgłaszaj wykonania v2
 po cichym uruchomieniu starej komendy. Sam tekst tego pliku nie instaluje kodu.
 
-Zachowaj ChatGPT CDP Sol z effortem dobranym przed wysłaniem: instant/medium dla
-prostych odczytów i zmian, high dla ograniczonej implementacji, xhigh dla
-złożonego audytu/integracji. Bez klasyfikacji użyj xhigh. Pro wymaga zapisanego
-powodu eskalacji: konkretnego nierozwiązanego problemu i oczekiwanego rezultatu.
-Timeout, awaria transportu i niepewny submit nie uzasadniają eskalacji ani resend.
-Sprawdź rzeczywisty model i effort; niższy effort zgodny ze zleceniem jest poprawny.
-Nie utożsamiaj etykiety Pro z identyfikatorem Astry bez odczytu providera.
-Zachowaj Antigravity Gemini 3.8 Flash z istniejącym fallback Gemini CDP oraz pięć
-obecnych modeli Perplexity: GLM 5.3, Kimi 3, Grok 4.6, Sonnet 5, GPT Terra.
-Zweryfikuj wartości w aktualnym źródle rosteru; ten zapis dokumentuje
-zamierzone zachowanie z 2026-09-07, nie uprawnia do samodzielnej zmiany modeli.
-CLI wykluczone przez aktualną politykę nie wracają jako nowa lane.
+Dobierz kwalifikowanego providera, rzeczywisty model i obsługiwany effort do
+zadania. Lokalny model może implementować lub niezależnie audytować; model
+przeglądarkowy bez lokalnego dostępu zwraca artefakt do przypisanego aplikatora.
+Jeden odpowiedni model Perplexity jest dozwolony. Claude CLI Opus 5.5/Fable jest
+opcjonalny dla rzadkich krytycznych decyzji. Pro/Astra wymaga konkretnego
+uzasadnienia; timeout i niepewny submit nigdy nie uzasadniają duplikatu.
+Niezmieniony fuse.py nadal wykonuje swój fixed roster; nie dodawaj mu wymyślonych
+flag ani nie przedstawiaj manualnego audytu jako udanego panelu.
 
 Użyj Conductor i zatwierdzonych adapterów. Wysyłaj tylko materiał dozwolony
 dla danego odbiorcy po wymaganym secret preflight. Dostęp connectora potwierdź
@@ -65,24 +63,24 @@ jest terminalny dla automatycznego retry/resubmission/fallback. Pewna odmowa
 przed submit może użyć tylko fallbacku dopuszczonego aktywną polityką.
 
 **3. Eng.** Uruchom [eng review](eng-review.md). Przygotuj aktualne, obsługiwane
-stampy i dry-run dispatchu. Zapisz zależności, dokładne pliki, testy i
-niezależne review. Wymagany dry-run musi zakończyć się 0 na planie przeznaczonym
-do wykonania. Zmiana celu/ryzyka wraca do CEO; zmiana istotnego kontraktu lub
+przypisania. Stampy i dry-run są wymagane przy wybranym adapterze dispatchu.
+Zapisz zależności, dokładne pliki, testy i niezależne review. Wymagany dry-run
+musi zakończyć się 0 na planie przeznaczonym do wykonania. Zmiana celu/ryzyka wraca do CEO; zmiana istotnego kontraktu lub
 założenia unieważnia zależny audyt i wraca do etapu 2 w tym samym workflow.
-Wtedy ponownie obowiązuje pełna skonfigurowana polityka panelu; nie wprowadzaj
-samowolnego „delta-only reviewer”. Korekta redakcyjna z udokumentowanym brakiem
+Wtedy odśwież review zgodnie z zapisanym kontraktem, przez kwalifikowanego
+niezależnego reviewera. Nie zmieniaj kontraktu po nieudanej próbie. Korekta redakcyjna z udokumentowanym brakiem
 zmiany znaczenia nie wymaga udawania nowej decyzji produktowej.
 
 **4. Implementacja.** R1 kontynuuje bez nowego GO. R2/R3 wymaga jednej ważnej
 zgody na znany zakres. Zgoda obejmuje zakresowe poprawki, review, CI i landing;
 osobne granice trigger/deploy/destrukcji pozostają. Wykonaj rolę
-[IMPLEMENT](implement.md) przez zatwierdzone przypisania. ChatGPT prowadzi plan
-i integrację, CDP tworzą istotny kod i niezależne review. W zatwierdzonym workflow
-GPT Sidecar 2 lokalny Codex wykonuje ograniczone zadania przez App Server:
-Luna dla małych zmian, Terra dla komponentów, Sol dla trudniejszej integracji.
-Astra wymaga konkretnego uzasadnienia; nie jest stałym właścicielem każdej roli.
-Każde przypisanie zapisuje model, effort, zakres i wynik. Native LOCAL worker
-nie zastępuje niezależnego panelu review. Awaria CDP nie uruchamia automatycznie Astry.
+[IMPLEMENT](implement.md) przez zatwierdzone przypisania. Każdy kwalifikowany
+provider z odpowiednim dostępem może tworzyć istotny kod/testy lub wykonywać
+niezależne review. Dobierz model/effort i rolę do trudności, źródła i narzędzi;
+zapisz rzeczywiste autorstwo, lokalną aplikację, zakres i wynik. Jeden owner
+prowadzi integrację. Autor ani integrator istotnych zmian nie zwalnia własnego
+review; lokalny niezależny reviewer jest dozwolony bez wymogu członka Claude.
+
 **Równoległość i postęp.** Blokujący warunek dotyczy zależnego etapu i jego
 zasobu, nie całego zadania. Gdy jedna lane jest zajęta albo odpowiedź pozostaje
 niepewna, kontynuuj niezależne, już autoryzowane prace: prompt/specyfikację,
@@ -132,3 +130,5 @@ produkcyjnego parsera przez samo wykonanie instrukcji tekstowej.
 Nie dodawać osobnego full workflow, nowego executor CLI, obowiązkowego
 ARCHITECT/QUANT/TDD do każdej zmiany ani niezależnego cyklu `/autoplan` wewnątrz
 `/fwf`. Pomocnicze role zwracają wynik do właściciela aktualnego etapu.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

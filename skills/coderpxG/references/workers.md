@@ -1,47 +1,34 @@
 # Local workers inside CoderPX G
 
-Candidate contract; activate only with verified role/receipt migration.
-CoderPX G absorbs model-team coordination, not the purpose of browser work.
-Perplexity CDP and ChatGPT CDP are the primary code-generation/review lanes.
+Read [local-implementation.md](local-implementation.md). The 2026-10-10 policy
+allows every qualified local provider to implement, investigate, test or perform
+independent review; local work is not limited to applying cloud-authored patches.
+Select model and supported effort by difficulty and capability. No fixed local
+chain, compulsory cloud attempt, or routine Claude/Astra escalation is required.
 
-Astra owns plan authorship and important decisions. Codex owns local I/O:
-collect exact source context, construct approved packets, receive and apply
-patches, run tests, send failure deltas and operate Git. Where the host supports
-it, one reusable Luna worker (`gpt-5.6-luna`) can handle these routine local
-steps, reducing Astra involvement. Zero workers is fine for a tiny operation;
-without Luna, the current Codex session can perform necessary local I/O without
-turning into the default substantive code author.
+Give a worker the task, exact base, owned root, exclusive write-set, source or
+artifact references, acceptance checks and stop conditions. Verify actual task/
+thread acceptance, effective cwd/root, model/effort and edit/read capability through
+the installed adapter. Help, a catalog, CLI exit zero and a setup ID are not
+worker execution proof. Preserve native and legacy receipt semantics separately.
 
-Give Luna objective, exact base, worktree, allowed files, remote artifact/receipt,
-checks and stop conditions, not the full conversation. Verify actual capability
-and identity; preserve native and legacy receipt semantics separately. Never
-mislabel current-session work as Luna or reset legacy once-per-plan limits.
+Run useful disjoint jobs concurrently under their own admission and source custody;
+keep one integration owner. Heavy pytest alone uses host:heavy, while CDP retains
+its independent pools. Browser answers require local application when their
+adapter lacks filesystem access. Attribute substantive local authorship honestly.
 
-Mechanical patch application and supported formatting are local work. Changes
-to behavior, contracts or tests are substantive authorship: return them to CDP
-with diagnostics by default. Luna may author a bounded local-only repair only
-when assigned under an approved fallback/exception; attribute it separately
-and send it through the same independent review. Do not convert a failed patch
-application into permission to invent a replacement implementation.
+Any qualified local model may review another producer's exact source/diff through
+an independent read-only assignment. An author/integrator cannot clear their own
+output; changing transport or account alone does not establish independence.
+Retain formal R2/R3 review, corrected-head review and self-hosted CI gates.
 
-Keep exclusive write ownership and one integration owner. Multiple agents do
-not permit concurrent Conductor host:heavy work. Workers do not publish, merge
-or start providers without the appropriate assignment and existing authority.
-Preserve current transport restrictions, retired Kimi CLI, Cursor's explicit
-re-enable gate, durable round caps and ambiguous-submit stop conditions.
+Unknown optional quota permits at most one bounded job before reevaluation.
+Account rotation is operator-owned; five Antigravity accounts are potential
+capacity, not proven parallel lanes. Keep caps and uncertain attempts unchanged.
+SUBMIT_UNCONFIRMED stops replacement, retry and duplicate completion; proceed
+only with independent work while reconciling the original attempt.
 
-A CDP failure is not automatic Astra implementation. A different permitted
-route requires an unambiguous prior outcome; capped/uncertain/unsupported work
-retains its exact blocked status. Escalate key decisions to Astra, and request
-an operator exception if substantive Astra authorship is the proposed recovery.
-Never obtain new quota by renaming tasks, packets, workers or review rounds.
-
-Prefer a complete first packet, then small diagnostic deltas and reusable
-worker context. Stop dispatching when no useful work remains. Record actual
-remote author, local applying model, any substantive local author, checks and
-reviewer. Neither authoring model nor applying runtime can self-clear the
-independent review gate; changing provider alone does not change model identity.
-
-/model-team forwards existing task, plan, authorization and stage exactly once.
-No new roster, supervisor, recursive /fwf or reset receipts. In-flight legacy
-tasks stay on their recorded contract until finished or explicitly migrated.
+Do not invent adapter flags, add roots or bypass permissions. Supported local
+Codex App Server workers remain optional; current-session work is not relabeled
+as Luna/Terra/Sol/Astra worker proof. Claude CLI Opus 5.5/Fable remains optional
+sparse critical-decision advice. `/model-team` forwards the existing task once.

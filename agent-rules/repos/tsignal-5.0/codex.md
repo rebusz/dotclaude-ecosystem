@@ -2,7 +2,7 @@
 
 ## Entry Points
 
-- `python tsignal_bot.py` starts the main app; use `--headless` for no GUI.
+- The canonical backend is `python tsignal_bot.py --headless`, normally owned by EcosystemControl. The default PySide shell is retired; preserve its separate retirement scope.
 - `python -m pytest` is the reliable Python validation entrypoint.
 - For frontend work, respect the strict GUI port `6175` and validate browser-visible behavior when applicable.
 

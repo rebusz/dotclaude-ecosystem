@@ -1,108 +1,42 @@
 # Shared Agent Core
 
-## Ecosystem
+## Scope and authority
 
-- Work primarily under `D:/APPS/<repo>`. Tsignal executes; WatchF is advisory/discovery; TsignalLAB researches; Obsidian Flow is memory.
-- Trading data flows one way (Tsignal -> TsignalLAB -> Obsidian Flow). Reverse insight travels ONLY through the validated async seam (candidate store + validation gate + shadow + signed operator GO); nothing outside the live brain writes live decision/order state. Full contract -> `agent-rules/refs/data-flow-seam.md`. This is a DATA-FLOW boundary, not a restriction on which files an agent may edit.
-- Read `D:/APPS/_shared/PORTS.md` before changing or starting local servers.
+- Work primarily under `D:/APPS/<repo>`. Tsignal executes, WatchF advises/discovers, TsignalLAB researches, Obsidian Flow stores memory. Read root instructions and the relevant plan before editing; check repo/ecosystem IDEA_BOX for priorities.
+- Trading data flows Tsignal -> TsignalLAB -> Obsidian Flow. Reverse insight uses the validated async seam (candidate store, validation, shadow and signed operator GO); external systems never write live decision/order state. Read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/data-flow-seam.md` for that seam. This is a data-flow boundary, not a file-access ban.
+- R0: docs/prompts; R1: non-live tooling/tests; R2: contracts/persistence/ingestion; R3: runtime/order path. Risk scales care, not access. Agents may edit and test every code path within scope and actual permissions. R2/R3 needs a scoped plan, standing GO, blast radius, rollback and real-path validation.
+- Existing scoped GO covers ordinary setup/transport repairs, implementation, in-scope fixes, validation, independent review and authorized Git delivery. Ask only for a material new decision or missing authority. A pending question holds only work that needs its answer. A permission prompt remains a permission prompt; business GO does not answer it.
+- Preserve ACL/sandbox/GPO and actual tool refusals. Never route around a denied operation. Existing paused jobs stay paused until explicitly resumed. Read `D:/APPS/_shared/PORTS.md` before changing or starting local servers.
 
-## Repo Truth
+## Keep authorized work moving
 
-- Plans, audits, postmortems, and design docs live in the project repo under `design/plans/`, `design/audits/`, or `design/visions/`; scratch locations are temporary. Commit and push them when the repo has a tracked remote and no unrelated changes are staged.
-- When asked "what next" or about priorities, check the repo `IDEA_BOX.md` and the ecosystem idea box before inventing a new backlog.
+- The supervisor's first priority is advancing ready work. Run useful disjoint assignments concurrently with exclusive write-sets and one named integration owner per package/stage. On completion or a local block, take the next ready independent package; neither all of P0 nor one unanswered question is a global barrier.
+- Before unattended dispatch, verify each worker's effective approval policy, sandbox writable roots, needed network and tools against its owned operations. Parent settings, global config and standing business GO do not grant worker permissions. Hold only an inaccessible operation, ask once for the exact required profile change, and continue qualified disjoint work; see `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md`.
+- Name each block's operation, dependency/resource, owner and release condition. Distinguish policy/permission denial from command, transport, configuration and missing-tool failures. Repair ordinary failures within scope; uncertainty after submission is not a pre-submit failure.
+- Every recognized agent mistake starts two separate work streams: repair its effects with validation, and prevent recurrence in the appropriate workflow/rule/tool with a replay of the failure scenario. Reuse existing owners/attempts for the same incident. Track unfinished prevention in IDEA_BOX; a lesson or receipt alone does not close it. See `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` for incident and dependency handling.
+- CREATED/active/inProgress is not proof of execution. Report WAITING_APPROVAL for the specific pending operation and identify its existing prompt once; keep independent work moving. Use event waits or meaningful checkpoints, not unchanged status loops. More receipts/status output is not progress.
+- Select a verified capable model and supported effort by difficulty, tools, permitted source access and observed capacity. Any qualified local/CDP model may implement or independently review. `/coderpxg`, `/fwf`, `/fwp` are optional; one suitable Perplexity model is allowed. Astra is reserved for authored plans or supervised critical decisions with explicit reason, read-only tools and empty write-set; never assign it implementation, tests, monitoring, routine research or routine review. Every leaf assignment names its model and effort; do not inherit Astra or reach it through default, Pro, Best, alias or fallback. Conserve Claude for sparse critical decisions after identity verification. No roster, model name or account count proves capability.
+- Before assignments read `D:/APPS/_shared/sidecar/CODERPX_LOCAL_IMPLEMENTATION.md`. Preserve source confidentiality, provider caps, account ownership and attempt history. `SUBMIT_UNCONFIRMED` forbids retry, replacement and duplicate completion; reconcile the same attempt. No automatic account rotation. Optional legacy `fuse.py` retains its actual fixed roster and flags.
 
-## Risk Classes — care, not access
+## Validation, review and delivery
 
-- R0 docs/prompts; R1 non-live tooling, tests, mirrors; R2 contracts/persistence/ingestion; R3 execution/runtime/order path.
-- The R-class scales CARE — plan, blast radius, rollback, targeted validation, and for R2/R3 a standing operator GO. It never forbids ACCESS.
-- **Agents design, edit, refactor, and test all code — broker API, order path, and live-path code included.** There is no forbidden code. Detouring around the live path out of caution is itself a defect: that is what produced the paper/live divergence documented in `agent-rules/refs/paper-live-parity.md`.
-- **Paper/live parity is binding.** One execution code path serves both surfaces; account, port, credentials, and enablement are DATA, never code branches. A `*_paper_only` fork, a live-only special case, or an execution change validated only on paper is a ship-blocker.
-- **Live READ is free**: connecting to real accounts for read-only diagnosis (auth, entitlements, connectivity, position/order readback) needs no extra approval.
-- **The TRIGGER is gated**: order submit/modify/cancel, arming automation, or flipping enablement flags on REAL-MONEY or TOPSTEP COMBINE accounts requires explicit just-in-time operator GO. Paper/practice submits are free.
-- Emergency-off and flatten paths must behave identically on both surfaces and default ON.
-- External signals stay advisory unless the operator explicitly changes that boundary.
+- Drive the real code path, including failure/rollback. Persistence/restart validation is write -> restart/reopen -> read, not a fixture pretending to be the result. Preserve exit codes, timeouts, skipped critical tests and the first failure with its evidence path. PASS requires exit 0 and the intended target actually running.
+- Review the actual diff; R1 needs independent review, R2/R3 formal independent exact-head review. Every substantive author/integrator is a producer and cannot self-clear. Fix blocking findings, validate and refresh affected review; do not duplicate a still-valid gate. External review requires permitted source, secret rejection and its actual packet/attestation contract.
+- One delivery owner follows branch -> validate -> commit -> draft PR -> required independent review -> Ready -> required self-hosted CI -> squash merge -> safe fast-forward of the operator checkout. No direct R2/R3 push or self-clearance to main. R0 uses repo documentation rules. Preserve foreign changes; stage only owned files. No cherry-pick onto main alongside the PR.
+- CI is self-hosted only in every operator repository. Before push/Ready/rerun verify actual routes, visibility and runner capacity; missing CI is NO_CI and unavailable required CI is BLOCKED, never PASS. Public/untrusted code cannot run on the trusted workstation. See `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/self-hosted-ci-only.md`; no cloud fallback or protection removal.
+- Keep heavy pytest `host:heavy`, CDP `cdp:*` and registered self-hosted CI pools independent. A heavy/storage admission block does not itself block CDP, builds, focused lightweight tests, docs, Git or the exempt CI pool. Each operation still needs its own admission. Heavy leases, retained child handles, interactive authorization and storage ceilings are specified in `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md`.
+- Report implemented, tested, reviewed, pushed, merged, installed, deployed, runtime-proven and broker-confirmed separately. Name PR/SHA and remaining dependencies. Do not call delivery done before commit/push. Detailed landing: `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/delegated-execution-protocol.md`.
 
-## Execution Defaults
+## Live and deployment boundaries
 
-- Assess whether work splits into independent lanes; run or delegate them concurrently when the tooling supports it.
-- GPT coding, plan-audit, and implementation-review work uses signed-in `chrome_gpt` ChatGPT CDP and fails closed; Claude CLI and Codex CLI are never workflow lanes. The separate resolver-owned `purpose=latency_critical_runtime` Codex CLI exception remains limited to registered advisory runtime contexts such as OpusF scenario production; it is not a workflow lane. Fixed panel: signed-in `chrome_gpt` ChatGPT CDP, Antigravity `gemini-3.7-flash-high` (Gemini CDP `gemini-3.7-flash` fallback), and the five-model Perplexity CDP roster. Use the workflow-selected basket: `/fwf` free or `/fwp` paid. Never downgrade model capability solely to cut cost. Perplexity Max is the bounded **CoderPX** on-demand lane: an agent submits one validated packet through WatchF's Conductor-gated `chrome_ppl` lifecycle, records response + manifest, then verifies and lands any justified result. CoderPX never auto-retries, marks Ready, merges, or bypasses repo gates. Protocol + packet template: `D:/APPS/_shared/coderpx/README.md`.
-- An approved audited plan (`GO`, `ok go`, `jedziesz`, `dzialaj`, `implementuj`) carries standing authorization through implementation, in-scope fixes, exact-head review, ready, CI, merge, and checkout sync. SHAs are evidence, not operator tokens. Re-ask only for scope expansion, unresolved failure/conflict, a real-money/Combine trigger, a destructive action, or a pause.
-- Operator update (2026-09-07): choose model and effort for task difficulty instead of defaulting to Pro/Astra. Use lower effort for straightforward work, Sol high/xhigh for complex code/review, and record a concrete reason before Pro/Astra escalation. Transport failures never justify escalation or duplicate submission. The approved GPT Sidecar 2 workflow permits explicit Luna/Terra/Sol/Astra local App Server workers; this is separate from the independent review panel and supersedes local-worker exclusions for that workflow. Gemini audit pins are 3.8 Flash as verified in the installed runner, superseding the older 3.7 text above.
-- Validate each slice; final reports state changes, tests, remaining work, and repo state.
+- Paper/practice and live/Combine share one execution code path; account/port/credentials/enablement are data. Paper-only forks or live-only special cases block shipping. Read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/paper-live-parity.md` for broker-adapter differences and validation.
+- Live account read-only diagnosis needs no extra business approval. Real-money/Topstep Combine submit/modify/cancel, arming or enablement needs explicit just-in-time operator GO. Paper/practice submits are allowed within scope. Emergency-off and flatten have parity and default ON; this does not waive real-account trigger authority.
+- Production deployment and destructive actions retain separate just-in-time authority. Features land enabled unless the approved plan says otherwise; do not invent disabled defaults or soak periods. External signals remain advisory unless the operator changes the boundary.
 
-## Conductor Host-Resource Gate
+## Context, artifacts and maintenance
 
-- Only heavy pytest runs use Conductor's capacity-one `host:heavy` lease.
-- CDP uses its independent `cdp:*` pools and never waits for `host:heavy`.
-- Playwright/browser work, builds, replays, docs, Git and readback are not heavy tasks; focused pytest keeps its existing lightweight classification.
-- A bounded child may inherit an active attempt-scoped
-  `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
-  stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There
-  is no preemption or automatic retry across an ambiguous owner.
-- Bounded pytest uses only `<python> -m pytest <args>` with a retained
-  `Popen` handle and `shell=False`; WMI/CIM/process-list polling and arbitrary
-  shell execution are not substitutes for ownership evidence.
-- `authorize --interactive` is an operator-only tty-verified coordinator
-  handshake with an exact prompted GO. Authorization cannot be granted by
-  argv flags alone, inbox, environment, MCP, or agent assignment paths.
-- Storage growth is read back with numeric ceilings and report-only retention;
-  status must be checked before starting another heavy lane.
-- **CI runner pool exemption (decided 2026-08-13, zero-spend CI plan §8):** the
-  workstation's GitHub Actions self-hosted runner pool is EXEMPT from the capacity-one
-  `host:heavy` lease — governed instead by pool size, BelowNormal priority, the pilot
-  SLO drain ladder, and `TsignalCiWatchdog` readback (`~/.claude/state/ci_watchdog/`).
-
-## Land-On-Main Lifecycle
-
-- Finished, locally validated work reaches `main` under your own hands — the operator never hand-reconciles commits, merges, or divergence.
-- ONE clean path per change: branch -> validate -> commit -> draft PR -> risk-routed review gate -> `gh pr ready` -> squash-merge -> fast-forward the operator's main checkout. Report it in one line.
-- Never create avoidable divergence (no cherry-pick onto local main alongside a PR for the same change). An agent usually works in a `.claude/worktrees/...` branch while the operator runs from `D:/APPS/<repo>`; after merge, fast-forward that checkout.
-- R2/R3 lands via draft PR + review gate — never direct-push or self-merge to `main`; R0 docs and CI-ignored paths may use the normal flow. Real-money/Combine triggers, production deploys, and destructive actions still need just-in-time GO. Details -> `agent-rules/refs/delegated-execution-protocol.md`.
-- **CI is self-hosted ONLY in EVERY operator-owned repository (2026-09-17).** No GitHub-hosted/cloud CI, including free tiers, matrix jobs, reusable workflows and release builds; no cloud fallback. GitHub may store code and orchestrate local jobs. Before push/ready/rerun, verify workflow routes and local runner; unavailable means BLOCKED, never switch to hosted or claim PASS. Keep drafts and batch pushes for local capacity. Public/untrusted code must not run on the trusted workstation. Full policy: `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/self-hosted-ci-only.md`.
-
-## Commit And Push Defaults
-
-- Commit coherent, tested units; push when the branch tracks a remote and validation ran (or say why it did not). Report "done" only when committed AND pushed, naming branch/PR/SHA.
-- Stage only files you intentionally changed; never auto-commit secrets, env files, generated junk, large binaries, or work the operator marked read-only.
-
-## Repo Hygiene
-
-- Integrate small and often — a fast-forward is safe, a far-diverged branch is where merges break.
-- A daily janitor (`git_hygiene.py`, Windows task `TsignalGitHygiene`) writes a DRY-RUN report and a primary-off-main / unpushed-R3 alarm under `~/.claude/state/git_hygiene/`; it reaps nothing on its own. Reaping is manual and gated (`--apply`), safe only when other sessions are quiesced — a clean worktree from a runtime that does not lock is not protected. Lock your worktree if your runtime can.
-
-## Review Gate
-
-- Stamp the R-class on every plan at creation; it selects the owning workflow before the land-on-main merge. Follow the **Review Workflow Routing** table in `skills/master-agent/SKILL.md` — it is authoritative and not duplicated here.
-- `/fwf` and `/fwp` own the R1/R2/R3 lifecycle through implementation and blocking `review`; R0 has no mandatory workflow. Do not duplicate the `review` stage the workflow already owns; audit and matrix runners are internal stages, not public commands.
-- Review the actual diff (Claude `/code-review`; Codex its review pass). SHIP-BLOCKING findings block the merge; FIX-LATER findings are noted. External review requires preflight, secret rejection, draft PR, packet, and exact-head evidence; standing plan GO covers configured reviewers.
-
-## Evidence Discipline
-
-- Tests must drive the REAL code path, including the failure/rollback branch — no mock that skips the broker submit, no fixture faking restart adoption, no test against a disabled path. Persistence/restart DoD is a round-trip, not a post-state fixture.
-- Fail closed when summarizing: preserve nonzero exit codes, timeouts, skipped critical tests, and the first failing assertion with its artifact path. Say "passed" only when the exit code is 0 AND the intended target actually ran.
-- Ground specific claims — numbers, named sources, causal statements — in something checkable, or drop them.
-
-## Ship-On Default
-
-- Features land ENABLED after tests unless an approved plan says otherwise. Do not invent soak periods, shadow-only defaults, or disabled flags "for safety". A necessary kill switch defaults ON with a documented emergency-off path.
-
-## Context Discipline
-
-- Intent-layers first: read the repo's root `CLAUDE.md`/`AGENTS.md` and its refs as the architecture map instead of blind-scanning for entry points.
-- Progressive disclosure: load skills, refs, and deep docs when the task matches. Keep always-loaded files lean — deep procedure belongs in skills, `agent-rules/refs/`, `design/`, or nested module files. Hot indexes (`MEMORY.md`, `AGENTS.md`) are working sets, not append logs: move DONE entries to a cold archive, promote them back if they reopen.
-- Prefer code intelligence over guessing: for any work touching more than one file/module, renaming a symbol, changing a public contract, or judging blast radius, use the available code-graph/impact tools first (inspect the exposed tool surface — names differ across runtimes; `code-review-graph` CLI otherwise). State the fallback when you use one.
-- Keep only ecosystem-relevant MCP servers and connectors active. When context fills or a research phase ends, checkpoint conclusions to durable memory/handoff and continue from that summary. Budget before breadth; prefer bounded reads. Full procedure -> `agent-rules/refs/token-budget-protocol.md`.
-
-## Operator Reporting Style
-
-- Lead with the outcome or the action taken; explanation comes after.
-- Number multi-step work; keep lists to five items or fewer.
-- End with exactly ONE concrete next action, not a menu of options.
-- Report errors matter-of-factly: what failed, plus the evidence path. No softening, no burying.
-- Restate load-bearing runtime state when it matters (process alive? armed? which account? which checkout?).
-- No preamble, no closers, no tangents. Wins get one line.
-
-## Agent Rules Maintenance
-
-- Shared instructions are generated from `D:/dotclaude/dotclaude-ecosystem/agent-rules`; generated content stays inside `AGENT-RULES` managed blocks, and manual local sections stay outside them.
-- Edit the source and re-run `scripts/sync_agent_rules.py --write`; never hand-edit a managed block in a target file.
+- Keep durable plans/audits/designs in repo `design/`; commit/push owned coherent units. Keep secrets, env files, generated junk and unrelated work out of commits. Worktree cleanup is report-only unless explicitly authorized; preserve locks and custody.
+- Prefer current code-graph/impact tools for cross-module work; if stale/unavailable, state it and use bounded source inspection. Capture/parse/filter large inventories before output: return count and relevant identifiers/status, not a full dump. Never enumerate secret-bearing environment values. Use explicit UTF-8 at source/stdout boundaries; retain process evidence as raw bytes. Git object identity includes its owning object store.
+- Load only relevant procedures; keep always-loaded rules short. Preserve nonzero results when summarizing. Detailed context handling: `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/token-budget-protocol.md`.
+- Lead reports with outcome/action, list at most five parallel points and end with one concrete next action. Include load-bearing runtime/account/checkout state when relevant.
+- Canonical generated sources are `D:/dotclaude/dotclaude-ecosystem/agent-rules`. Reconcile drift before `scripts/sync_agent_rules.py --write`; never hand-edit managed blocks. Preserve unrelated/newer manual content, inspect source-to-output diff, validate and read back installation. Source, installed, enforced and fresh-session-proven are distinct states. Keep active shared targets unchanged until owned quiescence and migration admission; file installation is not acknowledgement by already-running agents.

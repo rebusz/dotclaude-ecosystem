@@ -1,189 +1,98 @@
 ---
-description: Paid full workflow for R1/R2/R3 plans with one fixed review roster.
+description: Optional paid workflow helper with task-selected providers or the unchanged legacy fixed-roster runner.
 argument-hint: "<absolute-or-repo-relative-plan.md>"
 ---
 
-# `/fwp` — unified paid full workflow
+# `/fwp` — optional evidenced delivery workflow
 
-Run the complete lifecycle for the single plan path in `$ARGUMENTS`. This is the
-same workflow in Claude Code and Codex and for every accepted risk class.
+Operator decision 2026-10-10: invoking this helper is optional. Accept one plan
+path, load plan context, read repo intent and existing risk/scope authorization,
+and resume recorded tasks/attempts. Discussing this command does not invoke it.
+The same care, custody, independent review and CI gates apply to manual delivery.
 
-## Parse and preflight
+## Plan, role and provider selection
 
-1. Accept exactly one plan path. Reject aliases, presets, `close`, and lane-bypass flags.
-2. Resolve the plan/repository and run `plan_context_loader.py` before other task action.
-3. Read or assign the explicit R1/R2/R3 risk class; R0 does not need this workflow.
-4. Read every invoked skill completely and preserve dirty worktree boundaries.
+Resolve product/scope questions and review the plan according to R-class.
+R2/R3 needs one scoped standing GO before implementation, with blast radius,
+rollback and real-path validation. Existing GO covers in-scope fixes, review,
+CI and landing. Real-money/Combine triggers, deployment, destructive actions
+and scope expansion retain their distinct authority.
 
-## Fixed routing
+Choose implementor, local applier if needed, investigator and independent
+reviewer by difficulty, supported model/effort, source access and fresh capacity.
+Any qualified local or CDP provider may implement or audit; no rigid cloud/local
+role split. Perplexity may use one suitable verified model. Claude CLI Opus
+5.5/Fable is optional sparse critical-decision advice. Read the CoderPX G
+local-implementation reference for preflight, quota and account handling.
 
-| Grade | Stage 2 |
-|---|---|
-| R1 | `fuse.py --mode paid` |
-| R2 | `fuse.py --mode paid` |
-| R3 | `fuse.py --mode paid` |
+Run useful disjoint assignments concurrently with exact bases, exclusive
+write-sets, acceptance checks, stop conditions and one integration owner.
+Do not claim unsupported local access or reset existing receipt/cap authority.
+When using dispatch.py, preserve its actual stamp and admission contract:
 
-Risk controls the questions and standing GO, never the model roster.
-
-## Stage 1 — `plan-ceo-review`
-
-Invoke `plan-ceo-review`. R1/R2 questions are agent-resolved from repository and
-operator truth. For R3, ask the operator only product/risk/irreversible questions
-that materially change the result. KILL/DEFER ends the workflow.
-
-## Stage 2 — unified audit
-
-Run from the plan repository root:
-
-`D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode paid --synthesizer <claude|gpt> "@<plan>"`
-
-Each panel lane admits on its named CDP pool (`cdp:chatgpt` + `chrome_gpt`,
-`cdp:perplexity` + `chrome_ppl` and per-model `slot_key`, `cdp:gemini` +
-`chrome_gemini`). Do not request `host:heavy` for a `cdp_provider` purpose.
-
-Use `gpt` in Codex and `claude` in Claude Code only as final-judge provenance.
-The runner always launches the same fixed non-OpenRouter panel:
-
-- ChatGPT CDP: GPT-5.6 Sol at its strongest available tier, with a single
-  verified pre-submit fallback. Measured 2026-09-01: `Pro` is Sol's Pro tier,
-  but the picker renders it as an entry beside GPT-5.6 Sol and GPT-5.5, so it
-  is selected as that entry and never driven on the effort slider; the slider
-  is a four-position ladder topped by Extra High. A spent Pro quota greys the
-  entry out (`aria-disabled`). So this reads: the `Pro` entry first, and when
-  it is disabled, `GPT-5.6 Sol` at Extra High. Never claim a model or an effort
-  that was not read back from the UI.
-- Antigravity CLI: `gemini-3.7-flash-high` in read-only plan+sandbox mode; failure falls
-  back inside the same logical lane to Gemini CDP pinned to Gemini 3.7 Flash.
-- Perplexity CDP: GLM 5.3, Kimi 3, Grok 4.6, Sonnet 5, GPT Terra.
-
-Claude CLI, Codex CLI, standalone GLM CLI, and nested CLI tournament synthesis
-are forbidden in this workflow. Free versus paid changes only the OpenRouter
-basket. Never bypass or cap lanes.
-
-**Supply repository context when the repo is connector-exposed.** `fuse.py`
-accepts `--github-repo` and `--repo-label`, and both default to `None`, so a
-plan otherwise travels as pasted composer text and is silently truncated on a
-large plan — measured on a 37,626-character plan, where one lane reported a
-section that "cuts off" and two of five picker models never answered. Pass them
-when the plan commit is **pushed** and the repo is one the operator connected
-(Tsignal, TsignalLAB, WatchF, TSU). Connector exposure is a per-repo operator
-decision; `apps-shared` is not on that list, so it still travels inline.
-
-A lane that skipped its primary attempt must say why. If the Antigravity lane
-reports only a Gemini CDP error, check whether `agy` was skipped for exceeding
-the argv guard — that reason belongs in the failed-lane artifact.
-
-Read `synthesis_prompt.md`, perform the final judge step, apply consensus P1/P2
-and unique valid findings inside frozen boundaries, and record every failed lane.
-
-## Stage 3 — `plan-eng-review`, and stamp every slice
-
-Invoke `plan-eng-review`; resolve engineering questions from repo/graph/runtime
-truth and write ownership, dependency order, failures, tests, rollback, and slices.
-Stop only for a genuine scope expansion or a safety boundary requiring new authority.
-
-**Every slice leaves this stage carrying a `stamp v2` block.** The stamp is the
-only channel between this workflow and the executors; an unstamped slice is
-refused downstream on R2/R3. Write it directly under the slice heading, inside a
-plain fence:
-
-```
-### Slice S3 — cctv admission routing
-lane: chatgpt_cdp          # local | chatgpt_cdp | coderpx (alias: ppl) | glm | qwen | cursor
-executor: A                # A | G — which local runtime runs /fwa and verifies
-review: chatgpt_cdp+coderpx # chatgpt_cdp | coderpx | chatgpt_cdp+coderpx | cross
-model: GLM 5.3             # optional, only for lane: coderpx
-mode: file                 # file | patch (patch above PATCH_SIZE_GATE_BYTES)
-reason: concurrency + Conductor lease semantics
-files: tsignal/services/cctv_feed_supervisor.py
+```text
+python D:/APPS/_shared/dispatch/dispatch.py plan "<plan>" --executor G --worktree "<absolute-owned-worktree>" --repo-root "<absolute-owned-worktree>" --receipts-dir "<existing-owner-receipts>" --dry-run
 ```
 
-Route by difficulty, not by convenience. `chatgpt_cdp` for concurrency,
-lease/CAS lifecycle, restart-adoption, R3 order-path work, and any slice whose
-failure branch a real test must drive; `coderpx` for ordinary bounded slices,
-plans, reviews and grills; `local` when the change is small and the executor
-already holds the context. `review:` must never name the lane and model that
-will produce the diff.
+Use A only for an actual Antigravity executor. Dry-run proves its structural
+admission only. Inspect the emitted chain; a policy/capability mismatch blocks
+that adapter operation, not independent authorized work. Never invent flags,
+change schemas, widen permissions or fabricate GO provenance to make it run.
 
-Stage 3 is not finished until this exits 0:
+## Optional legacy panel
 
-`python D:/APPS/_shared/dispatch/dispatch.py plan "<plan>" --executor A --worktree "<abs .claude/worktrees path>" --dry-run`
+If the recorded review contract selects the existing fixed-roster profile:
 
-It validates every stamp, refuses two slices that name the same file, and emits
-the lane surface without spending quota. Fix the plan until it passes.
+```text
+D:/APPS/WatchF/.venv/Scripts/python.exe D:/APPS/_shared/audit/fuse.py --mode paid --synthesizer <gpt|claude> "@<plan>"
+```
 
-Full contract, defaults and refusals: `D:/APPS/_shared/coderpx/DISPATCHERS.md`.
+The unchanged runner launches its implemented ChatGPT CDP, Antigravity/Gemini
+fallback and five-model Perplexity profile; `paid` changes its OpenRouter
+basket. Read installed source/help for actual pins and supported arguments.
+This profile is optional and cannot become a one-model review through prose
+or invented lane flags. For task-selected review, use supported provider
+adapters and retain a manual evidence record under the same review contract.
+Do not relabel one provider's result as a successful fixed-panel run.
 
-## Stage 4 — standing implementation gate
+Verify permitted source/connector access before publication; use exact source
+SHA and complete context, reject secrets, and record failed or missing lanes.
+Read generated synthesis artifacts when this runner is used and resolve valid
+findings within scope. Consensus and exit zero do not establish gate clearance.
 
-- R1 continues automatically.
-- R2/R3 requires one operator GO unless this invocation already carries a valid
-  standing GO for the exact scope. It covers implementation, in-scope fixes,
-  exact-head review, PR, CI, merge, and checkout sync.
+## Implementation, independent review and delivery
 
-It never covers broker submit/modify/cancel, real-money/Combine arming,
-production deploy, destructive action, or scope expansion.
+Assigned capable models may author substantive code and tests with verified
+local access. Browser answers may need an owned local application step.
+Inspect actual diffs and retained local test exits; response prose and remote
+test claims do not prove local execution. Attribute all substantive authors,
+appliers and reviewer identities.
 
-## Stage 5 — implementation, dispatched rather than typed
+Formal review evaluates the actual exact head and required context through
+an independent read-only assignment. Every substantive author/integrator is
+a producer and cannot self-clear. A different provider/account alone does not
+prove independence; local or CDP reviewers are eligible when qualified.
+Retain required draft PR, canonical packet/secret rejection and source-access
+attestation. Missing/stale review remains NO_REVIEW. Fix blockers, validate,
+and review the repaired head; do not invent quorum or a reviewer exception
+midway through a failed operation.
 
-**You do not type the implementation.** Hand each approved slice to the
-executor its stamp names, in dependency order:
+Keep current submission caps and receipts. SUBMIT_UNCONFIRMED stops automatic
+retry, fallback, replacement and duplicate completion; reconcile the original
+attempt and continue only nonoverlapping work. Confirmed terminal failure or
+pre-submit block permits another authorized qualified route without resetting
+caps. Five Antigravity accounts do not authorize automatic account rotation.
 
-`python D:/APPS/_shared/dispatch/dispatch.py plan "<plan>" --executor A --worktree "<abs .claude/worktrees path>"`
+For R1-R3 or repositories requiring PR/CI, the designated delivery owner completes
+branch -> validation -> commit ->
+draft PR -> independent review -> Ready once -> self-hosted CI -> merge -> safe
+checkout synchronization under repo rules. R0 follows the repository documentation
+publication rules; do not invent a mandatory PR/CI gate where none is required.
+Retain separate deployment/runtime
+and broker evidence; never auto-deploy to complete a landing report.
+Run the plan post-hook and report actual changes, test exits, review, PR/SHA,
+remaining gates and attribution. When dispatch.py was used, retain its generated
+ownership ledger; otherwise report actual supported provider/task receipts
+without inventing dispatcher records.
 
-The dispatcher honours each stamp, walks the outward chain when a lane fails,
-caps rounds at two per slice, and records a receipt per slice. Executor `A` is
-Antigravity, `G` is Codex; fall to `G` only when `A` is unavailable.
-
-Your job in this stage is to **verify**, not to produce: read the actual
-`git diff` and run the slice's real test command. A narrative claim that a
-change was made is not a change, and a green run that never executed the
-intended path is not evidence.
-
-Keep it in-session only when one of these holds, and say which in one line:
-the change is under ~20 lines and the file is already in context; it spans more
-files than a packet can honestly describe; or two outward rounds went red. Any
-in-session slice is recorded in the ledger with dispatcher `C`.
-
-Stage 2 panel and coding lanes hold named `cdp:*` leases, not `host:heavy`.
-Release each CDP lease after the lane returns, then dispatch. Preserve dirty-tree
-and repo ownership boundaries, and keep the plan readback current. Do not stop
-merely because code has been written.
-
-## Stage 6 — `review`, outward
-
-Review runs on the lane the slice's `review:` stamp names, against the actual
-diff at the exact head. **It never runs on the runtime or the model that
-produced the diff**, and for R2/R3 it does not run in-session at all — grading
-your own work is the failure this stage exists to prevent.
-
-The local `review` skill is the fallback for R0/R1 `cross` when no second
-runtime is available, and never for a diff you authored.
-
-Fix every in-scope ship blocker, rerun validation, publish the corrected head,
-and review again. A stale or unavailable review is not PASS. A lane that will
-not answer after its two rounds is walked down the chain, not retried.
-
-## Stage 7 — land and report
-
-Complete branch -> validation -> commit -> draft PR -> Ready once -> CI -> merge
--> fast-forward operator checkout. Run `plan_context_updater.py` and report risk,
-lane evidence, amendments, tests/exit codes, review, exact SHAs/PRs, and remaining gate.
-
-## Invariants
-
-- `/fwf` and `/fwp` are the only public full workflows.
-- `fuse.py` is the only Stage 2 runner for R1/R2/R3.
-- The fixed non-OpenRouter roster is client/risk invariant.
-- No preset, compatibility route, CLI frontier lane, or silent fallback exists.
-- Every slice leaves Stage 3 stamped, and Stage 3 is not done until
-  `dispatch.py plan … --dry-run` exits 0.
-- Implementation is dispatched, not typed. The in-session exception is narrow,
-  must be stated in one line, and is recorded in the ledger as dispatcher `C`.
-- Review never runs on the runtime or the model that produced the diff.
-- Two rounds per slice. A lane that will not answer is walked down the chain,
-  never retried a third time.
-- An identity that was not read back is not an identity. `verified_model` and
-  `verified_effort` come from the provider's UI, never from the request.
-- The report ends with the ownership ledger, generated by `dispatch.py ledger`
-  rather than typed.
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.

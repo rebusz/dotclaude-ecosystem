@@ -6,7 +6,9 @@ it is not another workflow or permission to alter a dispatcher at runtime.
 ## Stamps and validation
 
 Read the current D:/APPS/_shared/coderpx/DISPATCHERS.md and actual dispatcher
-before stamping. Each executable slice names one exclusive write-set, its
+before using that optional adapter. Manual task-selected work retains the same
+ownership, source and validation gates without inventing dispatcher receipts.
+Each executable slice names one exclusive write-set, its
 dependencies, validation and independent reviewer. For the currently observed
 file-mode interface, the stamp is immediately below its heading, as plain text:
 
@@ -33,10 +35,11 @@ python D:/APPS/_shared/dispatch/dispatch.py plan "<plan>" --executor G --worktre
 ```
 
 Use A only when the assigned executor is actually Antigravity. Read the emitted
-chain as well as exit status: a legacy executable lane or forbidden CLI fallback
+chain as well as exit status: unsupported identity, source access or admission
 is a contract mismatch even when structural validation returns zero. Do not
-dispatch that chain, invent a bypass flag, reset quota state, or substitute
-local authorship. Preserve the refusal and return the mismatch to its owner.
+dispatch that chain, invent a bypass flag, reset quota state, or replace an
+uncertain assignment. Preserve the refusal and return the mismatch to its owner;
+independent authorized work may use another qualified supported adapter.
 
 ## Execution and review
 
@@ -47,13 +50,15 @@ not manufacture operator authority. Keep the durable owner receipts and cap
 state on continuation. Reconcile an ambiguous submit in its original attempt;
 do not spend another round or change providers to resolve uncertainty.
 
-The configured CDP worker authors substantive code. Codex applies and verifies
-the real diff and validation results. Select an independent reviewer with a
-different producer identity/model, through the configured workflow. Preserve
+Any qualified local or CDP worker may author substantive code. Assign local
+application when the provider lacks filesystem access, then verify the real diff
+and validation results. Select a qualified reviewer independent of all substantive
+producers; local review is eligible and one Perplexity model is allowed under
+the recorded review contract. Preserve
 implementation-review/v1's exact head/base, source access and attestation.
 No current review means NO_REVIEW, not a reason to grade the author's own work.
 
-Before final reporting, generate the actual ownership ledger:
+Before final reporting, if this dispatcher was used, generate its actual ownership ledger:
 
 ```text
 python D:/APPS/_shared/dispatch/dispatch.py ledger "<existing-task-id>" --receipts-dir "<existing-owner-receipts>"
@@ -62,3 +67,5 @@ python D:/APPS/_shared/dispatch/dispatch.py ledger "<existing-task-id>" --receip
 A missing ledger stays missing. Never type guessed author or model evidence.
 Only heavy pytest acquires host:heavy; CDP retains independent cdp:* pools.
 No browser, Playwright, document or Git operation waits on the pytest lease.
+
+For operation-local blocks, side-effect classification, and two-result mistake recovery, read `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/operation-flow.md` when relevant. Source, installed, enforced, and fresh-session-proven policy are separate states; active shared targets change only after qualified quiescence and migration.
