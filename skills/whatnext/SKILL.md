@@ -33,6 +33,21 @@ used different words — a false drift flag actively misdirects steering.
 `plan_keyword_detector` UserPromptSubmit hook runs `steer_context` on steering phrases. This
 skill is the explicit, richer version of that same ritual.)
 
+## STEP 1.5 — TruthDeck boundary snapshot
+
+Before choosing what's next, take a fresh read-only evidence read of the repo in play —
+never trust a stale green result from earlier in the session:
+
+```bash
+truthctl snapshot --repo "<repo-root>" [--plan "<plan-path>"] --no-store --json
+```
+
+- Exit `12` with parseable JSON is a **valid snapshot** carrying non-green gates, not a tool
+  failure — read the `gates`/`next_action` fields and fold `STALE`/`UNKNOWN`/`HOLD` states
+  into the coverage map and drift flags below, don't swallow them.
+- Missing `truthctl` or malformed output: note "TruthDeck unavailable" in the brief and
+  continue from `steer_context` alone. Never block steering on snapshot tooling.
+
 ## STEP 2 — Produce the STEERING BRIEF
 
 Emit exactly these sections, grounded ONLY in the loaded context (never invent a backlog —
