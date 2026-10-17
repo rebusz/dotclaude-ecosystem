@@ -54,5 +54,30 @@ class ReadStdinTextTests(unittest.TestCase):
                 read_stdin_text()
 
 
+class OutputSeamTests(unittest.TestCase):
+    """The output half: a real interpreter whose console codepage is cp1252."""
+
+    def _run(self, code: str) -> "subprocess.CompletedProcess[bytes]":
+        import os
+        import subprocess
+
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+        return subprocess.run(
+            [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(_SCRIPTS)!r}); {code}"],
+            input="nowy moduł".encode("utf-8"), capture_output=True, env=env, check=False,
+        )
+
+    def test_a_hook_can_answer_in_utf8_after_reading_its_event(self) -> None:
+        cp = self._run("from hook_stdio import read_stdin_text; t = read_stdin_text(); print(t + ' — ok')")
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertEqual(cp.stdout.decode("utf-8").strip(), "nowy moduł — ok")
+
+    def test_without_the_seam_the_same_print_dies(self) -> None:
+        """Proves the test environment really reproduces the live defect."""
+        cp = self._run("t = sys.stdin.buffer.read().decode('utf-8'); print(t + ' — ok')")
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn(b"UnicodeEncodeError", cp.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

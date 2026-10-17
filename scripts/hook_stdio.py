@@ -16,13 +16,32 @@ fired, and why a non-ASCII `tool_input.file_path` failed `Path.exists()` and was
 silently skipped. There was no diagnostic for either: the hooks fail open by
 contract, so a corrupted payload looks exactly like "nothing to do".
 
-Deliberately dependency-free and side-effect-free at import: these run inside
+Deliberately dependency-free and side-effect-free at import (the stdio
+reconfiguration happens on the first read, never on import): these run inside
 the operator's live sessions, so this module must not be able to break one.
 """
 
 from __future__ import annotations
 
 import sys
+
+
+def force_utf8_stdio() -> None:
+    """Make stdout/stderr UTF-8 (errors=replace), the output half of the seam.
+
+    The console codepage bites on the way out too: a hook printing a Polish
+    plan title or an em dash raised UnicodeEncodeError on cp1252 and died
+    (LIFECYCLE_FAILED UnicodeEncodeError in the live error log). Hosts read
+    hook output as UTF-8, so that is what we write. Never raises.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # detached or already-written buffer
+            continue
 
 
 def read_stdin_text() -> str:
@@ -34,6 +53,9 @@ def read_stdin_text() -> str:
     hook. Undecodable bytes are replaced rather than raising, for the same
     reason: a hook that dies is worse than a hook that sees one bad character.
     """
+    # Every entry point reads its event first and writes its answer after, so
+    # this is the one place both halves of the seam are guaranteed to run.
+    force_utf8_stdio()
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is None:
         return sys.stdin.read()
