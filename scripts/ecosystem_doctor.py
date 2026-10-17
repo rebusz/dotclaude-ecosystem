@@ -52,10 +52,12 @@ from typing import Any
 
 LINE_BUDGET = 200
 
-# A verdict backlog is normal; an unbounded one means the consumer is dead.
-# 1,601 unconsumed verdicts is what the audit measured, so the ceiling sits far
-# below that and far above a busy week.
-VERDICT_BACKLOG_CEILING = 400
+# A verdict backlog is normal; an unbounded one means the reaper is dead.
+# Nothing is ever curated, so the steady state is one outer bound's worth of
+# verdicts: ~13/day measured (403 in 30 days, 2026-10-17) x the 30-day bound in
+# state_reaper. The ceiling sits above a busy month (20/day) and far below the
+# 1,632 the box held when the bound was 90 days.
+VERDICT_BACKLOG_CEILING = 800
 # Atomic writes clean up after themselves; a hook killed at its harness timeout
 # cannot. A handful is noise, a pile means something is dying repeatedly.
 LEAKED_TMP_CEILING = 3

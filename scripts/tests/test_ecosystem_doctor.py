@@ -331,5 +331,15 @@ class SessionRouterWiringTests(unittest.TestCase):
         self.assertEqual(line, "")
 
 
+class CeilingCoherenceTests(unittest.TestCase):
+    def test_the_backlog_ceiling_sits_above_the_reapers_steady_state(self) -> None:
+        """At 400 the ceiling was below one 30-day bound of real traffic (403),
+        so the doctor would have flagged a healthy reaper forever."""
+        import state_reaper
+
+        busy_day = 20
+        self.assertGreater(doc.VERDICT_BACKLOG_CEILING, busy_day * state_reaper.VERDICT_OUTER_BOUND_DAYS)
+
+
 if __name__ == "__main__":
     unittest.main()
