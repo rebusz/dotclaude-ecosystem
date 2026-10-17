@@ -292,6 +292,28 @@ Decisions and deviations, against live readback on 2026-10-17:
 - **Deferred from A:** `force_utf8_stdio()` landed (live log had
   `LIFECYCLE_FAILED UnicodeEncodeError`).
 
+Closeout readback (2026-10-17, after #124):
+
+- **Item 6 is owned by PR #119**, which rewrites `core.md` and both overlays
+  wholesale (it already removes the Gemini-pin paragraph and states
+  care-not-access); a parallel fold here would only conflict with it.
+- **Where the hooks really run:** `settings.json` points every hook at the
+  *primary checkout* (`D:/dotclaude/dotclaude-ecosystem/scripts/*.py`), not
+  `~/.claude/scripts`. Hook fixes from Slices A–F go live only when that
+  checkout is on `main`; it is on `claude/conductor-gui-tsignal` with WIP.
+  `~/.claude/scripts` (loader, steer, catalogs, updater, the scheduled
+  `TsignalGitHygiene`) still held 2026-08-31 copies. A 31-file deploy that
+  skips Conductor and every file the operator branch touches was
+  sandbox-tested (all entry points rc=0); the agent write to `~/.claude` was
+  refused as a shared resource, so it is an operator-run script.
+- **Item 7 dry-run, dotclaude:** 3 merged branches + 1 dead worktree
+  reapable; 15 alarms (primary off main, 12 deploy conflicts from primary WIP,
+  6 orphan design docs on unmerged branches). `--apply` stays operator-run.
+- **Rule-sync gate (Slice E fix-later):** not tightened to `origin/main`.
+  The live globals are synced from the operator's unmerged roster branch;
+  requiring `origin/main` would block that flow until #119 lands. Revisit
+  with #119.
+
 1. **Verdict delivery.** Either consume verdicts on the next SessionStart
    (delivery becomes automatic) or drop `VERDICT_OUTER_BOUND_DAYS` for
    never-consumed verdicts. Decide which; today's 90-day fallback is neither.

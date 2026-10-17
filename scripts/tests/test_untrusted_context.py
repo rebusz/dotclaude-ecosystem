@@ -125,3 +125,11 @@ def test_the_detector_states_the_boundary_after_the_block(monkeypatch, tmp_path)
     assert out.rstrip().endswith(detector._UNTRUSTED_NOTE)
     assert out.index(detector._STEER_INSTRUCTION) < out.index("=== AUTO-INJECTED STEERING")
     assert not any(line.startswith("AI:") for line in out.splitlines())
+
+
+def test_hook_authored_hints_survive_neutralization_unmangled() -> None:
+    """Placeholders in the loader's own hint lines must not look like tags:
+    neutralize() would print them as `‹slug>` (Slice E review finding)."""
+    text = (_SCRIPTS / "plan_context_loader.py").read_text(encoding="utf-8")
+    hint = next(line for line in text.splitlines() if "Po wyborze" in line)
+    assert neutralize(hint) == hint
