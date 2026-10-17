@@ -693,38 +693,54 @@ def adjudicate_recovery(
             reason_placeholder="<why>",
         )
 
-    try:
-        proc = psutil.Process(int(pid))
-        observed_start = proc.create_time()
-        if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
-            cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
-            return RecoveryAdjudication(
-                request_id=request_id,
-                command=cmd,
-                release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
-                recover_code="RECOVERY_OWNER_GONE",
-                liveness_status="OWNER_PID_REUSED",
-                pid=int(pid),
-            )
-        else:
-            return RecoveryAdjudication(
-                request_id=request_id,
-                command=None,
-                release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
-                recover_code="OWNER_PROCESS_ALIVE",
-                liveness_status="OWNER_PROCESS_ALIVE",
-                pid=int(pid),
-            )
-    except (OSError, ValueError, psutil.Error):
-        cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
+    recover_cmd = f"& {_powershell_quote(str(py_exe))} {_powershell_quote(str(ctl_script))} resource-recover --request-id {request_id}"
+    attest_cmd = f"{recover_cmd} --attest-owner-gone --reason '<why>'"
+
+    def _unproven() -> RecoveryAdjudication:
+        # Mirrors ResourceAdmission._owner_liveness: liveness that cannot be
+        # proven either way needs an operator attestation, never a silent recover.
         return RecoveryAdjudication(
             request_id=request_id,
-            command=cmd,
+            command=attest_cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="OWNER_LIVENESS_UNPROVEN",
+            liveness_status="OWNER_LIVENESS_UNPROVEN",
+            pid=int(pid),
+            reason_placeholder="<why>",
+        )
+
+    try:
+        observed_start = psutil.Process(int(pid)).create_time()
+    except psutil.NoSuchProcess:
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=recover_cmd,
             release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
             recover_code="RECOVERY_OWNER_GONE",
             liveness_status="OWNER_PROCESS_GONE",
             pid=int(pid),
         )
+    except (OSError, ValueError, psutil.Error):
+        return _unproven()
+    if start_time is None:
+        return _unproven()
+    if abs(observed_start - float(start_time)) > 1.0:
+        return RecoveryAdjudication(
+            request_id=request_id,
+            command=recover_cmd,
+            release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+            recover_code="RECOVERY_OWNER_GONE",
+            liveness_status="OWNER_PID_REUSED",
+            pid=int(pid),
+        )
+    return RecoveryAdjudication(
+        request_id=request_id,
+        command=None,
+        release_refusal_code="RECOVERY_REQUIRED_RELEASE_REFUSED",
+        recover_code="OWNER_PROCESS_ALIVE",
+        liveness_status="OWNER_PROCESS_ALIVE",
+        pid=int(pid),
+    )
 
 
 def build_recovery_command(
