@@ -135,8 +135,13 @@ def _read(p: Path) -> str:
 def _atomic_write(p: Path, content: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f"{p.suffix}.tmp.{os.getpid()}")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
-    os.replace(tmp, p)
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(tmp, p)
+    finally:
+        # A failed write or replace must not leave PLANS.md.tmp.<pid> behind
+        # (six of them had piled up in ~/.claude). After a replace it is gone.
+        tmp.unlink(missing_ok=True)
 
 
 def discover_repos() -> list[Path]:

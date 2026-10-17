@@ -208,9 +208,22 @@ def _check_verdict_backlog(state: Path) -> Check:
     return Check("verdicts", True, str(count))
 
 
-def _check_leaked_temp(home: Path, state: Path, now: float) -> Check:
-    """Atomic writes clean up after themselves; a SIGKILLed hook does not."""
+# The two temp shapes this repository's own writers create:
+#   PLANS.md.tmp.<pid>        path.with_suffix(".tmp.<pid>")  (catalog writers)
+#   .<name>.<random>.tmp      tempfile.mkstemp(prefix=".<name>.", suffix=".tmp")
+# Only these are swept -- another program's temp file is not ours to delete.
+_OWN_TEMP = re.compile(r"^(?:[^.][^/\\]*\.tmp\.\d+|\.[^/\\]+\.[a-z0-9_]{6,12}\.tmp)$")
+
+
+def _check_leaked_temp(home: Path, state: Path, now: float, *, sweep: bool = True) -> Check:
+    """Atomic writes clean up after themselves; a SIGKILLed hook does not.
+
+    Orphans of our own writers older than a day are swept (Slice F item 4):
+    a writer killed mid-write never comes back for its temp file, and a check
+    that only counts them reported the same pile forever.
+    """
     stale: list[str] = []
+    swept = 0
     cutoff = now - 86400
     seen_dirs: set[str] = set()
     for directory in (home / ".claude", state):
@@ -230,15 +243,21 @@ def _check_leaked_temp(home: Path, state: Path, now: float) -> Check:
                 if ".tmp" not in entry.name:
                     continue
                 try:
-                    if entry.stat(follow_symlinks=False).st_mtime < cutoff:
-                        stale.append(entry.name)
+                    if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                        continue
+                    if sweep and _OWN_TEMP.match(entry.name):
+                        os.unlink(entry.path)
+                        swept += 1
+                        continue
+                    stale.append(entry.name)
                 except OSError:
                     continue
         except OSError as exc:
             return Check("temp", False, f"unreadable ({type(exc).__name__})", checked=False)
+    note = f" ({swept} swept)" if swept else ""
     if len(stale) > LEAKED_TMP_CEILING:
-        return Check("temp", False, f"{len(stale)} orphaned .tmp files")
-    return Check("temp", True, str(len(stale)))
+        return Check("temp", False, f"{len(stale)} orphaned .tmp files{note}")
+    return Check("temp", True, f"{len(stale)}{note}")
 
 
 def _check_janitor(state: Path, now: float) -> Check:

@@ -22,8 +22,13 @@ DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    finally:
+        # A failed write or replace must not leave PLANS.md.tmp.<pid> behind
+        # (six of them had piled up in ~/.claude). After a replace it is gone.
+        tmp.unlink(missing_ok=True)
 
 
 def _load_index() -> dict:

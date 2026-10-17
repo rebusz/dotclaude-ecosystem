@@ -272,8 +272,13 @@ def generate(verbose: bool = False) -> str:
 
 def write_output(path: Path, content: str) -> None:
     tmp = path.with_suffix(f"{path.suffix}.tmp.{os.getpid()}")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    finally:
+        # A failed write or replace must not leave PLANS.md.tmp.<pid> behind
+        # (six of them had piled up in ~/.claude). After a replace it is gone.
+        tmp.unlink(missing_ok=True)
 
 
 def main() -> None:
