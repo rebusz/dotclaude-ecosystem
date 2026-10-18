@@ -2,6 +2,7 @@
 
 ## What This Is
 
+- **Supervisor model and model roster (binding, newest version):** `D:/dotclaude/dotclaude-ecosystem/agent-rules/refs/supervisor-model-roster.md` — CDP lanes (ChatGPT Astra, Gemini Argon, Perplexity) carry plans, grills and reviews; local CLIs with repo access (Antigravity `agy`, z.ai GLM CLI, Cursor; Codex last) write code and tests in worktrees; Claude/Codex high-effort models supervise and decide; three slots per source; every quota hit reported to the operator; plans pass automatically through grill -> fwf matrix -> cross-family review -> self-hosted CI.
 Live-trading system for US index futures (MNQ/MES) and SPY/QQQ options. Runtime
 stability outranks every other concern. Tsignal is the execution authority;
 WatchF, TsignalLAB, Obsidian Flow, Discord, and OpusF are advisory — they never
