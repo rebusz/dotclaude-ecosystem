@@ -61,8 +61,8 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
 
 ## 3. Limits: report, switch, never stall
 
-- On any quota hit (HTTP 429, "usage limit", RESOURCE_EXHAUSTED, repeated
-  SUBMIT_UNCONFIRMED) tell the operator at once: source, time, reset time if
+- On any quota hit (HTTP 429, "usage limit", RESOURCE_EXHAUSTED; a
+  SUBMIT_UNCONFIRMED is NOT a quota hit: report it, reconcile the ORIGINAL attempt first, and start no replacement or overlapping re-scoped job until that attempt is resolved) tell the operator at once: source, time, reset time if
   known, and where the work was rerouted. `agy`: ask the operator to switch to
   another of the 5 accounts. z.ai GLM: report the window reset time (the 429 message prints it in UTC; e.g. 18:53 UTC = 12:53 MDT); error [1310] is the WEEKLY cap (reset date in the message) - tell the operator, who may hold resets. agy task specs: distinct read-only `spec_*.md` names and the instruction "never write to the task file" (a spec was overwritten by a lane once). Codex:
   report the reset time. Never queue work to wait for a reset while another
@@ -92,7 +92,7 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
 ## 5. Invocation cheat-sheet (measured 2026-10-15/16)
 
 - ChatGPT CDP: `D:/APPS/WatchF/scripts/cdp_chatgpt_code.py --prompt-file F --write <rel> --repo-root <worktree> --model "GPT-6 Astra" --reasoning-effort pro --reasoning-fallback xhigh --escalation-reason "<why>"` (pro requires `--escalation-reason`).
-- Gemini Argon: `D:/APPS/WatchF/scripts/cdp_gemini_oneshot.py --prompt-file F --model "Argon" --timeout-s 1500 --out r.json` (paste only, no tools; measured 2026-10-16: 37-45 KB reliable, 60 KB and 100-220 KB -> CDPSubmitUnconfirmed about half the time: keep packets under ~50 KB - production diff only, split large PRs by file; a failed submit is terminal, re-scope instead of retrying).
+- Gemini Argon: `D:/APPS/WatchF/scripts/cdp_gemini_oneshot.py --prompt-file F --model "Argon" --timeout-s 1500 --out r.json` (paste only, no tools; measured 2026-10-16: 37-45 KB reliable, 60 KB and 100-220 KB -> CDPSubmitUnconfirmed about half the time: keep packets under ~50 KB - production diff only, split large PRs by file; a failed or unconfirmed submit is never retried or replaced while the original attempt is unresolved; once reconciled, a smaller re-scoped packet is a NEW job).
 - Perplexity: `D:/APPS/WatchF/scripts/coderpx.py <packet> --model "<fragment>" --output out.md`; packet = `coderpx.packet.v2`, sections `## 0.`..`## 7.` between `=== CODERPX PACKET ===` and `=== END PACKET ===`; composer cap: 30k chars OK, 40k and 52k REJECTED (`send_control_disabled`) - keep packets under ~35k chars or split; `--probe-models` lists the live picker.
 - agy review (read-only): `agy --mode plan --model gemini-3.8-flash --effort high --log-file L -p="<one line: read task file X>"` from the worktree (flags before `-p=`; always a task file).
 - agy implementation (headless): `agy --mode accept-edits --sandbox --model gemini-3.8-flash --effort high --add-dir <worktree> --log-file L -p="<one line>"`. Print mode cannot confirm tools: commands must match `userSettings.globalPermissionGrants.allow` in `C:/Users/dszub/.gemini/config/config.json` (NOT `permissions.allow`, which is ignored); since 2026-10-16 it holds `command(*)`, `write_file(*)`, `edit(*)`, `read_file(*)` plus venv/python/pytest patterns, so agy edits and runs tests without prompts. After each run check `git status` in the live checkout for stray writes.
