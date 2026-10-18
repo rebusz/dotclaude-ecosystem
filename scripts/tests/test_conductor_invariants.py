@@ -83,11 +83,15 @@ def test_c1_the_capacity_one_pool_still_admits_exactly_one(manager: HostResource
 # ── C2: attestation is a ceremony, never a payload field ────────────────────
 
 def test_c2_an_envelope_cannot_attest_an_owner_gone(
-    store: ConductorStore, manager: HostResourceManager
+    store: ConductorStore, manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An inbox file carrying `operator_attestation: true` cleared a host:heavy
     fence with `evidence: OPERATOR_ATTESTED` and no operator involved."""
     wedged = manager.request(purpose="pytest_heavy", attempt_id="w", agent_instance="w")
+    # This test is about the attestation ceremony, not the stale-slot sweep, so
+    # pin the TTL to 0: the sweep reads the env at call time and a non-positive
+    # TTL disables the auto-release of a never-heartbeated slot.
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "0")
     manager.reconcile(now=datetime.now(timezone.utc) + timedelta(hours=1))
     assert store.get_resource_request(wedged["request_id"]).state == \
         HostResourceRequestState.RECOVERY_REQUIRED
@@ -519,7 +523,11 @@ def test_a_rejected_heartbeat_is_reported_not_silently_accepted(store: Conductor
 
     for receipt in (replay, intruder):
         assert receipt.status == "ERROR"
-        assert "HEARTBEAT_REJECTED" in receipt.error_message
+    assert "HEARTBEAT_REJECTED" in replay.error_message
+    # A nonexistent attempt is now rejected by the reap path first, so accept
+    # either rejection message for the intruder while keeping it strict.
+    assert ("HEARTBEAT_REJECTED" in intruder.error_message
+            or "REAPED_LEASE_REJECTED" in intruder.error_message)
 
 
 def test_a_transient_inbox_failure_is_retried_not_quarantined(
