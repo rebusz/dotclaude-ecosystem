@@ -21,7 +21,8 @@ haiku" 2026-10-05, the 2026-10-10 flexible-roles note), THIS file wins.
 | **Codex CLI** (gpt-6-luna / gpt-6-sol / gpt-6-astra) | local worker (Luna) when the three above are busy; Astra/Sol high effort for planning second opinions | LAST in the implementation queue |
 | **Claude** (this session: Opus 5.5 / Fable 5.1; subagents Sonnet) | **management, supervision, coordination, critical decisions, plans, synthesis, adversarial verification** | not bulk implementation; Sonnet subagent only for root-cause work when local lanes are down |
 | Haiku | mechanical bulk without judgement, if at all | **never audits, reviews or code** |
-| Local Qwen, LongCat (OpenCode), Grok bot | night/offline, free extra lane, QA operator lane | opportunistic |
+| **OpenCode Zen free** (`opencode run`, anonymous): **DeepSeek V4.1 Flash** (`opencode/deepseek-v4.1-flash-free`), **GLM-5.3-Flash** (`opencode/glm-5.3-flash-free`, a third GLM source, separate from z.ai and Perplexity) | **implementation, tests, fixes** in a worktree (agentic: edits files, runs pytest); second-opinion R0/R1 review | free for a limited time, no end date; 200K context cap; ZDR claimed (OpenCode statement via press, no primary doc). R2/R3 code only with the operator's OK |
+| Local Qwen, LongCat (OpenCode free), Grok bot | night/offline, free extra lane, QA operator lane | opportunistic |
 
 Highest-weight decisions and plans run in parallel at the highest efforts on
 **Astra (Pro/max), Fable/Opus (xhigh), and Argon**; the supervisor synthesizes
@@ -39,7 +40,7 @@ The supervisor sets model and effort for every lane it dispatches; it cannot cha
 | **Sub-supervisors** | none | none | only for an independent program with >=3 lanes and its own repo/worktree set: one Codex chat (Sol high) owns that program's integration; the Claude supervisor keeps cross-program custody and the handoff ledger |
 | **Plan author** | any capable cheap model: Perplexity GLM 5.3 / Kimi K3 / Grok 4.7, ChatGPT Sol, z.ai GLM | Astra xhigh or Sol high; Kimi K3 / GLM 5.3 as fallback | **brainstorm**: Astra pro + Argon (High) + Opus high write independent proposals; Opus synthesises one plan; Fable only on explicit operator request in a separate session |
 | **Grill** | one model of a different family than the author | two families other than the author | >=3 families other than the author, at least one with code access (agy); pick from Argon, Astra, Kimi K3, GLM 5.3, Grok 4.7, Nemotron, AGY |
-| **Code + tests** | agy, z.ai GLM, Cursor, Codex Luna | agy high, Codex Luna/Sol high | agy high or Codex Sol high; one author per lane with an exclusive write-set (own worktree/branch, disjoint files); a second author never touches a held lane |
+| **Code + tests** | agy, z.ai GLM, Cursor, OpenCode free (DeepSeek V4.1 Flash / GLM-5.3-Flash), Codex Luna | agy high, Codex Luna/Sol high | agy high or Codex Sol high; one author per lane with an exclusive write-set (own worktree/branch, disjoint files); a second author never touches a held lane |
 | **Review** | one model, other family | one strong model, other family | two families, neither the author's: Astra pro + Argon (<=50 KB paste) or Kimi K3; AGY for code-grounded review; Claude never reviews its own work; Haiku never reviews |
 | **Root cause when local lanes are down** | Sonnet subagent | Sonnet subagent | Opus subagent |
 
@@ -97,6 +98,7 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
 - agy implementation (headless): `agy --mode accept-edits --sandbox --model gemini-3.8-flash --effort high --add-dir <worktree> --log-file L -p="<one line>"`. Print mode cannot confirm tools: commands must match `userSettings.globalPermissionGrants.allow` in `C:/Users/dszub/.gemini/config/config.json` (NOT `permissions.allow`, which is ignored); since 2026-10-16 it holds `command(*)`, `write_file(*)`, `edit(*)`, `read_file(*)` plus venv/python/pytest patterns, so agy edits and runs tests without prompts. After each run check `git status` in the live checkout for stray writes.
 - z.ai GLM: `glm.cmd -p --permission-mode acceptEdits --allowedTools "Bash Read Edit Write Grep Glob" < task.md` from the worktree.
 - Cursor: `cursor-agent.cmd -p --trust --force --workspace <worktree> "<one line: read task file X>"`.
+- OpenCode free (measured 2026-10-18, opencode 1.18.19): from the worktree, `$env:XDG_DATA_HOME="$env:LOCALAPPDATA\opencode_free_anon"; opencode run -m opencode/deepseek-v4.1-flash-free "<one line: read task file X>"` (or `opencode/glm-5.3-flash-free`). The isolated data dir runs WITHOUT the stored OpenCode key: that key is expired ("This API key has expired") and with it every model fails, free ones included. Measured: plain reply ~50 s, write two files + run pytest ~21 s. `opencode models opencode | Select-String free` lists the current free set (also LongCat 2.5, MiMo-V2.6-Flash, Nemotron 3 Ultra / 3.5 Super VL / 3.5 Lightning).
 - Codex: `codex exec -m gpt-6-luna -C <worktree> --sandbox workspace-write -o out.md - < task.md` (its sandbox cannot write `.git`; the supervisor does git).
 - Guard every launch: `cd <worktree> && [ "$(git rev-parse --abbrev-ref HEAD)" = "<branch>" ] && <launch>`; never `git add -A`.
 
@@ -107,4 +109,5 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
 - v1 2026-10-16: initial, from the operator directive after the roster
   confusion (z.ai GLM CLI and Perplexity's GLM entry are two sources).
 - v1.3 (2026-10-16): model map by task and R-class, session model guard (Fable banned again), R3 plan brainstorm, grill coverage of other families, sub-supervisor rule, custody of handed-over lanes.
+- v1.5 (2026-10-18, operator): OpenCode Zen free lane added — DeepSeek V4.1 Flash and GLM-5.3-Flash as local writers (code, tests, fixes) and R0/R1 second opinions; anonymous invocation because the stored OpenCode key expired.
 - v1.4 (2026-10-16 evening, operator): Antigravity accounts rotate AUTOMATICALLY on a pre-model `RESOURCE_EXHAUSTED ... Resets in X` (no lane shrinking; quota must not sit idle) - only pre-model 429s move to the next account, SUBMIT_UNCONFIRMED is never retried; design in progress (`agy-rotate`). z.ai has two quotas: the GLM CLI coding plan and the separate ZCode MCP quota (vision / webReader / image_search plugin tools) - route research reading and screenshot analysis there via the GLM lane once wired. Trading-logic parameters are never proposed from anecdote; they go to TsignalLAB / Edge150 / Argon research.
