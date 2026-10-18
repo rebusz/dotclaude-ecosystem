@@ -24,6 +24,8 @@ from scripts.conductor_model import (
     HostResourcePool,
     HostResourceRequest,
     HostResourceRequestState,
+    Receipt,
+    WorkItemState,
     current_utc_iso,
     parse_iso_or_expired,
 )
@@ -33,6 +35,20 @@ from scripts.conductor_store import ConductorStore
 RESOURCE_KEY = "host:heavy"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
+DEFAULT_STALE_SLOT_TTL_SECONDS = 900
+STALE_SLOT_TTL_ENV = "TDCONDUCTOR_STALE_SLOT_TTL_S"
+
+
+def get_stale_slot_ttl_seconds() -> int:
+    env_val = os.environ.get(STALE_SLOT_TTL_ENV)
+    if env_val is not None:
+        try:
+            return max(0, int(env_val))
+        except ValueError:
+            pass
+    return DEFAULT_STALE_SLOT_TTL_SECONDS
+
+
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
 PROVIDER_POOLS = frozenset(f"provider:{source}" for source in PROVIDER_SOURCES)
@@ -96,6 +112,26 @@ CDP_ROUTING_ERROR = (
 
 def _is_cdp_purpose(purpose: Optional[str]) -> bool:
     return bool(purpose) and purpose in CDP_PURPOSES
+
+
+def _request_owner_identity(req: Any) -> tuple[Optional[int], Optional[float], Optional[str]]:
+    """Read the request-level owner identity columns, tolerating rows without them.
+
+    The v7 schema carries the acquiring process's identity on the request row
+    itself (owner_process_pid / owner_process_start_time / owner_last_seen_at_utc);
+    a host lease may or may not repeat it in its own columns.
+    """
+    keys = req.keys()
+    if "owner_process_pid" not in keys:
+        return None, None, None
+    pid = req["owner_process_pid"] if "owner_process_pid" in keys else None
+    start_time = req["owner_process_start_time"] if "owner_process_start_time" in keys else None
+    last_seen = req["owner_last_seen_at_utc"] if "owner_last_seen_at_utc" in keys else None
+    return (
+        int(pid) if pid is not None else None,
+        float(start_time) if start_time is not None else None,
+        str(last_seen) if last_seen else None,
+    )
 
 
 def resolve_resource_key(
@@ -290,7 +326,7 @@ def classify_pytest_invocation(
 class HostResourceManager:
     """Single-writer resource admission over :class:`ConductorStore`."""
 
-    def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY):
+    def __init__(self, store: Optional[ConductorStore] = None, resource_key: str = RESOURCE_KEY):
         self.store = store
         self.resource_key = resource_key
         if resource_key not in KNOWN_RESOURCE_KEYS:
@@ -298,12 +334,45 @@ class HostResourceManager:
                 f"unknown resource key '{resource_key}'; "
                 f"expected one of {sorted(KNOWN_RESOURCE_KEYS)}"
             )
-        pool = self.store.get_resource_pool(resource_key)
-        if pool is None:
-            default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
-            # HRL-R2 intentionally has no environment-configurable capacity.
-            self.store.save_resource_pool(
-                HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
+        if self.store is not None:
+            pool = self.store.get_resource_pool(resource_key)
+            if pool is None:
+                default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
+                # HRL-R2 intentionally has no environment-configurable capacity.
+                self.store.save_resource_pool(
+                    HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
+                )
+
+    @staticmethod
+    def _attempt_is_revoked_locked(conn, attempt_id: str) -> bool:
+        att_row = conn.execute(
+            "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        if att_row and (
+            att_row["status"] == "UNKNOWN"
+            or att_row["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+        ):
+            return True
+        revoked_req = conn.execute(
+            """
+            SELECT 1 FROM host_resource_requests
+            WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+            """,
+            (attempt_id,),
+        ).fetchone()
+        return revoked_req is not None
+
+    def _persist_stale_slot_sweep_on_isolated_connection(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        actor: str = "resource-adapter",
+    ) -> None:
+        """Commit revocation/receipt side effects outside the caller's rolled-back transaction."""
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._sweep_stale_slots_locked(
+                conn, now=now or _now(), actor=actor, include_active=True
             )
 
     def request(
@@ -357,6 +426,14 @@ class HostResourceManager:
             if capacity < 1 or (self.resource_key == "host:heavy" and capacity != 1):
                 raise ResourceAdmissionError("HOST_RESOURCE_CAPACITY_INVALID")
 
+            # Sweep stale slots across pools before deciding capacity
+            self._sweep_stale_slots_locked(conn, now=now, actor=actor, include_active=True)
+
+            if self._attempt_is_revoked_locked(conn, attempt_id):
+                conn.rollback()
+                self._persist_stale_slot_sweep_on_isolated_connection(now=now, actor=actor)
+                raise ResourceAdmissionError("ATTEMPT_REVOKED")
+
             request_id = f"rr_{uuid.uuid4().hex[:12]}"
 
             if inherited_id:
@@ -408,6 +485,7 @@ class HostResourceManager:
                         # exception; otherwise the connection context would
                         # roll the quarantine row back with the failed call.
                         conn.commit()
+                        self.store.flush_pending_receipts(conn)
                         raise ResourceBusyError("INHERITED_CHILD_BUSY")
 
                     request = HostResourceRequest(
@@ -572,8 +650,339 @@ class HostResourceManager:
             promoted = self._promote_related_locked(conn, resource_key=row["resource_key"], actor=actor)
             return {"request_id": request_id, "status": "RELEASED", "promoted": promoted}
 
-    def reconcile(self, *, dry_run: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
-        """Mark expired resource leases recovery-required; never auto-retry them."""
+    def _sweep_stale_slots_locked(
+        self,
+        conn: Any,
+        *,
+        now: Optional[datetime] = None,
+        ttl_seconds: Optional[int] = None,
+        dry_run: bool = False,
+        actor: str = "stale-slot-sweeper",
+        include_active: bool = True,
+        resource_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Sweep stale slots: auto-RELEASE requests older than TTL with dead/unrecorded owners."""
+        if ttl_seconds is None:
+            ttl_seconds = get_stale_slot_ttl_seconds()
+        if ttl_seconds <= 0:
+            return {"swept_count": 0, "swept_request_ids": [], "receipts": [], "dry_run": dry_run}
+
+        now = now or _now()
+        now_iso = _iso(now)
+
+        state_filter = "('RECOVERY_REQUIRED', 'INHERITED')" if not include_active else "('RECOVERY_REQUIRED', 'ACTIVE', 'INHERITED')"
+        rk_filter = "AND resource_key = ?" if resource_key else ""
+        params: list[Any] = [resource_key] if resource_key else []
+
+        swept_ids: list[str] = []
+        receipts: list[Receipt] = []
+
+        while True:
+            newly_swept: list[str] = []
+            candidates = conn.execute(
+                f"""
+                SELECT * FROM host_resource_requests
+                WHERE state IN {state_filter} {rk_filter}
+                ORDER BY created_at_utc, request_id
+                """,
+                params,
+            ).fetchall()
+
+            for req in candidates:
+                req_id = req["request_id"]
+                state = req["state"]
+                if req_id in swept_ids:
+                    continue
+
+                lease_row = conn.execute(
+                    "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                ).fetchone()
+                if not lease_row and req["parent_lease_id"]:
+                    lease_row = conn.execute(
+                        "SELECT * FROM host_resource_leases WHERE lease_id = ?", (req["parent_lease_id"],)
+                    ).fetchone()
+
+                if state in {HostResourceRequestState.ACTIVE.value, HostResourceRequestState.INHERITED.value}:
+                    if not lease_row:
+                        heartbeat_expired = True
+                    else:
+                        exp_str = lease_row["expires_at_utc"]
+                        heartbeat_expired = bool(exp_str and parse_iso_or_expired(exp_str) <= now)
+                    if not heartbeat_expired:
+                        continue
+
+                # (a) Check age relative to TTL:
+                # "measured from the later of created/last-seen/last-state-change"
+                # Exclude fence events (LEASE_EXPIRED) and auto-release events so
+                # fencing an already-dead lease does not reset its staleness timer (M2).
+                owner_pid, owner_start_time, owner_last_seen = _request_owner_identity(req)
+                timestamps: list[datetime] = [parse_iso_or_expired(req["created_at_utc"])]
+                if lease_row and lease_row["last_heartbeat_utc"]:
+                    timestamps.append(parse_iso_or_expired(lease_row["last_heartbeat_utc"]))
+                if owner_last_seen:
+                    # The request's owner-identity record is authoritative
+                    # last-seen evidence for that owner and counts toward the
+                    # age, not just toward the liveness veto (finding 2).
+                    timestamps.append(parse_iso_or_expired(owner_last_seen))
+
+                max_ev = conn.execute(
+                    """
+                    SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events
+                    WHERE request_id = ? AND reason_code NOT IN ('LEASE_EXPIRED', 'STALE_SLOT_AUTO_RELEASED')
+                    """,
+                    (req_id,),
+                ).fetchone()
+                if max_ev and max_ev["max_ev"]:
+                    timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
+
+                latest_activity = max(timestamps)
+                age_seconds = (now - latest_activity).total_seconds()
+                if age_seconds < ttl_seconds:
+                    continue
+
+                # (b) Owner liveness resolves EVERY recorded identity, on the
+                # lease and on the request (finding 2). One live -- or
+                # unprovable -- owner keeps the hold; elapsed TTL alone never
+                # establishes process death.
+                if state == HostResourceRequestState.INHERITED.value:
+                    child_lease = conn.execute(
+                        "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                    ).fetchone()
+                    identities: list[tuple[Optional[int], Optional[float]]] = []
+                    if child_lease and child_lease["process_pid"] is not None:
+                        identities.append((child_lease["process_pid"], child_lease["process_start_time"]))
+                    if owner_pid is not None:
+                        identities.append((owner_pid, owner_start_time))
+                    if not identities:
+                        # No identity of the child's own was ever recorded, and
+                        # the parent's liveness proves nothing about a surviving
+                        # child: keep the hold until the child's termination is
+                        # established or an operator clears it explicitly
+                        # (finding 3).
+                        continue
+                    is_gone, evidence = self._all_recorded_owners_gone(identities)
+                    if not is_gone:
+                        continue
+                else:
+                    identities = []
+                    if lease_row and lease_row["process_pid"] is not None:
+                        identities.append((lease_row["process_pid"], lease_row["process_start_time"]))
+                    if owner_pid is not None:
+                        identities.append((owner_pid, owner_start_time))
+                    if not identities:
+                        is_gone, evidence = True, "OWNER_UNRECORDED"
+                    else:
+                        is_gone, evidence = self._all_recorded_owners_gone(identities)
+                        if not is_gone:
+                            continue
+
+                # Never auto-release any parent that still has surviving INHERITED children.
+                lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
+                if lease_id:
+                    child_rows = conn.execute(
+                        "SELECT request_id FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
+                        (lease_id, HostResourceRequestState.INHERITED.value),
+                    ).fetchall()
+                    active_child_count = sum(
+                        1
+                        for c in child_rows
+                        if c["request_id"] not in swept_ids and c["request_id"] != req_id
+                    )
+                    if active_child_count > 0:
+                        continue
+
+                newly_swept.append(req_id)
+                swept_ids.append(req_id)
+
+                if not dry_run:
+                    old_state = req["state"]
+                    old_reason = req["reason_code"]
+                    conn.execute(
+                        "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
+                        (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
+                    )
+
+                    # (H2) Revoke the lease row this request owns. A row reached
+                    # only through parent_lease_id belongs to the parent and
+                    # must stay while that parent may still be running.
+                    conn.execute(
+                        "DELETE FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                    )
+                    owns_lease = lease_row is not None and lease_row["request_id"] == req_id
+                    if owns_lease and state != HostResourceRequestState.INHERITED.value:
+                        conn.execute(
+                            "DELETE FROM host_resource_leases WHERE lease_id = ?",
+                            (lease_row["lease_id"],),
+                        )
+
+                    # (H2) Mark associated attempt outcome as UNKNOWN and revoke lease in leases:
+                    attempt_id = req["attempt_id"]
+                    if attempt_id:
+                        conn.execute(
+                            """
+                            UPDATE host_resource_requests
+                            SET state = ?, released_at_utc = ?, reason_code = ?
+                            WHERE attempt_id = ? AND state = ?
+                            """,
+                            (
+                                HostResourceRequestState.RELEASED.value,
+                                now_iso,
+                                "STALE_SLOT_AUTO_RELEASED",
+                                attempt_id,
+                                HostResourceRequestState.QUEUED.value,
+                            ),
+                        )
+                        conn.execute(
+                            "DELETE FROM leases WHERE attempt_id = ?", (attempt_id,)
+                        )
+                        conn.execute(
+                            """
+                            UPDATE attempts
+                            SET status = 'UNKNOWN', reason_code = 'STALE_SLOT_AUTO_RELEASED', ended_at_utc = ?
+                            WHERE attempt_id = ?
+                            """,
+                            (now_iso, attempt_id),
+                        )
+                        att_row = conn.execute(
+                            "SELECT work_item_id FROM attempts WHERE attempt_id = ?", (attempt_id,)
+                        ).fetchone()
+                        if att_row and att_row["work_item_id"]:
+                            wi_id = att_row["work_item_id"]
+                            # The fence follows the store's claim authority
+                            # (current_claim_attempt_id/current_claim_generation),
+                            # never wall-clock ordering: after a replacement
+                            # claim -- even one with an earlier claimed_at_utc
+                            # after clock rollback -- the running work item
+                            # belongs to the replacement and must not be fenced
+                            # (finding 4). The update is conditional in this
+                            # same transaction, and the event is written only
+                            # when the update actually fenced something.
+                            wi_row = conn.execute(
+                                "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
+                            ).fetchone()
+                            if wi_row and wi_row["state"] in (
+                                WorkItemState.CLAIMED.value,
+                                WorkItemState.DISPATCHING.value,
+                                WorkItemState.RUNNING.value,
+                                WorkItemState.WAITING_EXTERNAL.value,
+                                WorkItemState.REVIEW.value,
+                                WorkItemState.RECOVERY_REQUIRED.value,
+                            ):
+                                target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
+                                fenced = conn.execute(
+                                    """
+                                    UPDATE work_items SET state = ?
+                                    WHERE work_item_id = ?
+                                      AND current_claim_attempt_id = ?
+                                      AND current_claim_generation = COALESCE(
+                                          (SELECT claim_generation FROM claims WHERE attempt_id = ?),
+                                          -1
+                                      )
+                                    """,
+                                    (target_wi_st, wi_id, attempt_id, attempt_id),
+                                )
+                                if fenced.rowcount == 1:
+                                    old_wi_st = wi_row["state"]
+                                    conn.execute(
+                                        """
+                                        INSERT INTO events (
+                                            event_id, work_item_id, attempt_id, previous_state, next_state,
+                                            actor_identity, reason_code, recorded_at_utc, details_json, schema_version
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        """,
+                                        (
+                                            f"evt_{uuid.uuid4().hex[:12]}",
+                                            wi_id,
+                                            attempt_id,
+                                            old_wi_st,
+                                            target_wi_st,
+                                            actor,
+                                            "STALE_SLOT_AUTO_RELEASED",
+                                            now_iso,
+                                            json.dumps({"outcome": "UNKNOWN", "stale_slot_auto_released": True}),
+                                            "conductor.event.v1",
+                                        ),
+                                    )
+
+                    self._event(
+                        conn,
+                        request_id=req_id,
+                        lease_id=lease_id,
+                        previous=old_state,
+                        next_state=HostResourceRequestState.RELEASED.value,
+                        actor=actor,
+                        reason="STALE_SLOT_AUTO_RELEASED",
+                        details={
+                            "previous_state": old_state,
+                            "previous_reason_code": old_reason,
+                            "evidence": evidence,
+                            "stale_reason": "STALE_SLOT_AUTO_RELEASED",
+                            "ttl_seconds": ttl_seconds,
+                        },
+                        event_time=now,
+                    )
+                    receipt = Receipt(
+                        receipt_id=f"rcp_{uuid.uuid4().hex[:12]}",
+                        command_id=f"cmd_stale_slot_{req_id}_{uuid.uuid4().hex[:8]}",
+                        idempotency_key=f"stale_slot_auto_release_{req_id}",
+                        status="SUCCESS",
+                        result={
+                            "request_id": req_id,
+                            "status": "RELEASED",
+                            "reason": "STALE_SLOT_AUTO_RELEASED",
+                            "previous_state": old_state,
+                            "previous_reason_code": old_reason,
+                            "resource_key": req["resource_key"],
+                        },
+                        processed_at_utc=now_iso,
+                    )
+                    self.store.save_receipt(receipt, conn=conn)
+                    receipts.append(receipt)
+                    self._promote_related_locked(conn, resource_key=req["resource_key"], actor=actor)
+
+            if not newly_swept:
+                break
+
+        return {
+            "swept_count": len(swept_ids),
+            "swept_request_ids": swept_ids,
+            "receipts": receipts,
+            "dry_run": dry_run,
+        }
+
+    def sweep_stale_slots(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        ttl_seconds: Optional[int] = None,
+        dry_run: bool = False,
+        actor: str = "stale-slot-sweeper",
+    ) -> Dict[str, Any]:
+        """Sweep stale slots explicitly."""
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._sweep_stale_slots_locked(
+                conn,
+                now=now,
+                ttl_seconds=ttl_seconds,
+                dry_run=dry_run,
+                actor=actor,
+                include_active=True,
+            )
+
+    def reconcile(
+        self,
+        *,
+        dry_run: bool = False,
+        now: Optional[datetime] = None,
+        stale_slot_ttl_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Mark expired resource leases recovery-required; sweep stale slots."""
+        if self.store is not None:
+            # Maintenance drains the committed receipt outbox too: a separate
+            # CLI writer that commits a receipt and dies before file delivery
+            # leaves rows only a surviving store can deliver (finding 6).
+            self.store.ensure_receipt_files_delivered()
         now = now or _now()
         now_iso = _iso(now)
         expired_query = """
@@ -585,12 +994,30 @@ class HostResourceManager:
         # taking BEGIN IMMEDIATE once a second when nothing has expired only
         # contends with claims and admissions on the live workstation.
         with self.store._connection() as conn:
-            if not conn.execute(
+            has_expired = conn.execute(
                 expired_query, (HostResourceRequestState.ACTIVE.value, now_iso)
-            ).fetchone():
-                return {"expired_count": 0, "request_ids": [], "dry_run": dry_run}
+            ).fetchone() is not None
+            has_sweepable = conn.execute(
+                "SELECT 1 FROM host_resource_requests WHERE state IN ('RECOVERY_REQUIRED', 'INHERITED')"
+            ).fetchone() is not None
+            if not has_expired and not has_sweepable:
+                return {
+                    "expired_count": 0,
+                    "request_ids": [],
+                    "stale_released_count": 0,
+                    "stale_request_ids": [],
+                    "dry_run": dry_run,
+                }
         with self.store._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")  # re-read under the lock: no TOCTOU
+            sweep_result = self._sweep_stale_slots_locked(
+                conn,
+                now=now,
+                ttl_seconds=stale_slot_ttl_seconds,
+                dry_run=dry_run,
+                actor="reconciler",
+                include_active=True,
+            )
             rows = conn.execute(
                 expired_query, (HostResourceRequestState.ACTIVE.value, now_iso)
             ).fetchall()
@@ -608,10 +1035,13 @@ class HostResourceManager:
                         HostResourceRequestState.RECOVERY_REQUIRED.value,
                         "reconciler",
                         "LEASE_EXPIRED",
+                        event_time=now,
                     )
             return {
                 "expired_count": len(rows),
                 "request_ids": [row["request_id"] for row in rows],
+                "stale_released_count": sweep_result["swept_count"],
+                "stale_request_ids": sweep_result["swept_request_ids"],
                 "dry_run": dry_run,
             }
 
@@ -721,20 +1151,53 @@ class HostResourceManager:
             return False, "OWNER_UNRECORDED"
         try:
             observed_start = psutil.Process(int(pid)).create_time()
-        except (OSError, ValueError, psutil.Error):
+        except psutil.NoSuchProcess:
             return True, "OWNER_PROCESS_GONE"
-        if start_time is not None and abs(observed_start - float(start_time)) > 1.0:
+        except (OSError, ValueError, psutil.Error):
+            return False, "OWNER_LIVENESS_UNPROVEN"
+        if start_time is None:
+            return False, "OWNER_LIVENESS_UNPROVEN"
+        if abs(observed_start - float(start_time)) > 1.0:
             # Same pid, different process: the owner died and the OS reused it.
             return True, "OWNER_PID_REUSED"
         return False, "OWNER_PROCESS_ALIVE"
 
-    def status(self) -> Dict[str, Any]:
+    @classmethod
+    def _all_recorded_owners_gone(
+        cls, identities: Sequence[tuple[Optional[int], Optional[float]]]
+    ) -> tuple[bool, str]:
+        """Adjudicate every recorded owner identity together (finding 2).
+
+        A single identity that is alive -- or whose liveness cannot be proven
+        either way -- keeps the hold. Release requires every recorded identity
+        to be proven dead; elapsed time alone never establishes that.
+        """
+        evidence = "OWNER_PROCESS_GONE"
+        for pid, start_time in identities:
+            owner_gone, owner_evidence = cls._owner_liveness(pid, start_time)
+            if not owner_gone:
+                return False, owner_evidence
+            evidence = owner_evidence
+        return True, evidence
+
+    def status(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
         pool = self.store.get_resource_pool(self.resource_key)
         requests = self.store.list_resource_requests(resource_key=self.resource_key)
         leases = self.store.list_resource_leases(resource_key=self.resource_key)
         counts: Dict[str, int] = {}
         for request in requests:
             counts[request.state.value] = counts.get(request.state.value, 0) + 1
+
+        with self.store._connection() as conn:
+            sweepable = self._sweep_stale_slots_locked(
+                conn,
+                now=now,
+                resource_key=self.resource_key,
+                dry_run=True,
+                include_active=True,
+            )
+        sweepable_count = sweepable["swept_count"]
+
         return {
             "resource_key": self.resource_key,
             "capacity": pool.capacity if pool else 0,
@@ -742,6 +1205,7 @@ class HostResourceManager:
             "active_units": counts.get(HostResourceRequestState.ACTIVE.value, 0),
             "queued": counts.get(HostResourceRequestState.QUEUED.value, 0),
             "recovery_required": counts.get(HostResourceRequestState.RECOVERY_REQUIRED.value, 0),
+            "sweepable_count": sweepable_count,
             "state_counts": counts,
             "storage": self.store.storage_status(),
             "requests": [request.to_dict() for request in requests],
@@ -862,6 +1326,22 @@ class HostResourceManager:
                     conn.execute(
                         "UPDATE host_resource_leases SET process_pid = ?, process_start_time = ? WHERE lease_id = ?",
                         (process.pid, process_start_time, lease_id),
+                    )
+            elif admission["state"] == HostResourceRequestState.INHERITED.value:
+                # An inherited child shares the parent's lease row, so the
+                # child's own identity has nowhere there to live. Record it on
+                # the request itself: the sweep must adjudicate the child by
+                # the child, never by the parent, and a child whose identity
+                # went unrecorded keeps the hold (finding 3).
+                with self.store._connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE host_resource_requests
+                        SET owner_process_pid = ?, owner_process_start_time = ?,
+                            owner_identity_source = 'SPAWNED_CHILD', owner_last_seen_at_utc = ?
+                        WHERE request_id = ?
+                        """,
+                        (process.pid, process_start_time, current_utc_iso(), request_id),
                     )
             sequence = 1
             while True:
@@ -1278,6 +1758,15 @@ class HostResourceManager:
                 # Documented choice: When the head of the queue is blocked only by slot exclusivity,
                 # promotion skips it and takes the next eligible request (non-strict FIFO for slot exclusivity).
                 continue
+            q_attempt = qrow["attempt_id"]
+            if q_attempt:
+                q_att = conn.execute(
+                    "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (q_attempt,)
+                ).fetchone()
+                if q_att and (
+                    q_att["status"] == "UNKNOWN" or q_att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+                ):
+                    continue
             eligible_row = qrow
             break
 
@@ -1305,7 +1794,9 @@ class HostResourceManager:
         reason: str,
         details: Optional[Mapping[str, Any]] = None,
         event_id: Optional[str] = None,
+        event_time: Optional[datetime] = None,
     ) -> None:
+        recorded_at = _iso(event_time) if event_time is not None else current_utc_iso()
         conn.execute(
             """
             INSERT INTO host_resource_events (
@@ -1321,7 +1812,7 @@ class HostResourceManager:
                 next_state,
                 actor,
                 reason,
-                current_utc_iso(),
+                recorded_at,
                 json.dumps(dict(details or {}), sort_keys=True),
                 "conductor.resource-event.v1",
             ),

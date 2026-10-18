@@ -37,7 +37,10 @@
 - A bounded child may inherit an active attempt-scoped
   `TDCONDUCTOR_LEASE_ID` once; a second concurrent inherited child, forged or
   stale token, expired lease, or `RECOVERY_REQUIRED` state fails closed. There
-  is no preemption or automatic retry across an ambiguous owner.
+  is no preemption or automatic retry across an ambiguous owner. Stale slots in
+  `RECOVERY_REQUIRED` or with expired lease heartbeats are auto-released after
+  TTL (default 900 s, env `TDCONDUCTOR_STALE_SLOT_TTL_S`, 0 disables) when no
+  recorded owner process is alive; live matching owners keep the slot.
 - Bounded pytest uses only `<python> -m pytest <args>` with a retained
   `Popen` handle and `shell=False`; WMI/CIM/process-list polling and arbitrary
   shell execution are not substitutes for ownership evidence.

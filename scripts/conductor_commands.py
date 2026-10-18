@@ -44,6 +44,7 @@ class ConductorCommandProcessor:
         looped over its values as if it did (audit T1). Refusals that must
         hold for every source are written as exactly that.
         """
+        self.store.ensure_receipt_files_delivered()
         existing_receipt = self.store.get_receipt(envelope.idempotency_key)
         if existing_receipt:
             return existing_receipt
@@ -248,6 +249,7 @@ class ConductorCommandProcessor:
             agent_instance=agent_instance,
             heartbeat_sequence=1,
             expires_at_utc=expires_dt.isoformat(),
+            lease_generation=1,
         )
 
         self.store.save_attempt(attempt)
@@ -267,6 +269,7 @@ class ConductorCommandProcessor:
             "attempt_id": attempt_id,
             "claim_id": claim_id,
             "lease_id": lease_id,
+            "lease_generation": 1,
             "status": "CLAIMED",
         }
 
@@ -276,6 +279,11 @@ class ConductorCommandProcessor:
         attempt_id = payload["attempt_id"]
         sequence = payload["sequence"]
         ttl_seconds = payload.get("ttl_seconds", 300)
+        if "lease_generation" not in payload:
+            raise ValueError(
+                "ATTEMPT_IDENTITY_REQUIRED: lease_generation is required for worker heartbeats"
+            )
+        lease_generation = int(payload["lease_generation"])
 
         now_dt = datetime.now(timezone.utc)
         expires_dt = now_dt + timedelta(seconds=ttl_seconds)
@@ -287,17 +295,20 @@ class ConductorCommandProcessor:
             heartbeat_sequence=sequence,
             expires_at_utc=expires_dt.isoformat(),
             last_heartbeat_utc=now_dt.isoformat(),
+            lease_generation=lease_generation,
         )
 
-        if not self.store.save_lease(lease):
-            # A replayed sequence or another attempt's heartbeat writes nothing.
-            # Reporting success anyway told the real owner its lease had been
-            # extended when it had not, and gave an intruder a green receipt.
+        if not self.store.extend_lease_heartbeat_fenced(lease, lease_generation=lease_generation):
             raise ValueError(
                 "HEARTBEAT_REJECTED: sequence not ahead of the recorded one, "
-                "or the lease belongs to another attempt"
+                "or the lease belongs to another attempt or was revoked"
             )
-        return {"lease_id": lease_id, "heartbeat_sequence": sequence, "expires_at_utc": lease.expires_at_utc}
+        return {
+            "lease_id": lease_id,
+            "heartbeat_sequence": sequence,
+            "expires_at_utc": lease.expires_at_utc,
+            "lease_generation": lease_generation,
+        }
 
     def _handle_resource_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Admit or queue one named host resource consumer."""
@@ -381,10 +392,19 @@ class ConductorCommandProcessor:
 
     def _handle_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Record an EvidenceCheckpoint."""
+        attempt_id = payload.get("attempt_id")
+        if not attempt_id:
+            raise ValueError("ATTEMPT_IDENTITY_REQUIRED: attempt_id is required for checkpoints")
+        if "lease_generation" not in payload:
+            raise ValueError(
+                "ATTEMPT_IDENTITY_REQUIRED: lease_generation is required for checkpoints"
+            )
+        lease_generation = int(payload["lease_generation"])
+
         checkpoint = EvidenceCheckpoint(
             checkpoint_id=f"chk_{uuid.uuid4().hex[:12]}",
             work_item_id=payload["work_item_id"],
-            attempt_id=payload.get("attempt_id"),
+            attempt_id=attempt_id,
             boundary=payload["boundary"],
             snapshot_path=payload["snapshot_path"],
             snapshot_sha256=payload["snapshot_sha256"],
@@ -393,7 +413,9 @@ class ConductorCommandProcessor:
             observed_gate_state=payload.get("observed_gate_state", "PASS"),
             observed_head=payload.get("observed_head"),
         )
-        self.store.save_checkpoint(checkpoint)
+        self.store.save_checkpoint_fenced(
+            checkpoint, attempt_id=attempt_id, lease_generation=lease_generation
+        )
         return {"checkpoint_id": checkpoint.checkpoint_id, "status": "RECORDED"}
 
     def _handle_complete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -401,13 +423,21 @@ class ConductorCommandProcessor:
         work_item_id = payload["work_item_id"]
         attempt_id = payload.get("attempt_id")
         actor = payload.get("actor", "host")
+        if not attempt_id:
+            raise ValueError("ATTEMPT_IDENTITY_REQUIRED: attempt_id is required for completion")
+        if "lease_generation" not in payload:
+            raise ValueError(
+                "ATTEMPT_IDENTITY_REQUIRED: lease_generation is required for completion"
+            )
+        lease_generation = int(payload["lease_generation"])
 
-        self.store.transition_work_item_state(
+        self.store.complete_work_item_fenced(
             work_item_id=work_item_id,
             target_state=WorkItemState.COMPLETED,
             actor=actor,
             reason_code="WORK_ITEM_COMPLETED",
             attempt_id=attempt_id,
+            lease_generation=lease_generation,
             details=payload.get("details"),
         )
 
