@@ -342,6 +342,19 @@ class HostResourceManager:
         ).fetchone()
         return revoked_req is not None
 
+    def _persist_stale_slot_sweep_on_isolated_connection(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        actor: str = "resource-adapter",
+    ) -> None:
+        """Commit revocation/receipt side effects outside the caller's rolled-back transaction."""
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._sweep_stale_slots_locked(
+                conn, now=now or _now(), actor=actor, include_active=True
+            )
+
     def request(
         self,
         *,
@@ -397,10 +410,8 @@ class HostResourceManager:
             self._sweep_stale_slots_locked(conn, now=now, actor=actor, include_active=True)
 
             if self._attempt_is_revoked_locked(conn, attempt_id):
-                # Commit revocation/promotion from the sweep before refusing the caller;
-                # raising inside the transaction would roll the reap back with the error.
-                conn.commit()
-                self.store.flush_pending_receipts(conn)
+                conn.rollback()
+                self._persist_stale_slot_sweep_on_isolated_connection(now=now, actor=actor)
                 raise ResourceAdmissionError("ATTEMPT_REVOKED")
 
             request_id = f"rr_{uuid.uuid4().hex[:12]}"

@@ -466,13 +466,16 @@ def test_post_reap_completion_checkpoint_and_heartbeat_rejected(processor: Condu
         ).fetchone() is None
 
 
-def test_interleaved_reap_blocks_completion_in_one_transaction(processor: ConductorCommandProcessor):
+def test_interleaved_reap_blocks_worker_writes_in_one_transaction(processor: ConductorCommandProcessor):
     from scripts.conductor_resources import HostResourceManager, DEFAULT_LEASE_TTL_SECONDS
 
-    work_item_id, attempt_id, _, lease_generation = _enqueue_claim_running(processor, "intra")
+    work_item_id, attempt_id, lease_id, lease_generation = _enqueue_claim_running(
+        processor, "intra"
+    )
     manager = HostResourceManager(processor.store, resource_key="host:heavy")
     manager.request(purpose="pytest_heavy", attempt_id=attempt_id, agent_instance="claude_host")
     future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+
     def _reap_between_check_and_write(point, conn, **kwargs):
         manager._sweep_stale_slots_locked(
             conn, now=future, actor="test-interleave", include_active=True
@@ -480,6 +483,7 @@ def test_interleaved_reap_blocks_completion_in_one_transaction(processor: Conduc
         conn.commit()
 
     processor.store._mutation_interleave_hook = _reap_between_check_and_write
+
     complete = processor.process_envelope(
         CommandEnvelope(
             command_id="cmd_comp_intra",
@@ -492,9 +496,48 @@ def test_interleaved_reap_blocks_completion_in_one_transaction(processor: Conduc
             idempotency_key="idemp_comp_intra",
         )
     )
-    processor.store._mutation_interleave_hook = None
     assert complete.status == "ERROR"
     assert "REAPED_LEASE_REJECTED" in complete.error_message
+
+    checkpoint = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_chk_intra",
+            command_type="checkpoint",
+            payload={
+                "work_item_id": work_item_id,
+                "attempt_id": attempt_id,
+                "lease_generation": lease_generation,
+                "boundary": "pre_dispatch",
+                "snapshot_path": "/tmp/snap",
+                "snapshot_sha256": "abc",
+                "snapshot_id": "snap1",
+            },
+            idempotency_key="idemp_chk_intra",
+        )
+    )
+    assert checkpoint.status == "ERROR"
+    assert "REAPED_LEASE_REJECTED" in checkpoint.error_message
+
+    heartbeat = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_hb_intra",
+            command_type="heartbeat",
+            payload={
+                "lease_id": lease_id,
+                "attempt_id": attempt_id,
+                "lease_generation": lease_generation,
+                "sequence": 5,
+            },
+            idempotency_key="idemp_hb_intra",
+        )
+    )
+    assert heartbeat.status == "ERROR"
+    assert (
+        "REAPED_LEASE_REJECTED" in heartbeat.error_message
+        or "HEARTBEAT_REJECTED" in heartbeat.error_message
+    )
+
+    processor.store._mutation_interleave_hook = None
 
     with processor.store._connection() as conn:
         att = conn.execute(
