@@ -819,25 +819,85 @@ def test_rollback_leaves_no_orphan_receipt_file(tmp_path: pathlib.Path):
     assert receipt_file.exists()
 
 
-def test_flush_pending_receipts_after_manual_commit(tmp_path: pathlib.Path):
+def test_inherited_child_busy_commits_quarantine_before_refusal(tmp_path: pathlib.Path):
+    from scripts.conductor_commands import ConductorCommandProcessor
+    from scripts.conductor_model import CommandEnvelope
+    from scripts.conductor_model import HostResourceRequestState
+
+    store = ConductorStore(root_dir=tmp_path)
+    processor = ConductorCommandProcessor(store=store)
+    parent = processor.resources.request(
+        purpose="pytest_full", attempt_id="parent-rcpt", agent_instance="inst-parent"
+    )
+    processor.resources.request(
+        purpose="pytest_heavy",
+        attempt_id="child-rcpt-1",
+        agent_instance="inst-parent",
+        parent_lease_id=parent["lease_id"],
+    )
+    receipt = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_child_busy",
+            command_type="resource_request",
+            payload={
+                "purpose": "pytest_heavy",
+                "attempt_id": "child-rcpt-2",
+                "agent_instance": "inst-parent",
+                "parent_lease_id": parent["lease_id"],
+                "idempotency_key": "idemp_child_busy_rcpt",
+            },
+            idempotency_key="idemp_child_busy_rcpt",
+        )
+    )
+    assert receipt.status == "ERROR"
+    assert "INHERITED_CHILD_BUSY" in receipt.error_message
+
+    with store._connection() as conn:
+        row = conn.execute(
+            "SELECT command_id FROM receipts WHERE idempotency_key = ?",
+            ("idemp_child_busy_rcpt",),
+        ).fetchone()
+        assert row is not None
+        receipt_file = store.receipts_dir / f"receipt_{row['command_id']}.json"
+        assert receipt_file.exists()
+        quar = conn.execute(
+            """
+            SELECT 1 FROM host_resource_requests
+            WHERE attempt_id = ? AND state = ? AND reason_code = ?
+            """,
+            ("child-rcpt-2", HostResourceRequestState.QUARANTINED.value, "INHERITED_CHILD_BUSY"),
+        ).fetchone()
+        assert quar is not None
+
+
+def test_receipt_files_recovered_from_db_on_store_reopen(tmp_path: pathlib.Path, monkeypatch):
     store = ConductorStore(root_dir=tmp_path)
     receipt = Receipt(
-        receipt_id="rcp_manual_commit",
-        command_id="cmd_manual_commit",
-        idempotency_key="idemp_manual_commit",
+        receipt_id="rcp_restart",
+        command_id="cmd_restart",
+        idempotency_key="idemp_restart",
         status="SUCCESS",
         result={"ok": True},
     )
-    receipt_file = store.receipts_dir / f"receipt_{receipt.command_id}.json"
-    with pytest.raises(RuntimeError, match="simulated inherited-child-busy"):
-        with store._connection() as conn:
-            store.save_receipt(receipt, conn=conn)
-            conn.commit()
-            store.flush_pending_receipts(conn)
-            raise RuntimeError("simulated inherited-child-busy exit")
 
-    assert store.get_receipt(receipt.idempotency_key) is not None
+    calls = {"n": 0}
+    real_write = store.write_receipt_file
+
+    def flaky_write(r: Receipt) -> pathlib.Path:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated receipt write failure")
+        return real_write(r)
+
+    monkeypatch.setattr(store, "write_receipt_file", flaky_write)
+    store.save_receipt(receipt)
+    receipt_file = store.receipts_dir / f"receipt_{receipt.command_id}.json"
+    assert not receipt_file.exists()
+
+    reopened = ConductorStore(root_dir=tmp_path)
     assert receipt_file.exists()
+    processor_cmd = reopened.receipts_dir / f"receipt_{receipt.command_id}.json"
+    assert processor_cmd.exists()
 
 
 def test_receipt_file_write_failure_does_not_lose_committed_receipt(tmp_path: pathlib.Path, monkeypatch):

@@ -323,6 +323,25 @@ class HostResourceManager:
                     HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
                 )
 
+    @staticmethod
+    def _attempt_is_revoked_locked(conn, attempt_id: str) -> bool:
+        att_row = conn.execute(
+            "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        if att_row and (
+            att_row["status"] == "UNKNOWN"
+            or att_row["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+        ):
+            return True
+        revoked_req = conn.execute(
+            """
+            SELECT 1 FROM host_resource_requests
+            WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+            """,
+            (attempt_id,),
+        ).fetchone()
+        return revoked_req is not None
+
     def request(
         self,
         *,
@@ -377,21 +396,11 @@ class HostResourceManager:
             # Sweep stale slots across pools before deciding capacity
             self._sweep_stale_slots_locked(conn, now=now, actor=actor, include_active=True)
 
-            att_row = conn.execute(
-                "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_id,)
-            ).fetchone()
-            if att_row and (
-                att_row["status"] == "UNKNOWN" or att_row["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
-            ):
-                raise ResourceAdmissionError("ATTEMPT_REVOKED")
-            revoked_req = conn.execute(
-                """
-                SELECT 1 FROM host_resource_requests
-                WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
-                """,
-                (attempt_id,),
-            ).fetchone()
-            if revoked_req:
+            if self._attempt_is_revoked_locked(conn, attempt_id):
+                # Commit revocation/promotion from the sweep before refusing the caller;
+                # raising inside the transaction would roll the reap back with the error.
+                conn.commit()
+                self.store.flush_pending_receipts(conn)
                 raise ResourceAdmissionError("ATTEMPT_REVOKED")
 
             request_id = f"rr_{uuid.uuid4().hex[:12]}"

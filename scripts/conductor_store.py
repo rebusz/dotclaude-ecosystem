@@ -1080,6 +1080,7 @@ class ConductorStore:
             Callable[..., None]
         ] = None
         self._init_db()
+        self._reconcile_pending_receipt_files_from_db()
 
     def _ensure_directories(self) -> None:
         """Create owned storage directory structure."""
@@ -1663,6 +1664,35 @@ class ConductorStore:
                 still_pending.append(receipt)
         self._receipt_delivery_backlog = still_pending
 
+    def _reconcile_pending_receipt_files_from_db(self) -> None:
+        """Derive undelivered receipt files from committed DB rows (survives restart)."""
+        with self._connection() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipts'"
+            ).fetchone():
+                return
+            rows = conn.execute("SELECT * FROM receipts").fetchall()
+        pending_ids = {r.command_id for r in self._receipt_delivery_backlog}
+        for row in rows:
+            receipt_file = self.receipts_dir / f"receipt_{row['command_id']}.json"
+            if receipt_file.exists():
+                continue
+            if row["command_id"] in pending_ids:
+                continue
+            self._receipt_delivery_backlog.append(
+                Receipt(
+                    receipt_id=row["receipt_id"],
+                    command_id=row["command_id"],
+                    idempotency_key=row["idempotency_key"],
+                    status=row["status"],
+                    result=json.loads(row["result_json"]),
+                    error_message=row["error_message"],
+                    processed_at_utc=row["processed_at_utc"],
+                    schema_version=row["schema_version"],
+                )
+            )
+        self.ensure_receipt_files_delivered()
+
     def _ensure_receipt_file_on_disk(self, receipt: Receipt) -> None:
         receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
         if receipt_file.exists():
@@ -1720,14 +1750,40 @@ class ConductorStore:
                 "publish rejected and outcome remains UNKNOWN"
             )
 
+        wi_id = work_item_id if work_item_id is not None else att["work_item_id"]
+        current_claim = conn.execute(
+            """
+            SELECT attempt_id FROM claims
+            WHERE work_item_id = ?
+            ORDER BY claimed_at_utc DESC
+            LIMIT 1
+            """,
+            (wi_id,),
+        ).fetchone()
+        if current_claim and current_claim["attempt_id"] != attempt_id:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: attempt {attempt_id} is not the current owner of "
+                f"work item {wi_id} (current claim is {current_claim['attempt_id']}); "
+                "publish rejected"
+            )
+
         lease = conn.execute(
-            "SELECT lease_id, attempt_id, lease_generation FROM leases WHERE attempt_id = ?",
+            """
+            SELECT lease_id, attempt_id, lease_generation, expires_at_utc
+            FROM leases WHERE attempt_id = ?
+            """,
             (attempt_id,),
         ).fetchone()
         if lease is None:
             raise ValueError(
                 f"{REAPED_LEASE_REJECTED}: lease for attempt {attempt_id} not found or revoked; "
                 "publish rejected and outcome remains UNKNOWN"
+            )
+        now = datetime.now(timezone.utc)
+        if lease["expires_at_utc"] and parse_iso_or_expired(lease["expires_at_utc"]) <= now:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: lease for attempt {attempt_id} has expired; "
+                "publish rejected"
             )
         if lease_id is not None and lease["lease_id"] != lease_id:
             raise ValueError(

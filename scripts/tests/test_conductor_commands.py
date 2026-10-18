@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 import pathlib
+from unittest.mock import patch
+
 import pytest
 
 from scripts.conductor_commands import ConductorCommandProcessor
@@ -471,11 +473,11 @@ def test_interleaved_reap_blocks_completion_in_one_transaction(processor: Conduc
     manager = HostResourceManager(processor.store, resource_key="host:heavy")
     manager.request(purpose="pytest_heavy", attempt_id=attempt_id, agent_instance="claude_host")
     future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
-
     def _reap_between_check_and_write(point, conn, **kwargs):
         manager._sweep_stale_slots_locked(
             conn, now=future, actor="test-interleave", include_active=True
         )
+        conn.commit()
 
     processor.store._mutation_interleave_hook = _reap_between_check_and_write
     complete = processor.process_envelope(
@@ -493,3 +495,130 @@ def test_interleaved_reap_blocks_completion_in_one_transaction(processor: Conduc
     processor.store._mutation_interleave_hook = None
     assert complete.status == "ERROR"
     assert "REAPED_LEASE_REJECTED" in complete.error_message
+
+    with processor.store._connection() as conn:
+        att = conn.execute(
+            "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        assert att["status"] == "UNKNOWN"
+        assert conn.execute(
+            "SELECT 1 FROM leases WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone() is None
+        req_row = conn.execute(
+            """
+            SELECT request_id FROM host_resource_requests
+            WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+            """,
+            (attempt_id,),
+        ).fetchone()
+        assert req_row is not None
+        assert conn.execute(
+            "SELECT 1 FROM receipts WHERE idempotency_key = ?",
+            (f"stale_slot_auto_release_{req_row['request_id']}",),
+        ).fetchone() is not None
+
+
+def test_superseded_attempt_worker_writes_rejected_after_replacement_claim(
+    processor: ConductorCommandProcessor,
+):
+    from scripts.conductor_resources import HostResourceManager
+
+    wi_a, attempt_a, lease_id_a, gen_a = _enqueue_claim_running(processor, "owner_a")
+    manager = HostResourceManager(processor.store, resource_key="host:heavy")
+    manager.request(purpose="pytest_heavy", attempt_id=attempt_a, agent_instance="claude_host")
+
+    lease_id = lease_id_a
+    past_iso = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    with processor.store._connection() as conn:
+        conn.execute("UPDATE leases SET expires_at_utc = ? WHERE lease_id = ?", (past_iso, lease_id))
+
+    processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_rec_replace",
+            command_type="reconcile",
+            payload={"dry_run": False},
+            idempotency_key="idemp_rec_replace",
+        )
+    )
+    processor.store.transition_work_item_state(
+        work_item_id=wi_a,
+        target_state=WorkItemState.READY,
+        actor="operator",
+        reason_code="READY_AFTER_RECOVERY",
+    )
+
+    claim_b = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_claim_owner_b",
+            command_type="claim",
+            payload={"work_item_id": wi_a, "claimed_by_host": "claude_host"},
+            idempotency_key="idemp_claim_owner_b",
+        )
+    )
+    attempt_b = claim_b.result["attempt_id"]
+    gen_b = int(claim_b.result.get("lease_generation", 1))
+    for state, reason in (
+        (WorkItemState.DISPATCHING, "DISPATCH_START"),
+        (WorkItemState.RUNNING, "DISPATCH_RUNNING"),
+    ):
+        processor.store.transition_work_item_state(
+            work_item_id=wi_a,
+            target_state=state,
+            actor="claude_host",
+            reason_code=reason,
+            attempt_id=attempt_b,
+        )
+
+    complete = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_comp_old_owner",
+            command_type="complete",
+            payload={
+                "work_item_id": wi_a,
+                "attempt_id": attempt_a,
+                "lease_generation": gen_a,
+            },
+            idempotency_key="idemp_comp_old_owner",
+        )
+    )
+    assert complete.status == "ERROR"
+    assert "REAPED_LEASE_REJECTED" in complete.error_message
+
+    checkpoint = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_chk_old_owner",
+            command_type="checkpoint",
+            payload={
+                "work_item_id": wi_a,
+                "attempt_id": attempt_a,
+                "lease_generation": gen_a,
+                "boundary": "pre_dispatch",
+                "snapshot_path": "/tmp/snap",
+                "snapshot_sha256": "abc",
+                "snapshot_id": "snap1",
+            },
+            idempotency_key="idemp_chk_old_owner",
+        )
+    )
+    assert checkpoint.status == "ERROR"
+    assert "REAPED_LEASE_REJECTED" in checkpoint.error_message
+
+    heartbeat = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_hb_old_owner",
+            command_type="heartbeat",
+            payload={
+                "lease_id": lease_id_a,
+                "attempt_id": attempt_a,
+                "lease_generation": gen_a,
+                "sequence": 5,
+            },
+            idempotency_key="idemp_hb_old_owner",
+        )
+    )
+    assert heartbeat.status == "ERROR"
+    assert processor.store.get_work_item(wi_a).state == WorkItemState.RUNNING
+    with processor.store._connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM leases WHERE attempt_id = ?", (attempt_b,)
+        ).fetchone() is not None

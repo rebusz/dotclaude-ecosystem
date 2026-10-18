@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 import json
 import os
 import pathlib
@@ -1565,10 +1566,31 @@ def test_reap_does_not_fence_replacement_attempt_work_item(manager: HostResource
         )
     )
     attempt_a = claim_a.result["attempt_id"]
+    lease_id_a = claim_a.result["lease_id"]
     manager.request(purpose="pytest_heavy", attempt_id=attempt_a, agent_instance="host")
+    for state, reason in (
+        (WorkItemState.DISPATCHING, "DISPATCH_START"),
+        (WorkItemState.RUNNING, "DISPATCH_RUNNING"),
+    ):
+        manager.store.transition_work_item_state(
+            work_item_id=work_item_id,
+            target_state=state,
+            actor="host",
+            reason_code=reason,
+            attempt_id=attempt_a,
+        )
 
-    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
-    manager.sweep_stale_slots(now=future)
+    past_iso = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE leases SET expires_at_utc = ? WHERE lease_id = ?", (past_iso, lease_id_a))
+    processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_rec_replace_fence",
+            command_type="reconcile",
+            payload={"dry_run": False},
+            idempotency_key="idemp_rec_replace_fence",
+        )
+    )
     manager.store.transition_work_item_state(
         work_item_id=work_item_id,
         target_state=WorkItemState.READY,
@@ -1597,20 +1619,63 @@ def test_reap_does_not_fence_replacement_attempt_work_item(manager: HostResource
             attempt_id=attempt_b,
         )
 
-    manager.sweep_stale_slots(now=future + timedelta(seconds=500))
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+    sweep = manager.sweep_stale_slots(now=future + timedelta(seconds=500))
+    assert sweep["swept_count"] >= 1
     item = manager.store.get_work_item(work_item_id)
     assert item.state == WorkItemState.RUNNING
     with manager.store._connection() as conn:
         lease_b = conn.execute("SELECT 1 FROM leases WHERE attempt_id = ?", (attempt_b,)).fetchone()
         assert lease_b is not None
+        att_a = conn.execute(
+            "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_a,)
+        ).fetchone()
+        assert att_a["status"] == "UNKNOWN"
+        req_a = manager.store.get_resource_request(
+            next(
+                r.request_id
+                for r in manager.store.list_resource_requests()
+                if r.attempt_id == attempt_a
+            )
+        )
+        assert req_a.state == HostResourceRequestState.RELEASED
 
 
 def test_revoked_attempt_cannot_be_readmitted(manager: HostResourceManager):
     req = manager.request(purpose="pytest_heavy", attempt_id="at-revoked", agent_instance="ag-r")
-    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
-    manager.sweep_stale_slots(now=future)
-    with pytest.raises(ResourceAdmissionError, match="ATTEMPT_REVOKED"):
-        manager.request(purpose="pytest_heavy", attempt_id="at-revoked", agent_instance="ag-r2")
+    queued = manager.request(purpose="pytest_heavy", attempt_id="at-revoked-queued", agent_instance="ag-q")
+    assert queued["state"] == HostResourceRequestState.QUEUED.value
+    stale_created = (
+        datetime.now(timezone.utc) - timedelta(seconds=get_stale_slot_ttl_seconds() + 120)
+    ).isoformat()
+    expired_lease = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    with manager.store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            (stale_created, req["request_id"]),
+        )
+        conn.execute(
+            "UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE request_id = ?",
+            (expired_lease, expired_lease, req["request_id"]),
+        )
+    sweep_now = datetime.now(timezone.utc) + timedelta(seconds=get_stale_slot_ttl_seconds() + 60)
+    with patch("scripts.conductor_resources._now", return_value=sweep_now):
+        with pytest.raises(ResourceAdmissionError, match="ATTEMPT_REVOKED"):
+            manager.request(purpose="pytest_heavy", attempt_id="at-revoked", agent_instance="ag-r2")
+
+    released = manager.store.get_resource_request(req["request_id"])
+    assert released.state == HostResourceRequestState.RELEASED
+    assert released.reason_code == "STALE_SLOT_AUTO_RELEASED"
+    with manager.store._connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM host_resource_leases WHERE request_id = ?", (req["request_id"],)
+        ).fetchone() is None
+        assert conn.execute(
+            "SELECT 1 FROM receipts WHERE idempotency_key = ?",
+            (f"stale_slot_auto_release_{req['request_id']}",),
+        ).fetchone() is not None
+    promoted = manager.store.get_resource_request(queued["request_id"])
+    assert promoted.state == HostResourceRequestState.ACTIVE
 
 
 
