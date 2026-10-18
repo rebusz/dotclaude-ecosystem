@@ -261,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  Holder: {holder_id}")
                     print(f"  Queue Depth: {len(res.get('queue', []))}")
                     print(f"  Fenced Count: {len(res.get('fenced', []))}")
+                    print(f"  Sweepable Count: {res.get('sweepable_count', 0)}")
                     print(f"  Quarantined Count: {len(res.get('quarantined', []))}")
                     print()
             return 0
@@ -279,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Holder: {holder_id}")
             print(f"  Queue Depth: {len(result.get('queue', []))}")
             print(f"  Fenced Count: {len(result.get('fenced', []))}")
+            print(f"  Sweepable Count: {result.get('sweepable_count', 0)}")
             print(f"  Quarantined Count: {len(result.get('quarantined', []))}")
         return 0
 

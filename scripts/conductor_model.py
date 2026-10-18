@@ -226,6 +226,7 @@ class Lease:
     heartbeat_sequence: int
     expires_at_utc: str
     last_heartbeat_utc: str = field(default_factory=current_utc_iso)
+    lease_generation: int = 1
     schema_version: str = SCHEMA_LEASE
 
     def to_dict(self) -> Dict[str, Any]:
