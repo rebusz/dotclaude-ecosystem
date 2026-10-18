@@ -802,13 +802,17 @@ class HostResourceManager:
                         (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
                     )
 
-                    # (H2) Revoke the lease row in host_resource_leases
+                    # (H2) Revoke the lease row this request owns. A row reached
+                    # only through parent_lease_id belongs to the parent and
+                    # must stay while that parent may still be running.
                     conn.execute(
                         "DELETE FROM host_resource_leases WHERE request_id = ?", (req_id,)
                     )
-                    if lease_id and state != HostResourceRequestState.INHERITED.value:
+                    owns_lease = lease_row is not None and lease_row["request_id"] == req_id
+                    if owns_lease and state != HostResourceRequestState.INHERITED.value:
                         conn.execute(
-                            "DELETE FROM host_resource_leases WHERE lease_id = ?", (lease_id,)
+                            "DELETE FROM host_resource_leases WHERE lease_id = ?",
+                            (lease_row["lease_id"],),
                         )
 
                     # (H2) Mark associated attempt outcome as UNKNOWN and revoke lease in leases:

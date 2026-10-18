@@ -2040,4 +2040,71 @@ def test_reconcile_drains_another_writers_undelivered_receipt(
         ).fetchone()[0] == 1
 
 
+def test_sweep_of_non_inherited_child_does_not_delete_parent_lease(manager: HostResourceManager):
+    """A stale non-inherited child that only points at parent_lease_id must not free the parent.
+
+    Public admission never stores parent_lease_id on a QUEUED or ACTIVE row.
+    The production path that does is an inherited child (no lease of its own)
+    fenced by _mark_recovery, which leaves RECOVERY_REQUIRED and parent_lease_id.
+    Sweeping that child used to DELETE the parent's lease row.
+    """
+    parent = manager.request(purpose="pytest_heavy", attempt_id="at-parent-live", agent_instance="ag-parent")
+    parent_id = parent["request_id"]
+    parent_lease_id = parent["lease_id"]
+    child = manager.request(
+        purpose="pytest_heavy",
+        attempt_id="at-child-stale",
+        agent_instance="ag-child",
+        parent_lease_id=parent_lease_id,
+    )
+    child_id = child["request_id"]
+    assert child["state"] == HostResourceRequestState.INHERITED.value
+    assert child["lease_id"] == parent_lease_id
+
+    manager._mark_recovery(child_id, reason="PYTEST_TERMINATION_AMBIGUOUS")
+    fenced = manager.store.get_resource_request(child_id)
+    assert fenced.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert fenced.parent_lease_id == parent_lease_id
+
+    now = datetime.now(timezone.utc)
+    stale_iso = _iso(now - timedelta(seconds=get_stale_slot_ttl_seconds() + 120))
+    live_pid = os.getpid()
+    live_start = psutil.Process(live_pid).create_time()
+    with manager.store._connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM host_resource_leases WHERE request_id = ?", (child_id,)
+        ).fetchone() is None
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET owner_process_pid = ?, owner_process_start_time = ?, owner_last_seen_at_utc = ?
+            WHERE request_id = ?
+            """,
+            (live_pid, live_start, _iso(now), parent_id),
+        )
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET created_at_utc = ?, owner_last_seen_at_utc = NULL
+            WHERE request_id = ?
+            """,
+            (stale_iso, child_id),
+        )
+        conn.execute(
+            "UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?",
+            (stale_iso, child_id),
+        )
+        conn.execute(
+            "UPDATE host_resource_leases SET last_heartbeat_utc = ? WHERE lease_id = ?",
+            (stale_iso, parent_lease_id),
+        )
+
+    sweep = manager.sweep_stale_slots(now=now)
+    assert child_id in sweep["swept_request_ids"]
+    assert manager.store.get_resource_request(child_id).state == HostResourceRequestState.RELEASED
+    assert parent_id not in sweep["swept_request_ids"]
+    assert manager.store.get_resource_request(parent_id).state == HostResourceRequestState.ACTIVE
+    assert manager.store.get_resource_lease(parent_lease_id) is not None
+
+
 
