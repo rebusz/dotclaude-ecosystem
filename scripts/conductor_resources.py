@@ -377,6 +377,23 @@ class HostResourceManager:
             # Sweep stale slots across pools before deciding capacity
             self._sweep_stale_slots_locked(conn, now=now, actor=actor, include_active=True)
 
+            att_row = conn.execute(
+                "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()
+            if att_row and (
+                att_row["status"] == "UNKNOWN" or att_row["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+            ):
+                raise ResourceAdmissionError("ATTEMPT_REVOKED")
+            revoked_req = conn.execute(
+                """
+                SELECT 1 FROM host_resource_requests
+                WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if revoked_req:
+                raise ResourceAdmissionError("ATTEMPT_REVOKED")
+
             request_id = f"rr_{uuid.uuid4().hex[:12]}"
 
             if inherited_id:
@@ -428,6 +445,7 @@ class HostResourceManager:
                         # exception; otherwise the connection context would
                         # roll the quarantine row back with the failed call.
                         conn.commit()
+                        self.store.flush_pending_receipts(conn)
                         raise ResourceBusyError("INHERITED_CHILD_BUSY")
 
                     request = HostResourceRequest(
@@ -750,6 +768,20 @@ class HostResourceManager:
                     attempt_id = req["attempt_id"]
                     if attempt_id:
                         conn.execute(
+                            """
+                            UPDATE host_resource_requests
+                            SET state = ?, released_at_utc = ?, reason_code = ?
+                            WHERE attempt_id = ? AND state = ?
+                            """,
+                            (
+                                HostResourceRequestState.RELEASED.value,
+                                now_iso,
+                                "STALE_SLOT_AUTO_RELEASED",
+                                attempt_id,
+                                HostResourceRequestState.QUEUED.value,
+                            ),
+                        )
+                        conn.execute(
                             "DELETE FROM leases WHERE attempt_id = ?", (attempt_id,)
                         )
                         conn.execute(
@@ -765,43 +797,57 @@ class HostResourceManager:
                         ).fetchone()
                         if att_row and att_row["work_item_id"]:
                             wi_id = att_row["work_item_id"]
-                            wi_row = conn.execute(
-                                "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
+                            owner = conn.execute(
+                                """
+                                SELECT attempt_id FROM claims
+                                WHERE work_item_id = ?
+                                ORDER BY claimed_at_utc DESC LIMIT 1
+                                """,
+                                (wi_id,),
                             ).fetchone()
-                            if wi_row and wi_row["state"] in (
-                                WorkItemState.CLAIMED.value,
-                                WorkItemState.DISPATCHING.value,
-                                WorkItemState.RUNNING.value,
-                                WorkItemState.WAITING_EXTERNAL.value,
-                                WorkItemState.REVIEW.value,
-                                WorkItemState.RECOVERY_REQUIRED.value,
-                            ):
-                                old_wi_st = wi_row["state"]
-                                target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
-                                conn.execute(
-                                    "UPDATE work_items SET state = ? WHERE work_item_id = ?",
-                                    (target_wi_st, wi_id),
-                                )
-                                conn.execute(
-                                    """
-                                    INSERT INTO events (
-                                        event_id, work_item_id, attempt_id, previous_state, next_state,
-                                        actor_identity, reason_code, recorded_at_utc, details_json, schema_version
-                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    """,
-                                    (
-                                        f"evt_{uuid.uuid4().hex[:12]}",
-                                        wi_id,
-                                        attempt_id,
-                                        old_wi_st,
-                                        target_wi_st,
-                                        actor,
-                                        "STALE_SLOT_AUTO_RELEASED",
-                                        now_iso,
-                                        json.dumps({"outcome": "UNKNOWN", "stale_slot_auto_released": True}),
-                                        "conductor.event.v1",
-                                    ),
-                                )
+                            if owner is None or owner["attempt_id"] == attempt_id:
+                                wi_row = conn.execute(
+                                    "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
+                                ).fetchone()
+                                if wi_row and wi_row["state"] in (
+                                    WorkItemState.CLAIMED.value,
+                                    WorkItemState.DISPATCHING.value,
+                                    WorkItemState.RUNNING.value,
+                                    WorkItemState.WAITING_EXTERNAL.value,
+                                    WorkItemState.REVIEW.value,
+                                    WorkItemState.RECOVERY_REQUIRED.value,
+                                ):
+                                    old_wi_st = wi_row["state"]
+                                    target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
+                                    conn.execute(
+                                        """
+                                        UPDATE work_items SET state = ?
+                                        WHERE work_item_id = ? AND work_item_id IN (
+                                            SELECT work_item_id FROM attempts WHERE attempt_id = ?
+                                        )
+                                        """,
+                                        (target_wi_st, wi_id, attempt_id),
+                                    )
+                                    conn.execute(
+                                        """
+                                        INSERT INTO events (
+                                            event_id, work_item_id, attempt_id, previous_state, next_state,
+                                            actor_identity, reason_code, recorded_at_utc, details_json, schema_version
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        """,
+                                        (
+                                            f"evt_{uuid.uuid4().hex[:12]}",
+                                            wi_id,
+                                            attempt_id,
+                                            old_wi_st,
+                                            target_wi_st,
+                                            actor,
+                                            "STALE_SLOT_AUTO_RELEASED",
+                                            now_iso,
+                                            json.dumps({"outcome": "UNKNOWN", "stale_slot_auto_released": True}),
+                                            "conductor.event.v1",
+                                        ),
+                                    )
 
                     self._event(
                         conn,
@@ -1618,6 +1664,15 @@ class HostResourceManager:
                 # Documented choice: When the head of the queue is blocked only by slot exclusivity,
                 # promotion skips it and takes the next eligible request (non-strict FIFO for slot exclusivity).
                 continue
+            q_attempt = qrow["attempt_id"]
+            if q_attempt:
+                q_att = conn.execute(
+                    "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (q_attempt,)
+                ).fetchone()
+                if q_att and (
+                    q_att["status"] == "UNKNOWN" or q_att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+                ):
+                    continue
             eligible_row = qrow
             break
 

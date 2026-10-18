@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import tempfile
 import time
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 import uuid
 
 from scripts.conductor_model import (
@@ -1049,7 +1049,10 @@ read_resource_pool_status = read_host_resource_status
 
 # The newest schema this build knows how to migrate to. A store above it is a
 # downgrade, and downgrades corrupt (audit C9).
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
+
+REAPED_LEASE_REJECTED = "REAPED_LEASE_REJECTED"
+ATTEMPT_IDENTITY_REQUIRED = "ATTEMPT_IDENTITY_REQUIRED"
 
 
 class ConductorStore:
@@ -1072,6 +1075,10 @@ class ConductorStore:
         self._ensure_directories()
         self.leader_id = f"leader_{uuid.uuid4().hex[:12]}"
         self._pending_receipts: Dict[int, List[Receipt]] = {}
+        self._receipt_delivery_backlog: List[Receipt] = []
+        self._mutation_interleave_hook: Optional[
+            Callable[..., None]
+        ] = None
         self._init_db()
 
     def _ensure_directories(self) -> None:
@@ -1101,7 +1108,10 @@ class ConductorStore:
                 yield conn
             # Commit succeeded! Write staged receipt files to disk after commit:
             for receipt in self._pending_receipts.pop(conn_id, []):
-                self.write_receipt_file(receipt)
+                try:
+                    self.write_receipt_file(receipt)
+                except Exception:
+                    self._receipt_delivery_backlog.append(receipt)
         finally:
             self._pending_receipts.pop(conn_id, None)
             conn.close()
@@ -1513,6 +1523,22 @@ class ConductorStore:
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (7, datetime('now'))"
                 )
 
+            if current_version < 8:
+                leases_table = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='leases'"
+                ).fetchone()
+                if leases_table is not None:
+                    lease_columns = {
+                        row[1] for row in conn.execute("PRAGMA table_info(leases)").fetchall()
+                    }
+                    if "lease_generation" not in lease_columns:
+                        conn.execute(
+                            "ALTER TABLE leases ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 1"
+                        )
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (8, datetime('now'))"
+                )
+
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
         current_pid = os.getpid()
@@ -1622,7 +1648,99 @@ class ConductorStore:
     def flush_pending_receipts(self, conn: sqlite3.Connection) -> None:
         """Write any staged receipts to disk (e.g. after manual conn.commit())."""
         for receipt in self._pending_receipts.pop(id(conn), []):
+            try:
+                self.write_receipt_file(receipt)
+            except Exception:
+                self._receipt_delivery_backlog.append(receipt)
+
+    def ensure_receipt_files_delivered(self) -> None:
+        """Best-effort flush of receipt files that failed to write after commit."""
+        still_pending: List[Receipt] = []
+        for receipt in self._receipt_delivery_backlog:
+            try:
+                self.write_receipt_file(receipt)
+            except Exception:
+                still_pending.append(receipt)
+        self._receipt_delivery_backlog = still_pending
+
+    def _ensure_receipt_file_on_disk(self, receipt: Receipt) -> None:
+        receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
+        if receipt_file.exists():
+            return
+        try:
             self.write_receipt_file(receipt)
+        except Exception:
+            if receipt not in self._receipt_delivery_backlog:
+                self._receipt_delivery_backlog.append(receipt)
+
+    @staticmethod
+    def _attempt_is_revoked_row(att: sqlite3.Row) -> bool:
+        return att["status"] == "UNKNOWN" or att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+
+    def _validate_worker_attempt_fence_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        attempt_id: Optional[str],
+        work_item_id: Optional[str] = None,
+        lease_id: Optional[str] = None,
+        lease_generation: Optional[int] = None,
+    ) -> sqlite3.Row:
+        if not attempt_id or not str(attempt_id).strip():
+            raise ValueError(f"{ATTEMPT_IDENTITY_REQUIRED}: attempt_id is required for worker writes")
+
+        att = conn.execute(
+            "SELECT attempt_id, work_item_id, status, reason_code FROM attempts WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if att is None:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: attempt {attempt_id} does not exist; publish rejected"
+            )
+        if work_item_id is not None and att["work_item_id"] != work_item_id:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: attempt {attempt_id} does not belong to work item {work_item_id}"
+            )
+        if self._attempt_is_revoked_row(att):
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: attempt {attempt_id} was reaped (STALE_SLOT_AUTO_RELEASED); "
+                "publish rejected and outcome remains UNKNOWN"
+            )
+
+        stale_req = conn.execute(
+            """
+            SELECT request_id FROM host_resource_requests
+            WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+            """,
+            (attempt_id,),
+        ).fetchone()
+        if stale_req:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: host resource for attempt {attempt_id} was auto-released; "
+                "publish rejected and outcome remains UNKNOWN"
+            )
+
+        lease = conn.execute(
+            "SELECT lease_id, attempt_id, lease_generation FROM leases WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if lease is None:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: lease for attempt {attempt_id} not found or revoked; "
+                "publish rejected and outcome remains UNKNOWN"
+            )
+        if lease_id is not None and lease["lease_id"] != lease_id:
+            raise ValueError(
+                f"{REAPED_LEASE_REJECTED}: lease {lease_id} does not match attempt {attempt_id}"
+            )
+        if lease_generation is not None:
+            row_gen = int(lease["lease_generation"] if lease["lease_generation"] is not None else 1)
+            if int(lease_generation) != row_gen:
+                raise ValueError(
+                    f"{REAPED_LEASE_REJECTED}: lease_generation {lease_generation} does not match "
+                    f"recorded generation {row_gen} for attempt {attempt_id}"
+                )
+        return att
 
     def save_receipt(self, receipt: Receipt, conn: Optional[sqlite3.Connection] = None) -> pathlib.Path:
         """Save receipt to database and write atomic receipt file after commit."""
@@ -1672,11 +1790,12 @@ class ConductorStore:
 
     def get_receipt(self, idempotency_key: str) -> Optional[Receipt]:
         """Fetch receipt by idempotency key."""
+        self.ensure_receipt_files_delivered()
         with self._connection() as conn:
             cur = conn.execute("SELECT * FROM receipts WHERE idempotency_key = ?", (idempotency_key,))
             row = cur.fetchone()
             if row:
-                return Receipt(
+                receipt = Receipt(
                     receipt_id=row["receipt_id"],
                     command_id=row["command_id"],
                     idempotency_key=row["idempotency_key"],
@@ -1686,6 +1805,8 @@ class ConductorStore:
                     processed_at_utc=row["processed_at_utc"],
                     schema_version=row["schema_version"],
                 )
+                self._ensure_receipt_file_on_disk(receipt)
+                return receipt
         return None
 
     def save_work_item(self, item: WorkItem) -> None:
@@ -1760,6 +1881,211 @@ class ConductorStore:
             else:
                 cur = conn.execute("SELECT * FROM work_items ORDER BY priority DESC, created_at_utc ASC")
             return [self._row_to_work_item(row) for row in cur.fetchall()]
+
+    def complete_work_item_fenced(
+        self,
+        work_item_id: str,
+        target_state: WorkItemState,
+        actor: str,
+        reason_code: str,
+        attempt_id: str,
+        lease_generation: int,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> WorkItem:
+        """Transition a work item only when attempt identity and lease generation still match."""
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute("SELECT * FROM work_items WHERE work_item_id = ?", (work_item_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"WorkItem {work_item_id} not found")
+
+            current_item = self._row_to_work_item(row)
+            current_state = current_item.state
+
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=attempt_id,
+                work_item_id=work_item_id,
+                lease_generation=lease_generation,
+            )
+            if not can_transition(current_state, target_state):
+                raise ValueError(f"Invalid transition from {current_state} to {target_state}")
+            if self._mutation_interleave_hook is not None:
+                self._mutation_interleave_hook(
+                    "complete",
+                    conn,
+                    work_item_id=work_item_id,
+                    attempt_id=attempt_id,
+                    lease_generation=lease_generation,
+                )
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=attempt_id,
+                work_item_id=work_item_id,
+                lease_generation=lease_generation,
+            )
+
+            now_iso = current_utc_iso()
+            target_val = target_state.value if isinstance(target_state, WorkItemState) else target_state
+            updated = conn.execute(
+                """
+                UPDATE work_items SET state = ?
+                WHERE work_item_id = ?
+                  AND EXISTS (
+                    SELECT 1 FROM attempts a
+                    WHERE a.attempt_id = ? AND a.work_item_id = ?
+                      AND a.status != 'UNKNOWN'
+                      AND (a.reason_code IS NULL OR a.reason_code != 'STALE_SLOT_AUTO_RELEASED')
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM leases l
+                    WHERE l.attempt_id = ? AND l.lease_generation = ?
+                  )
+                """,
+                (target_val, work_item_id, attempt_id, work_item_id, attempt_id, int(lease_generation)),
+            )
+            if updated.rowcount != 1:
+                raise ValueError(
+                    f"{REAPED_LEASE_REJECTED}: work item {work_item_id} completion rejected; "
+                    "attempt revoked or lease generation mismatch"
+                )
+
+            event_id = f"evt_{uuid.uuid4().hex[:12]}"
+            conn.execute(
+                """
+                INSERT INTO events (
+                    event_id, work_item_id, attempt_id, previous_state, next_state,
+                    actor_identity, reason_code, recorded_at_utc, details_json, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    work_item_id,
+                    attempt_id,
+                    current_state.value if isinstance(current_state, WorkItemState) else current_state,
+                    target_val,
+                    actor,
+                    reason_code,
+                    now_iso,
+                    json.dumps(details or {}),
+                    "conductor.event.v1",
+                ),
+            )
+            current_item.state = target_state
+            return current_item
+
+    def save_checkpoint_fenced(
+        self,
+        checkpoint: EvidenceCheckpoint,
+        *,
+        attempt_id: str,
+        lease_generation: int,
+    ) -> None:
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=attempt_id,
+                work_item_id=checkpoint.work_item_id,
+                lease_generation=lease_generation,
+            )
+            if self._mutation_interleave_hook is not None:
+                self._mutation_interleave_hook(
+                    "checkpoint",
+                    conn,
+                    work_item_id=checkpoint.work_item_id,
+                    attempt_id=attempt_id,
+                    lease_generation=lease_generation,
+                )
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=attempt_id,
+                work_item_id=checkpoint.work_item_id,
+                lease_generation=lease_generation,
+            )
+            conn.execute(
+                """
+                INSERT INTO checkpoints (
+                    checkpoint_id, work_item_id, attempt_id, boundary, snapshot_path,
+                    snapshot_sha256, snapshot_id, required_gate, observed_gate_state,
+                    observed_head, recorded_at_utc, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint.checkpoint_id,
+                    checkpoint.work_item_id,
+                    attempt_id,
+                    checkpoint.boundary,
+                    checkpoint.snapshot_path,
+                    checkpoint.snapshot_sha256,
+                    checkpoint.snapshot_id,
+                    checkpoint.required_gate,
+                    checkpoint.observed_gate_state,
+                    checkpoint.observed_head,
+                    checkpoint.recorded_at_utc,
+                    checkpoint.schema_version,
+                ),
+            )
+
+    def extend_lease_heartbeat_fenced(
+        self,
+        lease: Lease,
+        *,
+        lease_generation: int,
+    ) -> bool:
+        """Extend a lease heartbeat without recreating a deleted lease row."""
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=lease.attempt_id,
+                lease_id=lease.lease_id,
+                lease_generation=lease_generation,
+            )
+            if self._mutation_interleave_hook is not None:
+                self._mutation_interleave_hook(
+                    "heartbeat",
+                    conn,
+                    attempt_id=lease.attempt_id,
+                    lease_id=lease.lease_id,
+                    lease_generation=lease_generation,
+                )
+            self._validate_worker_attempt_fence_locked(
+                conn,
+                attempt_id=lease.attempt_id,
+                lease_id=lease.lease_id,
+                lease_generation=lease_generation,
+            )
+            cursor = conn.execute(
+                """
+                UPDATE leases SET
+                    heartbeat_sequence = ?,
+                    expires_at_utc = ?,
+                    last_heartbeat_utc = ?
+                WHERE lease_id = ?
+                  AND attempt_id = ?
+                  AND lease_generation = ?
+                  AND heartbeat_sequence < ?
+                  AND EXISTS (
+                    SELECT 1 FROM attempts a
+                    WHERE a.attempt_id = ?
+                      AND a.status != 'UNKNOWN'
+                      AND (a.reason_code IS NULL OR a.reason_code != 'STALE_SLOT_AUTO_RELEASED')
+                  )
+                """,
+                (
+                    lease.heartbeat_sequence,
+                    lease.expires_at_utc,
+                    lease.last_heartbeat_utc,
+                    lease.lease_id,
+                    lease.attempt_id,
+                    int(lease_generation),
+                    lease.heartbeat_sequence,
+                    lease.attempt_id,
+                ),
+            )
+            return cursor.rowcount == 1
 
     def transition_work_item_state(
         self,
@@ -1881,8 +2207,9 @@ class ConductorStore:
             cursor = conn.execute(
                 """
                 INSERT INTO leases (
-                    lease_id, attempt_id, agent_instance, heartbeat_sequence, expires_at_utc, last_heartbeat_utc, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    lease_id, attempt_id, agent_instance, heartbeat_sequence, expires_at_utc,
+                    last_heartbeat_utc, lease_generation, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(lease_id) DO UPDATE SET
                     heartbeat_sequence = excluded.heartbeat_sequence,
                     expires_at_utc = excluded.expires_at_utc,
@@ -1897,6 +2224,7 @@ class ConductorStore:
                     lease.heartbeat_sequence,
                     lease.expires_at_utc,
                     lease.last_heartbeat_utc,
+                    int(getattr(lease, "lease_generation", 1) or 1),
                     lease.schema_version,
                 ),
             )

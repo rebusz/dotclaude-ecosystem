@@ -817,3 +817,50 @@ def test_rollback_leaves_no_orphan_receipt_file(tmp_path: pathlib.Path):
 
     assert store.get_receipt(receipt.idempotency_key) is not None
     assert receipt_file.exists()
+
+
+def test_flush_pending_receipts_after_manual_commit(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    receipt = Receipt(
+        receipt_id="rcp_manual_commit",
+        command_id="cmd_manual_commit",
+        idempotency_key="idemp_manual_commit",
+        status="SUCCESS",
+        result={"ok": True},
+    )
+    receipt_file = store.receipts_dir / f"receipt_{receipt.command_id}.json"
+    with pytest.raises(RuntimeError, match="simulated inherited-child-busy"):
+        with store._connection() as conn:
+            store.save_receipt(receipt, conn=conn)
+            conn.commit()
+            store.flush_pending_receipts(conn)
+            raise RuntimeError("simulated inherited-child-busy exit")
+
+    assert store.get_receipt(receipt.idempotency_key) is not None
+    assert receipt_file.exists()
+
+
+def test_receipt_file_write_failure_does_not_lose_committed_receipt(tmp_path: pathlib.Path, monkeypatch):
+    store = ConductorStore(root_dir=tmp_path)
+    receipt = Receipt(
+        receipt_id="rcp_write_fail",
+        command_id="cmd_write_fail",
+        idempotency_key="idemp_write_fail",
+        status="SUCCESS",
+        result={"ok": True},
+    )
+
+    calls = {"n": 0}
+    real_write = store.write_receipt_file
+
+    def flaky_write(r: Receipt) -> pathlib.Path:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated receipt write failure")
+        return real_write(r)
+
+    monkeypatch.setattr(store, "write_receipt_file", flaky_write)
+    store.save_receipt(receipt)
+    assert store.get_receipt(receipt.idempotency_key) is not None
+    assert store.get_receipt(receipt.idempotency_key).status == "SUCCESS"
+    assert (store.receipts_dir / f"receipt_{receipt.command_id}.json").exists()

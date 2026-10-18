@@ -498,7 +498,11 @@ def test_a_rejected_heartbeat_is_reported_not_silently_accepted(store: Conductor
     """C8 made the write conditional; the command must then say it refused,
     rather than return a fresh expiry for a lease it never extended."""
     processor, claim = _claimed_r1_lease(store)
-    heartbeat = {"lease_id": claim["lease_id"], "attempt_id": claim["attempt_id"]}
+    heartbeat = {
+        "lease_id": claim["lease_id"],
+        "attempt_id": claim["attempt_id"],
+        "lease_generation": claim.get("lease_generation", 1),
+    }
 
     ok = processor.process_envelope(CommandEnvelope(
         command_id="hb1", command_type="heartbeat", payload={**heartbeat, "sequence": 10},

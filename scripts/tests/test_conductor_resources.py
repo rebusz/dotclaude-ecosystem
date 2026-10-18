@@ -1510,3 +1510,107 @@ def test_reconcile_after_20_min_abandonment_releases_immediately(manager: HostRe
     assert rcp is not None
     assert rcp.status == "SUCCESS"
 
+
+def test_reap_invalidates_queued_same_attempt_before_promoting_other(manager: HostResourceManager):
+    active = manager.request(purpose="pytest_heavy", attempt_id="at-reap-q-active", agent_instance="ag1")
+    queued_same = manager.request(purpose="pytest_heavy", attempt_id="at-reap-q-active", agent_instance="ag1")
+    assert active["state"] == HostResourceRequestState.ACTIVE.value
+    assert queued_same["state"] == HostResourceRequestState.QUEUED.value
+
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+    sweep = manager.sweep_stale_slots(now=future)
+    assert sweep["swept_count"] == 1
+
+    other = manager.request(purpose="pytest_heavy", attempt_id="at-reap-q-other", agent_instance="ag2")
+    assert other["state"] == HostResourceRequestState.ACTIVE.value
+    assert manager.store.get_resource_request(queued_same["request_id"]).state == HostResourceRequestState.RELEASED
+
+
+def test_reap_does_not_fence_replacement_attempt_work_item(manager: HostResourceManager):
+    from scripts.conductor_commands import ConductorCommandProcessor
+    from scripts.conductor_model import CommandEnvelope, WorkItemState
+
+    processor = ConductorCommandProcessor(store=manager.store)
+    rcp_enq = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_enq_replace",
+            command_type="enqueue",
+            payload={
+                "idempotency_key": "idemp_replace_wi",
+                "title": "Replace",
+                "repo_id": "dotclaude-ecosystem",
+                "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+                "plan_path": "design/plans/test.md",
+                "risk_class": "R1",
+                "workflow": "fwf",
+                "requested_terminal_stage": "merged",
+                "job_kind": "engineering_plan_lifecycle",
+            },
+            idempotency_key="idemp_enq_replace",
+        )
+    )
+    work_item_id = rcp_enq.result["work_item_id"]
+    manager.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.READY,
+        actor="operator",
+        reason_code="READY_TEST",
+    )
+    claim_a = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_claim_a",
+            command_type="claim",
+            payload={"work_item_id": work_item_id, "claimed_by_host": "host"},
+            idempotency_key="idemp_claim_a",
+        )
+    )
+    attempt_a = claim_a.result["attempt_id"]
+    manager.request(purpose="pytest_heavy", attempt_id=attempt_a, agent_instance="host")
+
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+    manager.sweep_stale_slots(now=future)
+    manager.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.READY,
+        actor="operator",
+        reason_code="READY_AFTER_RECOVERY",
+    )
+
+    claim_b = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_claim_b",
+            command_type="claim",
+            payload={"work_item_id": work_item_id, "claimed_by_host": "host"},
+            idempotency_key="idemp_claim_b",
+        )
+    )
+    attempt_b = claim_b.result["attempt_id"]
+    for state, reason in (
+        (WorkItemState.DISPATCHING, "DISPATCH_START"),
+        (WorkItemState.RUNNING, "DISPATCH_RUNNING"),
+    ):
+        manager.store.transition_work_item_state(
+            work_item_id=work_item_id,
+            target_state=state,
+            actor="host",
+            reason_code=reason,
+            attempt_id=attempt_b,
+        )
+
+    manager.sweep_stale_slots(now=future + timedelta(seconds=500))
+    item = manager.store.get_work_item(work_item_id)
+    assert item.state == WorkItemState.RUNNING
+    with manager.store._connection() as conn:
+        lease_b = conn.execute("SELECT 1 FROM leases WHERE attempt_id = ?", (attempt_b,)).fetchone()
+        assert lease_b is not None
+
+
+def test_revoked_attempt_cannot_be_readmitted(manager: HostResourceManager):
+    req = manager.request(purpose="pytest_heavy", attempt_id="at-revoked", agent_instance="ag-r")
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+    manager.sweep_stale_slots(now=future)
+    with pytest.raises(ResourceAdmissionError, match="ATTEMPT_REVOKED"):
+        manager.request(purpose="pytest_heavy", attempt_id="at-revoked", agent_instance="ag-r2")
+
+
+
