@@ -38,6 +38,7 @@ from scripts.conductor_model import (
     HostResourcePool,
     HostResourceRequest,
     HostResourceRequestState,
+    Receipt,
 )
 
 
@@ -1451,8 +1452,10 @@ def test_stale_slot_never_auto_releases_inherited_or_parent_with_active_child(ma
     assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RELEASED
 
 
-def test_crashed_inherited_child_without_pid_released_and_frees_parent(manager: HostResourceManager):
-    # (H1) Crashed inherited child without pid gets released and frees the parent
+def test_inherited_child_with_unrecorded_identity_keeps_hold_until_death_proven(manager: HostResourceManager):
+    """(H1 + finding 3) An inherited child whose own identity was never recorded
+    cannot be proven dead, and the parent's identity proves nothing about it:
+    the hold stays until the child's termination is established."""
     base_time = datetime.now(timezone.utc)
     parent = manager.request(purpose="pytest_heavy", attempt_id="at-p-crash", agent_instance="ag-p")
     p_req_id = parent["request_id"]
@@ -1473,15 +1476,32 @@ def test_crashed_inherited_child_without_pid_released_and_frees_parent(manager: 
     assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
     assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
 
-    # Age past TTL (> 900s)
+    # Age past TTL (> 900s): nothing is provable about the child, so nothing
+    # is auto-released -- not the child, and not the parent behind it.
     future = fence_time + timedelta(seconds=1000)
-
-    # Sweeper runs: both the crashed inherited child without pid and the parent are auto-released
     res = manager.sweep_stale_slots(now=future)
-    assert res["swept_count"] == 2
-    assert c_req_id in res["swept_request_ids"]
-    assert p_req_id in res["swept_request_ids"]
+    assert res["swept_count"] == 0
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
 
+    # Only once the child's own death is on record may the sweep act.
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_start = psutil.Process(dead.pid).create_time()
+    dead.wait()
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET owner_process_pid = ?, owner_process_start_time = ?, owner_last_seen_at_utc = ?
+            WHERE request_id = ?
+            """,
+            (dead.pid, dead_start, _iso(base_time), c_req_id),
+        )
+
+    res_after = manager.sweep_stale_slots(now=future)
+    assert res_after["swept_count"] == 2
+    assert c_req_id in res_after["swept_request_ids"]
+    assert p_req_id in res_after["swept_request_ids"]
     assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.RELEASED
     assert manager.store.get_resource_request(c_req_id).reason_code == "STALE_SLOT_AUTO_RELEASED"
     assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RELEASED
@@ -1490,6 +1510,313 @@ def test_crashed_inherited_child_without_pid_released_and_frees_parent(manager: 
     # Pool is free: a fresh request succeeds immediately
     fresh = manager.request(purpose="pytest_heavy", attempt_id="at-fresh", agent_instance="ag-fresh")
     assert fresh["state"] == HostResourceRequestState.ACTIVE.value
+
+
+def test_sweep_resolves_request_owner_records_live_owner_vetoes_release(manager: HostResourceManager):
+    """(Finding 2) Owner identity lives on the request row too: a lease without
+    a pid is not proof of an unrecorded owner when the request records a live
+    one, and owner_last_seen_at_utc counts toward the age."""
+    admitted = manager.request(purpose="pytest_heavy", attempt_id="at-owner-records", agent_instance="ag-o")
+    req_id = admitted["request_id"]
+    lease_id = admitted["lease_id"]
+
+    now = datetime(2026, 10, 18, 12, 0, 0, tzinfo=timezone.utc)
+    old_iso = _iso(now - timedelta(seconds=2000))
+    recent_iso = _iso(now - timedelta(seconds=30))
+    live_pid = os.getpid()
+    live_start = psutil.Process(live_pid).create_time()
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_start = psutil.Process(dead.pid).create_time()
+    dead.wait()
+
+    with manager.store._connection() as conn:
+        conn.execute("UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?", (old_iso, req_id))
+        conn.execute(
+            "UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE lease_id = ?",
+            (old_iso, old_iso, lease_id),
+        )
+        conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (old_iso, req_id))
+
+    def _set_request_owner(pid, start_time, last_seen) -> None:
+        with manager.store._connection() as conn:
+            conn.execute(
+                """
+                UPDATE host_resource_requests
+                SET owner_process_pid = ?, owner_process_start_time = ?, owner_last_seen_at_utc = ?
+                WHERE request_id = ?
+                """,
+                (pid, start_time, last_seen, req_id),
+            )
+
+    # Case A: the lease pid is unrecorded but the request records a LIVE
+    # owner: the veto holds even though the lease looks anonymous.
+    _set_request_owner(live_pid, live_start, old_iso)
+    res_a = manager.sweep_stale_slots(now=now)
+    assert res_a["swept_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.ACTIVE
+
+    # Case B: the recorded owner is dead, but its own last-seen is recent:
+    # age is measured from the later of created/heartbeat/event/last-seen.
+    _set_request_owner(dead.pid, dead_start, recent_iso)
+    res_b = manager.sweep_stale_slots(now=now)
+    assert res_b["swept_count"] == 0
+    assert manager.store.get_resource_request(req_id).state == HostResourceRequestState.ACTIVE
+
+    # Case C: recorded owner dead and its last-seen aged past the TTL.
+    _set_request_owner(dead.pid, dead_start, old_iso)
+    res_c = manager.sweep_stale_slots(now=now)
+    assert res_c["swept_count"] == 1
+    released = manager.store.get_resource_request(req_id)
+    assert released.state == HostResourceRequestState.RELEASED
+    assert released.reason_code == "STALE_SLOT_AUTO_RELEASED"
+
+
+def test_dead_parent_never_releases_inherited_child_with_live_own_identity(manager: HostResourceManager):
+    """(Finding 3) The parent's death is not evidence about a surviving child:
+    with the child's own identity on record and alive, the sweep keeps both
+    the child and the parent hold, and the queued replacement waits."""
+    base_time = datetime.now(timezone.utc)
+    parent = manager.request(purpose="pytest_heavy", attempt_id="at-parent-dead", agent_instance="ag-p")
+    p_req_id = parent["request_id"]
+    p_lease_id = parent["lease_id"]
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_start = psutil.Process(dead.pid).create_time()
+    dead.wait()
+    _set_lease_process(manager, p_lease_id, dead.pid, dead_start)
+
+    child = manager.request(
+        purpose="pytest_focused",
+        attempt_id="at-child-live",
+        agent_instance="ag-p",
+        parent_lease_id=p_lease_id,
+    )
+    c_req_id = child["request_id"]
+    live_pid = os.getpid()
+    live_start = psutil.Process(live_pid).create_time()
+    old_iso = _iso(base_time - timedelta(seconds=2000))
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET owner_process_pid = ?, owner_process_start_time = ?, owner_last_seen_at_utc = ?
+            WHERE request_id = ?
+            """,
+            (live_pid, live_start, old_iso, c_req_id),
+        )
+
+    replacement = manager.request(purpose="pytest_heavy", attempt_id="at-replacement", agent_instance="ag-r")
+    assert replacement["state"] == HostResourceRequestState.QUEUED.value
+
+    with manager.store._connection() as conn:
+        for request_id in (p_req_id, c_req_id):
+            conn.execute("UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?", (old_iso, request_id))
+            conn.execute("UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?", (old_iso, request_id))
+        conn.execute(
+            "UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE lease_id = ?",
+            (old_iso, old_iso, p_lease_id),
+        )
+
+    res = manager.sweep_stale_slots(now=base_time)
+    assert res["swept_count"] == 0
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.ACTIVE
+    assert manager.store.get_resource_request(replacement["request_id"]).state == HostResourceRequestState.QUEUED
+
+    # Once the child's own identity is a dead process, the sweep releases the
+    # child and then the parent, and promotes the replacement.
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET owner_process_pid = ?, owner_process_start_time = ?
+            WHERE request_id = ?
+            """,
+            (dead.pid, dead_start, c_req_id),
+        )
+    res_after = manager.sweep_stale_slots(now=base_time)
+    assert res_after["swept_count"] == 2
+    assert manager.store.get_resource_request(replacement["request_id"]).state == HostResourceRequestState.ACTIVE
+
+
+def test_inherited_pytest_persists_child_identity_on_the_request(manager: HostResourceManager, tmp_path: pathlib.Path):
+    """(Finding 3) The inherited child's own pid/start time is persisted on the
+    request row at spawn time, so later sweeps adjudicate the child by the
+    child; the parent's lease identity stays untouched."""
+    parent = manager.request(purpose="pytest_full", attempt_id="at-identity-parent", agent_instance="inst-parent")
+    test_file = tmp_path / "test_inherited_identity.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    result = manager.run_bounded_pytest(
+        python_executable=sys.executable,
+        pytest_args=[str(test_file)],
+        cwd=tmp_path,
+        attempt_id="at-identity-child",
+        agent_instance="inst-parent",
+        parent_lease_id=parent["lease_id"],
+        force_heavy=True,
+        timeout_seconds=60,
+    )
+    assert result["status"] == "PASSED"
+
+    with manager.store._connection() as conn:
+        row = conn.execute(
+            """
+            SELECT owner_process_pid, owner_process_start_time, owner_identity_source, owner_last_seen_at_utc
+            FROM host_resource_requests WHERE attempt_id = 'at-identity-child'
+            """
+        ).fetchone()
+    assert row is not None
+    assert row["owner_process_pid"] is not None
+    assert row["owner_process_start_time"] is not None
+    assert row["owner_identity_source"] == "SPAWNED_CHILD"
+    assert row["owner_last_seen_at_utc"]
+
+    # The identity lives on the child's request, never on the parent's lease.
+    lease = manager.store.get_resource_lease(parent["lease_id"])
+    assert lease.process_pid is None
+    manager.release(parent["request_id"])
+
+
+def test_reaping_a_superseded_attempt_never_fences_the_current_owner(manager: HostResourceManager):
+    """(Finding 4) A replacement claim with an earlier claimed_at_utc (clock
+    rollback) is still the current owner by claim generation; reaping the
+    obsolete attempt must not fence its work item, and no recovery event may
+    be written for a fence that did not happen."""
+    from scripts.conductor_commands import ConductorCommandProcessor
+    from scripts.conductor_model import Attempt, Claim, CommandEnvelope, WorkItemState
+
+    processor = ConductorCommandProcessor(store=manager.store)
+    rcp_enq = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_enq_rollback",
+            command_type="enqueue",
+            payload={
+                "idempotency_key": "idemp_rollback_wi",
+                "title": "Rollback",
+                "repo_id": "dotclaude-ecosystem",
+                "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+                "plan_path": "design/plans/test.md",
+                "risk_class": "R1",
+                "workflow": "fwf",
+                "requested_terminal_stage": "merged",
+                "job_kind": "engineering_plan_lifecycle",
+            },
+            idempotency_key="idemp_enq_rollback",
+        )
+    )
+    work_item_id = rcp_enq.result["work_item_id"]
+    manager.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.READY,
+        actor="operator",
+        reason_code="READY_TEST",
+    )
+    claim_a = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_claim_rollback_a",
+            command_type="claim",
+            payload={"work_item_id": work_item_id, "claimed_by_host": "host"},
+            idempotency_key="idemp_claim_rollback_a",
+        )
+    )
+    attempt_a = claim_a.result["attempt_id"]
+    for state, reason in (
+        (WorkItemState.DISPATCHING, "DISPATCH_START"),
+        (WorkItemState.RUNNING, "DISPATCH_RUNNING"),
+    ):
+        manager.store.transition_work_item_state(
+            work_item_id=work_item_id,
+            target_state=state,
+            actor="host",
+            reason_code=reason,
+            attempt_id=attempt_a,
+        )
+    manager.request(purpose="pytest_heavy", attempt_id=attempt_a, agent_instance="host")
+
+    # Claim B arrives after A in real order but with an earlier timestamp.
+    attempt_b = "att_rollback_b"
+    manager.store.save_attempt(
+        Attempt(
+            attempt_id=attempt_b,
+            work_item_id=work_item_id,
+            attempt_number=2,
+            agent_host="host",
+            agent_instance="host",
+            adapter_version="1",
+            worktree_path="D:/w",
+            branch_name="b",
+            base_head_sha="sha",
+            dispatch_idempotency_key="disp-rollback-b",
+        )
+    )
+    rolled_back = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    manager.store.save_claim(
+        Claim(
+            claim_id="cl_rollback_b",
+            work_item_id=work_item_id,
+            attempt_id=attempt_b,
+            claimed_by_host="host",
+            claimed_at_utc=rolled_back,
+        )
+    )
+    with manager.store._connection() as conn:
+        owner = conn.execute(
+            "SELECT current_claim_attempt_id, current_claim_generation FROM work_items WHERE work_item_id = ?",
+            (work_item_id,),
+        ).fetchone()
+        assert owner["current_claim_attempt_id"] == attempt_b
+        assert int(owner["current_claim_generation"]) == 2
+
+    # Attempt A's resource slot goes stale and is reaped. Age is the later of
+    # created, heartbeat, owner last-seen and the last resource event, so every
+    # one of those has to be past the TTL; a fresh admission event would
+    # correctly keep the hold and the fence would never be exercised.
+    stale_iso = (datetime.now(timezone.utc) - timedelta(seconds=get_stale_slot_ttl_seconds() + 120)).isoformat()
+    with manager.store._connection() as conn:
+        conn.execute(
+            """
+            UPDATE host_resource_requests
+            SET created_at_utc = ?, owner_last_seen_at_utc = ?
+            WHERE attempt_id = ?
+            """,
+            (stale_iso, stale_iso, attempt_a),
+        )
+        conn.execute(
+            """
+            UPDATE host_resource_leases
+            SET expires_at_utc = ?, last_heartbeat_utc = ?
+            WHERE attempt_id = ?
+            """,
+            (stale_iso, stale_iso, attempt_a),
+        )
+        conn.execute(
+            """
+            UPDATE host_resource_events
+            SET recorded_at_utc = ?
+            WHERE request_id IN (
+                SELECT request_id FROM host_resource_requests WHERE attempt_id = ?
+            )
+            """,
+            (stale_iso, attempt_a),
+        )
+
+    sweep = manager.sweep_stale_slots(now=datetime.now(timezone.utc))
+    assert sweep["swept_count"] == 1
+
+    # The reaped attempt is revoked and its slot released...
+    with manager.store._connection() as conn:
+        att_a = conn.execute("SELECT status FROM attempts WHERE attempt_id = ?", (attempt_a,)).fetchone()
+        assert att_a["status"] == "UNKNOWN"
+        assert conn.execute(
+            "SELECT state FROM host_resource_requests WHERE attempt_id = ?", (attempt_a,)
+        ).fetchone()["state"] == HostResourceRequestState.RELEASED.value
+        # ...but the work item still belongs to claim B and was never fenced.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM events WHERE work_item_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'",
+            (work_item_id,),
+        ).fetchone()[0] == 0
+    assert manager.store.get_work_item(work_item_id).state == WorkItemState.RUNNING
 
 
 def test_reconcile_after_20_min_abandonment_releases_immediately(manager: HostResourceManager):
@@ -1676,6 +2003,41 @@ def test_revoked_attempt_cannot_be_readmitted(manager: HostResourceManager):
         ).fetchone() is not None
     promoted = manager.store.get_resource_request(queued["request_id"])
     assert promoted.state == HostResourceRequestState.ACTIVE
+
+
+def test_reconcile_drains_another_writers_undelivered_receipt(
+    manager: HostResourceManager, monkeypatch: pytest.MonkeyPatch
+):
+    """(Finding 6) Reconcile is normal maintenance: it must drain a receipt
+    another writer committed and failed to deliver, reusing that receipt id."""
+    writer = ConductorStore(root_dir=manager.store.root_dir)
+    receipt = Receipt(
+        receipt_id="rcp_reconcile_outbox",
+        command_id="cmd_reconcile_outbox",
+        idempotency_key="idemp_reconcile_outbox",
+        status="SUCCESS",
+        result={"origin": "cli-writer"},
+    )
+    real_write = writer.write_receipt_file
+
+    def fail_write(pending: Receipt) -> pathlib.Path:
+        raise OSError("simulated file-write failure in the CLI writer")
+
+    monkeypatch.setattr(writer, "write_receipt_file", fail_write)
+    writer.save_receipt(receipt)
+    monkeypatch.setattr(writer, "write_receipt_file", real_write)
+    receipt_file = manager.store.receipts_dir / "receipt_cmd_reconcile_outbox.json"
+    assert not receipt_file.exists()
+
+    manager.reconcile()
+
+    assert receipt_file.exists()
+    payload = json.loads(receipt_file.read_text(encoding="utf-8"))
+    assert payload["receipt_id"] == "rcp_reconcile_outbox"
+    with manager.store._connection() as conn:
+        assert conn.execute(
+            "SELECT receipt_file_delivered FROM receipts WHERE command_id = 'cmd_reconcile_outbox'"
+        ).fetchone()[0] == 1
 
 
 

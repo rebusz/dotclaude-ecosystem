@@ -1,6 +1,7 @@
 """Unit tests for ConductorCommandProcessor."""
 
 from datetime import datetime, timedelta, timezone
+import json
 import pathlib
 from unittest.mock import patch
 
@@ -665,3 +666,55 @@ def test_superseded_attempt_worker_writes_rejected_after_replacement_claim(
         assert conn.execute(
             "SELECT 1 FROM leases WHERE attempt_id = ?", (attempt_b,)
         ).fetchone() is not None
+
+
+def test_envelope_processing_delivers_another_writer_undelivered_receipt(
+    processor: ConductorCommandProcessor, tmp_path, monkeypatch
+):
+    """(Finding 6) A separate CLI writer commits a receipt and dies before file
+    delivery. Processing any envelope on the surviving store is normal
+    maintenance and must drain the committed outbox, reusing the same receipt
+    id and filename."""
+    import pathlib
+
+    from scripts.conductor_model import Receipt
+
+    writer = ConductorStore(root_dir=tmp_path)  # shares the processor's root
+    receipt = Receipt(
+        receipt_id="rcp_env_outbox",
+        command_id="cmd_env_outbox",
+        idempotency_key="idemp_env_outbox",
+        status="SUCCESS",
+        result={"origin": "cli-writer"},
+    )
+
+    calls = {"n": 0}
+    real_write = writer.write_receipt_file
+
+    def fail_first_write(r: Receipt) -> pathlib.Path:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated file-write failure in the CLI writer")
+        return real_write(r)
+
+    monkeypatch.setattr(writer, "write_receipt_file", fail_first_write)
+    writer.save_receipt(receipt)
+    receipt_file = processor.store.receipts_dir / "receipt_cmd_env_outbox.json"
+    assert not receipt_file.exists()
+
+    status_receipt = processor.process_envelope(
+        CommandEnvelope(
+            command_id="cmd_env_outbox_probe",
+            command_type="status",
+            payload={},
+            idempotency_key="idemp_env_outbox_probe",
+        )
+    )
+    assert status_receipt.status == "SUCCESS"
+    assert receipt_file.exists()
+    payload = json.loads(receipt_file.read_text(encoding="utf-8"))
+    assert payload["receipt_id"] == "rcp_env_outbox"
+    with processor.store._connection() as conn:
+        assert conn.execute(
+            "SELECT receipt_file_delivered FROM receipts WHERE command_id = 'cmd_env_outbox'"
+        ).fetchone()[0] == 1

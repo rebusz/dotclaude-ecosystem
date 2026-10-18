@@ -1,18 +1,23 @@
 """Unit tests for ConductorStore persistence, SQLite WAL, atomic inbox/receipts, and leader lock."""
 
+import json
 import os
 import pathlib
 import psutil
 import shutil
 import sqlite3
+import threading
 import pytest
 
 from scripts.conductor_model import (
+    Attempt,
+    Claim,
     CommandEnvelope,
     HostResourceLease,
     HostResourcePool,
     HostResourceRequest,
     HostResourceRequestState,
+    Lease,
     Receipt,
     ReasonCode,
     WorkItem,
@@ -21,6 +26,7 @@ from scripts.conductor_model import (
 from scripts.conductor_store import (
     ConductorStore,
     STORAGE_QUOTAS_BYTES,
+    V9_REQUIRED_COLUMNS,
     read_host_resource_status,
     adjudicate_recovery,
     build_recovery_command,
@@ -924,3 +930,445 @@ def test_receipt_file_write_failure_does_not_lose_committed_receipt(tmp_path: pa
     assert store.get_receipt(receipt.idempotency_key) is not None
     assert store.get_receipt(receipt.idempotency_key).status == "SUCCESS"
     assert (store.receipts_dir / f"receipt_{receipt.command_id}.json").exists()
+
+
+# ── v9 migration from every layout in the wild (review findings 1, 4 and 5) ─
+
+def _seed_claim_history(store: ConductorStore) -> None:
+    """Seed two claims whose timestamps invert their insertion order, plus a
+    live-state work item with no claims at all.
+
+    Claim A is inserted first (lower rowid) but carries the LATER timestamp;
+    claim B is inserted second with an earlier timestamp, as a clock rollback
+    between two claims produces. The current owner is whoever claimed last
+    (B), never whoever's timestamp sorts last (A)."""
+    for work_item_id in ("wi_mig", "wi_orphan_mig"):
+        store.save_work_item(
+            WorkItem(
+                work_item_id=work_item_id,
+                idempotency_key=f"idemp_{work_item_id}",
+                title="Migration seed",
+                repo_id="dotclaude-ecosystem",
+                repo_path="D:/x",
+                plan_path="design/plans/x.md",
+                risk_class="R1",
+                workflow="fwf",
+                requested_terminal_stage="merged",
+                job_kind="engineering_plan_lifecycle",
+            )
+        )
+    for attempt_id, number, key in (
+        ("att_mig_a", 1, "disp-mig-a"),
+        ("att_mig_b", 2, "disp-mig-b"),
+    ):
+        store.save_attempt(
+            Attempt(
+                attempt_id=attempt_id,
+                work_item_id="wi_mig",
+                attempt_number=number,
+                agent_host="host",
+                agent_instance="inst",
+                adapter_version="1",
+                worktree_path="D:/w",
+                branch_name="b",
+                base_head_sha="sha",
+                dispatch_idempotency_key=key,
+            )
+        )
+    store.save_lease(
+        Lease(
+            lease_id="lease_mig_a",
+            attempt_id="att_mig_a",
+            agent_instance="inst",
+            heartbeat_sequence=1,
+            expires_at_utc="2027-01-01T00:00:00+00:00",
+        )
+    )
+    store.save_claim(
+        Claim(
+            claim_id="cl_mig_a",
+            work_item_id="wi_mig",
+            attempt_id="att_mig_a",
+            claimed_by_host="host",
+            claimed_at_utc="2026-10-18T10:00:00+00:00",
+        )
+    )
+    store.save_claim(
+        Claim(
+            claim_id="cl_mig_b",
+            work_item_id="wi_mig",
+            attempt_id="att_mig_b",
+            claimed_by_host="host",
+            claimed_at_utc="2026-10-18T09:00:00+00:00",
+        )
+    )
+    for state in (
+        WorkItemState.QUEUED,
+        WorkItemState.READY,
+        WorkItemState.CLAIMED,
+        WorkItemState.DISPATCHING,
+        WorkItemState.RUNNING,
+    ):
+        store.transition_work_item_state(
+            work_item_id="wi_orphan_mig",
+            target_state=state,
+            actor="test",
+            reason_code="SEED_TEST",
+        )
+
+
+def _rewind_schema(db_path: pathlib.Path, drop_statements: list[str], max_version: int) -> None:
+    """Drop columns and markers so a current store re-opens at ``max_version``."""
+    with sqlite3.connect(db_path) as conn:
+        for statement in drop_statements:
+            conn.execute(statement)
+        conn.execute("DELETE FROM schema_migrations WHERE version >= ?", (max_version + 1,))
+        conn.commit()
+
+
+def _assert_complete_v9_schema(store: ConductorStore) -> None:
+    with store._connection() as conn:
+        assert conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 9
+        for table, column in V9_REQUIRED_COLUMNS:
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            assert column in columns, f"{table}.{column} missing after v9 migration"
+
+
+def test_v9_migration_from_plain_v7_backfills_owner_by_insertion_order(tmp_path: pathlib.Path):
+    """A plain v7 database reaches a complete v9 schema, and the ownership
+    backfill follows insertion order (rowid), not claimed_at_utc: clock
+    rollback between claims must not appoint the wrong historical owner."""
+    store = ConductorStore(root_dir=tmp_path)
+    _seed_claim_history(store)
+    _rewind_schema(
+        store.db_path,
+        [
+            "ALTER TABLE leases DROP COLUMN lease_generation",
+            "ALTER TABLE claims DROP COLUMN claim_generation",
+            "ALTER TABLE work_items DROP COLUMN current_claim_attempt_id",
+            "ALTER TABLE work_items DROP COLUMN current_claim_generation",
+            "ALTER TABLE receipts DROP COLUMN receipt_file_delivered",
+        ],
+        max_version=7,
+    )
+
+    migrated = ConductorStore(root_dir=tmp_path)
+    _assert_complete_v9_schema(migrated)
+    with migrated._connection() as conn:
+        generations = {
+            row["claim_id"]: int(row["claim_generation"])
+            for row in conn.execute(
+                "SELECT claim_id, claim_generation FROM claims WHERE work_item_id = 'wi_mig'"
+            ).fetchall()
+        }
+        assert generations == {"cl_mig_a": 1, "cl_mig_b": 2}
+        owner = conn.execute(
+            """
+            SELECT current_claim_attempt_id, current_claim_generation
+            FROM work_items WHERE work_item_id = 'wi_mig'
+            """
+        ).fetchone()
+        assert owner["current_claim_attempt_id"] == "att_mig_b"
+        assert int(owner["current_claim_generation"]) == 2
+        # A live work item with no claim at all cannot have its owner
+        # established from history: it is fenced for explicit recovery.
+        orphan = conn.execute(
+            "SELECT state FROM work_items WHERE work_item_id = 'wi_orphan_mig'"
+        ).fetchone()
+        assert orphan["state"] == WorkItemState.RECOVERY_REQUIRED.value
+        assert conn.execute(
+            """
+            SELECT 1 FROM events
+            WHERE work_item_id = 'wi_orphan_mig' AND reason_code = 'MIGRATION_OWNERSHIP_UNESTABLISHED'
+            """
+        ).fetchone() is not None
+
+
+def test_v9_migration_from_122_layout_v8_validates_and_preserves_foreign_columns(tmp_path: pathlib.Path):
+    """The operator's live DB is at v8 through the other unmerged branch (#122
+    process management), which added different columns and never
+    leases.lease_generation. The v9 marker must not be recorded on a schema
+    still missing a column every worker fence needs."""
+    store = ConductorStore(root_dir=tmp_path)
+    _seed_claim_history(store)
+    store.save_resource_request(
+        HostResourceRequest(
+            request_id="rr_122_layout",
+            idempotency_key="idemp_rr_122",
+            resource_key="host:heavy",
+            purpose="pytest_full",
+            attempt_id="att_mig_a",
+            agent_instance="inst",
+            state=HostResourceRequestState.QUEUED,
+        )
+    )
+    delivered = Receipt(
+        receipt_id="rcp_122_delivered",
+        command_id="cmd_122_delivered",
+        idempotency_key="idemp_122_delivered",
+        status="SUCCESS",
+        result={"ok": True},
+    )
+    store.save_receipt(delivered)
+    _rewind_schema(
+        store.db_path,
+        [
+            "ALTER TABLE leases DROP COLUMN lease_generation",
+            "ALTER TABLE claims DROP COLUMN claim_generation",
+            "ALTER TABLE work_items DROP COLUMN current_claim_attempt_id",
+            "ALTER TABLE work_items DROP COLUMN current_claim_generation",
+            "ALTER TABLE receipts DROP COLUMN receipt_file_delivered",
+        ],
+        max_version=8,
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        # The other branch's own v8 additions, none of which this branch knows.
+        conn.execute("ALTER TABLE host_resource_requests ADD COLUMN memory_budget_gib REAL NOT NULL DEFAULT 1")
+        conn.execute("UPDATE host_resource_requests SET memory_budget_gib = 4.5 WHERE request_id = 'rr_122_layout'")
+        conn.execute(
+            """
+            CREATE TABLE process_lanes (
+                lane_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                owner_pid INTEGER NOT NULL, owner_start_time REAL NOT NULL,
+                owner_session_id INTEGER NOT NULL, owner_username TEXT NOT NULL,
+                worktree TEXT NOT NULL, command_sha256 TEXT NOT NULL,
+                request_id TEXT, state TEXT NOT NULL,
+                deadline REAL NOT NULL, heartbeat REAL NOT NULL,
+                budget_gib REAL NOT NULL, launch_provenance TEXT NOT NULL,
+                launch_origin TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO process_lanes (
+                lane_id, owner_id, owner_pid, owner_start_time, owner_session_id,
+                owner_username, worktree, command_sha256, request_id, state,
+                deadline, heartbeat, budget_gib, launch_provenance, launch_origin
+            ) VALUES (
+                'lane_122', 'owner_122', 4242, 1.5, 7, 'operator',
+                'D:/wt', 'abc', 'rr_122_layout', 'ACTIVE',
+                9.0, 8.0, 4.5, 'spawn', 'cli'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE process_registry (
+                pid INTEGER NOT NULL, start_time REAL NOT NULL,
+                lane_id TEXT NOT NULL REFERENCES process_lanes(lane_id),
+                parent_pid INTEGER NOT NULL, session_id INTEGER NOT NULL,
+                username TEXT NOT NULL, command_sha256 TEXT NOT NULL,
+                PRIMARY KEY (pid, start_time)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO process_registry (
+                pid, start_time, lane_id, parent_pid, session_id, username, command_sha256
+            ) VALUES (4242, 1.5, 'lane_122', 1, 7, 'operator', 'abc')
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE host_memory_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                paused INTEGER NOT NULL, samples_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("INSERT INTO host_memory_state VALUES (1, 0, '[]')")
+        conn.commit()
+
+    migrated = ConductorStore(root_dir=tmp_path)
+    _assert_complete_v9_schema(migrated)
+
+    # The review's exact reproduction: save_lease() on the migrated store.
+    assert migrated.save_lease(
+        Lease(
+            lease_id="lease_122_new",
+            attempt_id="att_mig_b",
+            agent_instance="inst",
+            heartbeat_sequence=1,
+            expires_at_utc="2027-01-01T00:00:00+00:00",
+        )
+    )
+    with migrated._connection() as conn:
+        request_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+        }
+        assert "memory_budget_gib" in request_columns
+        assert conn.execute(
+            "SELECT memory_budget_gib FROM host_resource_requests WHERE request_id = 'rr_122_layout'"
+        ).fetchone()[0] == 4.5
+        for table in ("process_lanes", "process_registry", "host_memory_state"):
+            assert conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (table,)
+            ).fetchone() is not None
+        assert conn.execute(
+            "SELECT owner_id FROM process_lanes WHERE lane_id = 'lane_122'"
+        ).fetchone()[0] == "owner_122"
+        assert conn.execute(
+            "SELECT pid FROM process_registry WHERE lane_id = 'lane_122'"
+        ).fetchone()[0] == 4242
+        assert conn.execute("SELECT paused FROM host_memory_state").fetchone()[0] == 0
+        owner = conn.execute(
+            "SELECT current_claim_attempt_id, current_claim_generation FROM work_items WHERE work_item_id = 'wi_mig'"
+        ).fetchone()
+        assert owner["current_claim_attempt_id"] == "att_mig_b"
+        assert int(owner["current_claim_generation"]) == 2
+        assert conn.execute(
+            "SELECT receipt_file_delivered FROM receipts WHERE command_id = 'cmd_122_delivered'"
+        ).fetchone()[0] == 1
+
+    # Reopening a completed v9 store neither re-adds columns nor fails.
+    reopened = ConductorStore(root_dir=tmp_path)
+    _assert_complete_v9_schema(reopened)
+
+
+def test_v9_migration_from_this_branch_prior_v8(tmp_path: pathlib.Path):
+    """A database at this branch's own earlier v8 (lease_generation present,
+    no v9 columns) completes the v9 migration unchanged in behavior."""
+    store = ConductorStore(root_dir=tmp_path)
+    _seed_claim_history(store)
+    _rewind_schema(
+        store.db_path,
+        [
+            "ALTER TABLE claims DROP COLUMN claim_generation",
+            "ALTER TABLE work_items DROP COLUMN current_claim_attempt_id",
+            "ALTER TABLE work_items DROP COLUMN current_claim_generation",
+            "ALTER TABLE receipts DROP COLUMN receipt_file_delivered",
+        ],
+        max_version=8,
+    )
+
+    migrated = ConductorStore(root_dir=tmp_path)
+    _assert_complete_v9_schema(migrated)
+    assert migrated.save_lease(
+        Lease(
+            lease_id="lease_prior_v8",
+            attempt_id="att_mig_a",
+            agent_instance="inst",
+            heartbeat_sequence=2,
+            expires_at_utc="2027-01-01T00:00:00+00:00",
+        )
+    )
+
+
+def test_second_initializer_serializes_migration_under_begin_immediate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Two initializers on the same legacy database must not race their ALTERs.
+
+    On the unserialized migration both read the same missing column with no
+    transaction open, then both ALTER, and one fails with 'duplicate column
+    name'. The barrier holds both inside the pre-ALTER window to make that
+    interleave deterministic on the broken code; under BEGIN IMMEDIATE the
+    second initializer simply waits for the first to commit, never reaches its
+    backup, and the barrier times out harmlessly.
+    """
+    store = ConductorStore(root_dir=tmp_path)  # seed, then rewind to v6
+    _rewind_schema(
+        store.db_path,
+        [
+            "ALTER TABLE host_resource_requests DROP COLUMN owner_process_pid",
+            "ALTER TABLE host_resource_requests DROP COLUMN owner_process_start_time",
+            "ALTER TABLE host_resource_requests DROP COLUMN owner_identity_source",
+            "ALTER TABLE host_resource_requests DROP COLUMN owner_last_seen_at_utc",
+            "ALTER TABLE leases DROP COLUMN lease_generation",
+            "ALTER TABLE claims DROP COLUMN claim_generation",
+            "ALTER TABLE work_items DROP COLUMN current_claim_attempt_id",
+            "ALTER TABLE work_items DROP COLUMN current_claim_generation",
+            "ALTER TABLE receipts DROP COLUMN receipt_file_delivered",
+        ],
+        max_version=6,
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.commit()
+
+    gate = threading.Barrier(2, timeout=3.0)
+    real_copy2 = shutil.copy2
+    copies = {"n": 0}
+
+    def gated_copy2(src, dst, *args, **kwargs):
+        copies["n"] += 1
+        if copies["n"] <= 2:
+            try:
+                gate.wait()
+            except threading.BrokenBarrierError:
+                # Serialized migration: the second initializer never gets here
+                # because it is still waiting on BEGIN IMMEDIATE.
+                pass
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", gated_copy2)
+
+    failures: list[BaseException] = []
+
+    def initialize() -> None:
+        try:
+            ConductorStore(root_dir=tmp_path)
+        except BaseException as err:  # noqa: BLE001 - recorded and asserted below
+            failures.append(err)
+
+    threads = [threading.Thread(target=initialize) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "initializer thread hung"
+
+    assert failures == [], f"a concurrent initializer failed: {failures}"
+    _assert_complete_v9_schema(ConductorStore(root_dir=tmp_path))
+
+
+def test_surviving_store_drains_committed_receipt_outbox_during_maintenance(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A separate CLI writer can commit a receipt and die before file delivery;
+    the surviving store's maintenance must discover the committed row and
+    deliver it with the same receipt id and filename (finding 6)."""
+    daemon = ConductorStore(root_dir=tmp_path)
+    writer = ConductorStore(root_dir=tmp_path)
+    receipt = Receipt(
+        receipt_id="rcp_outbox",
+        command_id="cmd_outbox",
+        idempotency_key="idemp_outbox",
+        status="SUCCESS",
+        result={"origin": "cli-writer"},
+    )
+
+    calls = {"n": 0}
+    real_write = writer.write_receipt_file
+
+    def fail_first_write(r: Receipt) -> pathlib.Path:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("simulated file-write failure in the CLI writer")
+        return real_write(r)
+
+    monkeypatch.setattr(writer, "write_receipt_file", fail_first_write)
+    writer.save_receipt(receipt)
+    receipt_file = daemon.receipts_dir / "receipt_cmd_outbox.json"
+    assert not receipt_file.exists()
+    with daemon._connection() as conn:
+        assert conn.execute(
+            "SELECT receipt_file_delivered FROM receipts WHERE command_id = 'cmd_outbox'"
+        ).fetchone()[0] == 0
+
+    # Normal maintenance on the surviving store, not a restart.
+    daemon.ensure_receipt_files_delivered()
+    assert receipt_file.exists()
+    payload = json.loads(receipt_file.read_text(encoding="utf-8"))
+    assert payload["receipt_id"] == "rcp_outbox"
+    assert payload["command_id"] == "cmd_outbox"
+    with daemon._connection() as conn:
+        assert conn.execute(
+            "SELECT receipt_file_delivered FROM receipts WHERE command_id = 'cmd_outbox'"
+        ).fetchone()[0] == 1
+
+    # Draining again is idempotent: same row, same file, no duplicates.
+    daemon.ensure_receipt_files_delivered()
+    assert receipt_file.exists()

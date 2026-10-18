@@ -114,6 +114,26 @@ def _is_cdp_purpose(purpose: Optional[str]) -> bool:
     return bool(purpose) and purpose in CDP_PURPOSES
 
 
+def _request_owner_identity(req: Any) -> tuple[Optional[int], Optional[float], Optional[str]]:
+    """Read the request-level owner identity columns, tolerating rows without them.
+
+    The v7 schema carries the acquiring process's identity on the request row
+    itself (owner_process_pid / owner_process_start_time / owner_last_seen_at_utc);
+    a host lease may or may not repeat it in its own columns.
+    """
+    keys = req.keys()
+    if "owner_process_pid" not in keys:
+        return None, None, None
+    pid = req["owner_process_pid"] if "owner_process_pid" in keys else None
+    start_time = req["owner_process_start_time"] if "owner_process_start_time" in keys else None
+    last_seen = req["owner_last_seen_at_utc"] if "owner_last_seen_at_utc" in keys else None
+    return (
+        int(pid) if pid is not None else None,
+        float(start_time) if start_time is not None else None,
+        str(last_seen) if last_seen else None,
+    )
+
+
 def resolve_resource_key(
     purpose: Optional[str] = None,
     role: Optional[str] = None,
@@ -695,9 +715,15 @@ class HostResourceManager:
                 # "measured from the later of created/last-seen/last-state-change"
                 # Exclude fence events (LEASE_EXPIRED) and auto-release events so
                 # fencing an already-dead lease does not reset its staleness timer (M2).
+                owner_pid, owner_start_time, owner_last_seen = _request_owner_identity(req)
                 timestamps: list[datetime] = [parse_iso_or_expired(req["created_at_utc"])]
                 if lease_row and lease_row["last_heartbeat_utc"]:
                     timestamps.append(parse_iso_or_expired(lease_row["last_heartbeat_utc"]))
+                if owner_last_seen:
+                    # The request's owner-identity record is authoritative
+                    # last-seen evidence for that owner and counts toward the
+                    # age, not just toward the liveness veto (finding 2).
+                    timestamps.append(parse_iso_or_expired(owner_last_seen))
 
                 max_ev = conn.execute(
                     """
@@ -714,40 +740,41 @@ class HostResourceManager:
                 if age_seconds < ttl_seconds:
                     continue
 
-                # (b) Check INHERITED request and owner process liveness (H1):
+                # (b) Owner liveness resolves EVERY recorded identity, on the
+                # lease and on the request (finding 2). One live -- or
+                # unprovable -- owner keeps the hold; elapsed TTL alone never
+                # establishes process death.
                 if state == HostResourceRequestState.INHERITED.value:
                     child_lease = conn.execute(
                         "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                     ).fetchone()
-                    pid = None
-                    start_time = None
+                    identities: list[tuple[Optional[int], Optional[float]]] = []
                     if child_lease and child_lease["process_pid"] is not None:
-                        pid = child_lease["process_pid"]
-                        start_time = child_lease["process_start_time"]
-                    elif lease_row and lease_row["process_pid"] is not None:
-                        pid = lease_row["process_pid"]
-                        start_time = lease_row["process_start_time"]
-
-                    if pid is None:
-                        is_gone = True
-                        evidence = "OWNER_UNRECORDED"
-                    else:
-                        is_gone, evidence = self._owner_liveness(pid, start_time)
-
+                        identities.append((child_lease["process_pid"], child_lease["process_start_time"]))
+                    if owner_pid is not None:
+                        identities.append((owner_pid, owner_start_time))
+                    if not identities:
+                        # No identity of the child's own was ever recorded, and
+                        # the parent's liveness proves nothing about a surviving
+                        # child: keep the hold until the child's termination is
+                        # established or an operator clears it explicitly
+                        # (finding 3).
+                        continue
+                    is_gone, evidence = self._all_recorded_owners_gone(identities)
                     if not is_gone:
                         continue
                 else:
-                    pid = lease_row["process_pid"] if lease_row else None
-                    start_time = lease_row["process_start_time"] if lease_row else None
-
-                    if pid is None:
-                        is_gone = True
-                        evidence = "OWNER_UNRECORDED"
+                    identities = []
+                    if lease_row and lease_row["process_pid"] is not None:
+                        identities.append((lease_row["process_pid"], lease_row["process_start_time"]))
+                    if owner_pid is not None:
+                        identities.append((owner_pid, owner_start_time))
+                    if not identities:
+                        is_gone, evidence = True, "OWNER_UNRECORDED"
                     else:
-                        is_gone, evidence = self._owner_liveness(pid, start_time)
-
-                    if not is_gone:
-                        continue
+                        is_gone, evidence = self._all_recorded_owners_gone(identities)
+                        if not is_gone:
+                            continue
 
                 # Never auto-release any parent that still has surviving INHERITED children.
                 lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
@@ -817,37 +844,41 @@ class HostResourceManager:
                         ).fetchone()
                         if att_row and att_row["work_item_id"]:
                             wi_id = att_row["work_item_id"]
-                            owner = conn.execute(
-                                """
-                                SELECT attempt_id FROM claims
-                                WHERE work_item_id = ?
-                                ORDER BY claimed_at_utc DESC LIMIT 1
-                                """,
-                                (wi_id,),
+                            # The fence follows the store's claim authority
+                            # (current_claim_attempt_id/current_claim_generation),
+                            # never wall-clock ordering: after a replacement
+                            # claim -- even one with an earlier claimed_at_utc
+                            # after clock rollback -- the running work item
+                            # belongs to the replacement and must not be fenced
+                            # (finding 4). The update is conditional in this
+                            # same transaction, and the event is written only
+                            # when the update actually fenced something.
+                            wi_row = conn.execute(
+                                "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
                             ).fetchone()
-                            if owner is None or owner["attempt_id"] == attempt_id:
-                                wi_row = conn.execute(
-                                    "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
-                                ).fetchone()
-                                if wi_row and wi_row["state"] in (
-                                    WorkItemState.CLAIMED.value,
-                                    WorkItemState.DISPATCHING.value,
-                                    WorkItemState.RUNNING.value,
-                                    WorkItemState.WAITING_EXTERNAL.value,
-                                    WorkItemState.REVIEW.value,
-                                    WorkItemState.RECOVERY_REQUIRED.value,
-                                ):
+                            if wi_row and wi_row["state"] in (
+                                WorkItemState.CLAIMED.value,
+                                WorkItemState.DISPATCHING.value,
+                                WorkItemState.RUNNING.value,
+                                WorkItemState.WAITING_EXTERNAL.value,
+                                WorkItemState.REVIEW.value,
+                                WorkItemState.RECOVERY_REQUIRED.value,
+                            ):
+                                target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
+                                fenced = conn.execute(
+                                    """
+                                    UPDATE work_items SET state = ?
+                                    WHERE work_item_id = ?
+                                      AND current_claim_attempt_id = ?
+                                      AND current_claim_generation = COALESCE(
+                                          (SELECT claim_generation FROM claims WHERE attempt_id = ?),
+                                          -1
+                                      )
+                                    """,
+                                    (target_wi_st, wi_id, attempt_id, attempt_id),
+                                )
+                                if fenced.rowcount == 1:
                                     old_wi_st = wi_row["state"]
-                                    target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
-                                    conn.execute(
-                                        """
-                                        UPDATE work_items SET state = ?
-                                        WHERE work_item_id = ? AND work_item_id IN (
-                                            SELECT work_item_id FROM attempts WHERE attempt_id = ?
-                                        )
-                                        """,
-                                        (target_wi_st, wi_id, attempt_id),
-                                    )
                                     conn.execute(
                                         """
                                         INSERT INTO events (
@@ -943,6 +974,11 @@ class HostResourceManager:
         stale_slot_ttl_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Mark expired resource leases recovery-required; sweep stale slots."""
+        if self.store is not None:
+            # Maintenance drains the committed receipt outbox too: a separate
+            # CLI writer that commits a receipt and dies before file delivery
+            # leaves rows only a surviving store can deliver (finding 6).
+            self.store.ensure_receipt_files_delivered()
         now = now or _now()
         now_iso = _iso(now)
         expired_query = """
@@ -1122,6 +1158,24 @@ class HostResourceManager:
             return True, "OWNER_PID_REUSED"
         return False, "OWNER_PROCESS_ALIVE"
 
+    @classmethod
+    def _all_recorded_owners_gone(
+        cls, identities: Sequence[tuple[Optional[int], Optional[float]]]
+    ) -> tuple[bool, str]:
+        """Adjudicate every recorded owner identity together (finding 2).
+
+        A single identity that is alive -- or whose liveness cannot be proven
+        either way -- keeps the hold. Release requires every recorded identity
+        to be proven dead; elapsed time alone never establishes that.
+        """
+        evidence = "OWNER_PROCESS_GONE"
+        for pid, start_time in identities:
+            owner_gone, owner_evidence = cls._owner_liveness(pid, start_time)
+            if not owner_gone:
+                return False, owner_evidence
+            evidence = owner_evidence
+        return True, evidence
+
     def status(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
         pool = self.store.get_resource_pool(self.resource_key)
         requests = self.store.list_resource_requests(resource_key=self.resource_key)
@@ -1268,6 +1322,22 @@ class HostResourceManager:
                     conn.execute(
                         "UPDATE host_resource_leases SET process_pid = ?, process_start_time = ? WHERE lease_id = ?",
                         (process.pid, process_start_time, lease_id),
+                    )
+            elif admission["state"] == HostResourceRequestState.INHERITED.value:
+                # An inherited child shares the parent's lease row, so the
+                # child's own identity has nowhere there to live. Record it on
+                # the request itself: the sweep must adjudicate the child by
+                # the child, never by the parent, and a child whose identity
+                # went unrecorded keeps the hold (finding 3).
+                with self.store._connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE host_resource_requests
+                        SET owner_process_pid = ?, owner_process_start_time = ?,
+                            owner_identity_source = 'SPAWNED_CHILD', owner_last_seen_at_utc = ?
+                        WHERE request_id = ?
+                        """,
+                        (process.pid, process_start_time, current_utc_iso(), request_id),
                     )
             sequence = 1
             while True:

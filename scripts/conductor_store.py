@@ -1054,6 +1054,32 @@ LATEST_SCHEMA_VERSION = 9
 REAPED_LEASE_REJECTED = "REAPED_LEASE_REJECTED"
 ATTEMPT_IDENTITY_REQUIRED = "ATTEMPT_IDENTITY_REQUIRED"
 
+# The columns every v9 database must have, whatever v7/v8 layout it started
+# from. Validated independently of the recorded version: the two unmerged v8
+# branches added different columns, so the marker alone cannot say which
+# columns a database actually has (finding 1).
+V9_REQUIRED_COLUMNS = (
+    ("leases", "lease_generation"),
+    ("claims", "claim_generation"),
+    ("work_items", "current_claim_attempt_id"),
+    ("work_items", "current_claim_generation"),
+    ("receipts", "receipt_file_delivered"),
+)
+
+# Work-item states owned by a live claim. The v9 ownership backfill fences
+# live items whose owner history cannot be established (finding 4).
+_LIVE_EXECUTION_STATES = (
+    WorkItemState.CLAIMED.value,
+    WorkItemState.DISPATCHING.value,
+    WorkItemState.RUNNING.value,
+    WorkItemState.WAITING_EXTERNAL.value,
+    WorkItemState.REVIEW.value,
+)
+
+# Upper bound on undelivered receipts drained from the committed outbox per
+# maintenance pass; repeated passes eventually drain the rest (finding 6).
+RECEIPT_OUTBOX_DRAIN_LIMIT = 64
+
 
 class ConductorStore:
     """Single-writer SQLite WAL store and inbox manager."""
@@ -1151,9 +1177,205 @@ class ConductorStore:
             "directories": usage,
         }
 
+    @staticmethod
+    def _execute_script_within_transaction(conn: sqlite3.Connection, script: str) -> None:
+        """Run a multi-statement migration script inside the caller's transaction.
+
+        ``Connection.executescript`` commits any pending transaction before it
+        runs, so it would break the single-transaction guarantee around the
+        migration DDL and its marker. Statements run one at a time instead
+        (finding 5).
+        """
+        buffer = ""
+        for line in script.splitlines():
+            buffer += line + "\n"
+            if not sqlite3.complete_statement(buffer):
+                continue
+            conn.execute(buffer)
+            buffer = ""
+        if buffer.strip():
+            raise sqlite3.OperationalError("migration script ended with an incomplete statement")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, alter_sql: str) -> bool:
+        """Add ``column`` to ``table`` only when missing; True when it was added.
+
+        The column-level check, not the recorded version, is what lets the v9
+        migration converge on one schema from the several v7/v8 layouts in the
+        wild (finding 1). Columns the other branch owns are never touched.
+        """
+        table_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (table,)
+        ).fetchone()
+        if table_row is None:
+            return False
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column in columns:
+            return False
+        conn.execute(alter_sql)
+        return True
+
+    @staticmethod
+    def _validate_v9_schema(conn: sqlite3.Connection) -> None:
+        """Fail closed when a required v9 column is still missing after the DDL.
+
+        Absent tables are out of scope: every earlier migration also tolerated
+        a database missing a core table, and v9 does not create tables. A
+        table that exists must end up with every column it needs.
+        """
+        missing = []
+        for table, column in V9_REQUIRED_COLUMNS:
+            table_row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (table,)
+            ).fetchone()
+            if table_row is None:
+                continue
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in columns:
+                missing.append(f"{table}.{column}")
+        if missing:
+            raise RuntimeError(
+                "conductor store v9 migration failed validation; missing: " + ", ".join(missing)
+            )
+
+    def _write_migration_backup(self, tag: str) -> None:
+        """Copy the database (and its WAL) before an in-place schema migration."""
+        if not (self.db_path.exists() and self.db_path.stat().st_size > 0):
+            return
+        backup_file = self.backups_dir / f"conductor_db_{tag}_{int(time.time())}.db"
+        shutil.copy2(self.db_path, backup_file)
+        # A live WAL database can hold committed pages outside the main file;
+        # a main-file-only backup would restore an older state than intended.
+        wal_path = self.db_path.with_name(f"{self.db_path.name}-wal")
+        if wal_path.is_file():
+            shutil.copy2(wal_path, backup_file.with_name(backup_file.name + "-wal"))
+
+    def _migrate_to_v9_locked(self, conn: sqlite3.Connection, *, backfill_history: bool) -> None:
+        """Bring any pre-v9 layout to the complete v9 schema, column by column.
+
+        Three layouts reach this method: plain v7 (no fencing columns at all),
+        the other unmerged branch's v8 (#122 process management: different
+        columns, no ``leases.lease_generation``), and this branch's own earlier
+        v8. Every required column is checked independently and added only when
+        missing; foreign columns and tables are preserved untouched.
+        """
+        self._ensure_column(
+            conn, "leases", "lease_generation",
+            "ALTER TABLE leases ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 1",
+        )
+        added_claim_generation = self._ensure_column(
+            conn, "claims", "claim_generation",
+            "ALTER TABLE claims ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 1",
+        )
+        if added_claim_generation:
+            # Claim generations follow true insertion order (rowid), never
+            # claimed_at_utc: clock rollback or a timestamp tie must not
+            # invert which claim was actually taken last (finding 4).
+            conn.execute(
+                """
+                UPDATE claims SET claim_generation = (
+                    SELECT COUNT(*) FROM claims c2
+                    WHERE c2.work_item_id = claims.work_item_id
+                      AND c2.rowid <= claims.rowid
+                )
+                """
+            )
+        added_owner_columns = any((
+            self._ensure_column(
+                conn, "work_items", "current_claim_attempt_id",
+                "ALTER TABLE work_items ADD COLUMN current_claim_attempt_id TEXT",
+            ),
+            self._ensure_column(
+                conn, "work_items", "current_claim_generation",
+                "ALTER TABLE work_items ADD COLUMN current_claim_generation INTEGER",
+            ),
+        ))
+        claims_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'claims'"
+        ).fetchone()
+        if backfill_history and claims_table is not None and (added_owner_columns or added_claim_generation):
+            # Backfill the recorded current owner from claim history, with an
+            # explicit recovery policy where ownership cannot be established:
+            # a live work item with no claim at all has no owner history to
+            # appoint, so it is fenced for explicit operator recovery instead
+            # of staying in a state whose fenced writes would silently fail
+            # (finding 4).
+            for wi_row in conn.execute("SELECT work_item_id, state FROM work_items").fetchall():
+                wi_id = wi_row["work_item_id"]
+                top_claim = conn.execute(
+                    """
+                    SELECT attempt_id, claim_generation FROM claims
+                    WHERE work_item_id = ?
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                    """,
+                    (wi_id,),
+                ).fetchone()
+                if top_claim is not None:
+                    conn.execute(
+                        """
+                        UPDATE work_items
+                        SET current_claim_attempt_id = ?, current_claim_generation = ?
+                        WHERE work_item_id = ?
+                        """,
+                        (top_claim["attempt_id"], int(top_claim["claim_generation"]), wi_id),
+                    )
+                elif wi_row["state"] in _LIVE_EXECUTION_STATES:
+                    old_state = wi_row["state"]
+                    conn.execute(
+                        "UPDATE work_items SET state = ? WHERE work_item_id = ?",
+                        (WorkItemState.RECOVERY_REQUIRED.value, wi_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO events (
+                            event_id, work_item_id, attempt_id, previous_state, next_state,
+                            actor_identity, reason_code, recorded_at_utc, details_json, schema_version
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            f"evt_{uuid.uuid4().hex[:12]}",
+                            wi_id,
+                            None,
+                            old_state,
+                            WorkItemState.RECOVERY_REQUIRED.value,
+                            "store-migration",
+                            "MIGRATION_OWNERSHIP_UNESTABLISHED",
+                            current_utc_iso(),
+                            json.dumps({"previous_state": old_state, "current_owner": None}),
+                            "conductor.event.v1",
+                        ),
+                    )
+        added_receipt_flag = self._ensure_column(
+            conn, "receipts", "receipt_file_delivered",
+            "ALTER TABLE receipts ADD COLUMN receipt_file_delivered INTEGER NOT NULL DEFAULT 0",
+        )
+        receipts_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'receipts'"
+        ).fetchone()
+        if receipts_table is not None and (added_receipt_flag or backfill_history):
+            for r_row in conn.execute("SELECT command_id FROM receipts").fetchall():
+                if (self.receipts_dir / f"receipt_{r_row['command_id']}.json").exists():
+                    conn.execute(
+                        "UPDATE receipts SET receipt_file_delivered = 1 WHERE command_id = ?",
+                        (r_row["command_id"],),
+                    )
+
     def _init_db(self) -> None:
-        """Initialize SQLite tables and forward-only schema migrations."""
+        """Initialize SQLite tables and forward-only schema migrations.
+
+        The version read, every schema inspection, all DDL and every marker
+        write happen inside one ``BEGIN IMMEDIATE`` transaction: two
+        initializers cannot both observe the same missing column and race
+        their ALTERs, and a failure partway cannot commit a schema change
+        without its migration marker (finding 5).
+        """
         with self._connection() as conn:
+            # BEGIN IMMEDIATE takes the write lock before anything is read, so
+            # a concurrent initializer re-reads the version only after this
+            # transaction commits -- the same defence acquire_leader_lock
+            # uses against stale-lock theft.
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1178,11 +1400,10 @@ class ConductorStore:
 
             if current_version < 1:
                 # Backup before migration if DB existed
-                if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                    backup_file = self.backups_dir / f"conductor_db_v{current_version}_{int(time.time())}.db"
-                    shutil.copy2(self.db_path, backup_file)
+                self._write_migration_backup(f"v{current_version}")
 
-                conn.executescript(
+                self._execute_script_within_transaction(
+                    conn,
                     """
                     CREATE TABLE IF NOT EXISTS work_items (
                         work_item_id TEXT PRIMARY KEY,
@@ -1320,11 +1541,10 @@ class ConductorStore:
             if current_version < 2:
                 # Resource admission is additive. Preserve the pre-migration DB
                 # before creating the host lease tables.
-                if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                    backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_resource_{int(time.time())}.db"
-                    shutil.copy2(self.db_path, backup_file)
+                self._write_migration_backup(f"v{current_version}_pre_resource")
 
-                conn.executescript(
+                self._execute_script_within_transaction(
+                    conn,
                     """
                     CREATE TABLE IF NOT EXISTS host_resource_pools (
                         resource_key TEXT PRIMARY KEY,
@@ -1396,9 +1616,7 @@ class ConductorStore:
                 # H8 binds the canonical CONTEXT.md identity to a WorkItem.
                 # Preserve old databases and keep the digest optional for
                 # legacy callers that have not supplied a context packet yet.
-                if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                    backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_context_{int(time.time())}.db"
-                    shutil.copy2(self.db_path, backup_file)
+                self._write_migration_backup(f"v{current_version}_pre_context")
 
                 columns = {
                     row[1] for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
@@ -1416,9 +1634,7 @@ class ConductorStore:
                     row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
                 }
                 if "priority" not in columns:
-                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_priority_{int(time.time())}.db"
-                        shutil.copy2(self.db_path, backup_file)
+                    self._write_migration_backup(f"v{current_version}_pre_priority")
                     conn.execute(
                         "ALTER TABLE host_resource_requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 50"
                     )
@@ -1449,9 +1665,7 @@ class ConductorStore:
                     row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
                 }
                 if "slot_key" not in columns:
-                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_slot_key_{int(time.time())}.db"
-                        shutil.copy2(self.db_path, backup_file)
+                    self._write_migration_backup(f"v{current_version}_pre_slot_key")
                     conn.execute(
                         "ALTER TABLE host_resource_requests ADD COLUMN slot_key TEXT NOT NULL DEFAULT ''"
                     )
@@ -1514,9 +1728,7 @@ class ConductorStore:
                     row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
                 }
                 if "owner_process_pid" not in columns:
-                    if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                        backup_file = self.backups_dir / f"conductor_db_v{current_version}_pre_owner_identity_{int(time.time())}.db"
-                        shutil.copy2(self.db_path, backup_file)
+                    self._write_migration_backup(f"v{current_version}_pre_owner_identity")
                     conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_pid INTEGER NULL")
                     conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_process_start_time REAL NULL")
                     conn.execute("ALTER TABLE host_resource_requests ADD COLUMN owner_identity_source TEXT NOT NULL DEFAULT 'UNRECORDED'")
@@ -1542,86 +1754,22 @@ class ConductorStore:
                 )
 
             if current_version < 9:
-                claims_table = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='claims'"
-                ).fetchone()
-                if claims_table is not None:
-                    claim_columns = {
-                        row[1] for row in conn.execute("PRAGMA table_info(claims)").fetchall()
-                    }
-                    if "claim_generation" not in claim_columns:
-                        conn.execute(
-                            "ALTER TABLE claims ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 1"
-                        )
-                    conn.execute(
-                        """
-                        UPDATE claims SET claim_generation = (
-                            SELECT COUNT(*) FROM claims c2
-                            WHERE c2.work_item_id = claims.work_item_id
-                              AND (
-                                c2.claimed_at_utc < claims.claimed_at_utc
-                                OR (c2.claimed_at_utc = claims.claimed_at_utc AND c2.claim_id <= claims.claim_id)
-                              )
-                        )
-                        """
-                    )
-                wi_table = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='work_items'"
-                ).fetchone()
-                if wi_table is not None:
-                    wi_columns = {
-                        row[1] for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
-                    }
-                    if "current_claim_attempt_id" not in wi_columns:
-                        conn.execute("ALTER TABLE work_items ADD COLUMN current_claim_attempt_id TEXT")
-                        conn.execute(
-                            "ALTER TABLE work_items ADD COLUMN current_claim_generation INTEGER"
-                        )
-                    if claims_table is not None:
-                        for wi_row in conn.execute("SELECT work_item_id FROM work_items").fetchall():
-                            wi_id = wi_row["work_item_id"]
-                            top_claim = conn.execute(
-                                """
-                                SELECT attempt_id, claim_generation FROM claims
-                                WHERE work_item_id = ?
-                                ORDER BY claim_generation DESC, claimed_at_utc DESC, claim_id DESC
-                                LIMIT 1
-                                """,
-                                (wi_id,),
-                            ).fetchone()
-                            if top_claim:
-                                conn.execute(
-                                    """
-                                    UPDATE work_items
-                                    SET current_claim_attempt_id = ?, current_claim_generation = ?
-                                    WHERE work_item_id = ?
-                                    """,
-                                    (
-                                        top_claim["attempt_id"],
-                                        int(top_claim["claim_generation"]),
-                                        wi_id,
-                                    ),
-                                )
-                receipts_table = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='receipts'"
-                ).fetchone()
-                if receipts_table is not None:
-                    receipt_columns = {
-                        row[1] for row in conn.execute("PRAGMA table_info(receipts)").fetchall()
-                    }
-                    if "receipt_file_delivered" not in receipt_columns:
-                        conn.execute(
-                            "ALTER TABLE receipts ADD COLUMN receipt_file_delivered INTEGER NOT NULL DEFAULT 0"
-                        )
-                    for r_row in conn.execute("SELECT command_id FROM receipts").fetchall():
-                        if (self.receipts_dir / f"receipt_{r_row['command_id']}.json").exists():
-                            conn.execute(
-                                "UPDATE receipts SET receipt_file_delivered = 1 WHERE command_id = ?",
-                                (r_row["command_id"],),
-                            )
+                self._migrate_to_v9_locked(conn, backfill_history=True)
+                # The marker is recorded only after the resulting schema
+                # validates, inside the same transaction: a validation failure
+                # rolls the whole migration back with it (finding 1).
+                self._validate_v9_schema(conn)
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc) VALUES (9, datetime('now'))"
                 )
+            else:
+                # A database already marked v9 by an earlier build of this
+                # branch can still miss a column: that build recorded v9 from
+                # the other branch's v8 layout without validating
+                # leases.lease_generation. Heal additively and validate; no
+                # marker rewrite is needed.
+                self._migrate_to_v9_locked(conn, backfill_history=False)
+                self._validate_v9_schema(conn)
 
     def acquire_leader_lock(self, lock_name: str = "primary_coordinator") -> bool:
         """Acquire or renew single-writer leader lock with PID + process start time verification."""
@@ -1757,7 +1905,15 @@ class ConductorStore:
         return parsed if isinstance(parsed, dict) else {}
 
     def ensure_receipt_files_delivered(self) -> None:
-        """Best-effort flush of receipt files that failed to write after commit."""
+        """Best-effort flush of receipt files that failed to write after commit.
+
+        Drains this instance's in-memory backlog and the committed database
+        outbox (``receipt_file_delivered = 0``), so a surviving store recovers
+        another writer's undelivered receipts during normal maintenance, not
+        only at startup. Each retry re-reads the committed receipt row and
+        reuses its receipt id and filename, so recovery after a
+        write-before-ack failure stays idempotent.
+        """
         still_pending: List[Receipt] = []
         for receipt in self._receipt_delivery_backlog:
             try:
@@ -1766,33 +1922,40 @@ class ConductorStore:
             except Exception:
                 still_pending.append(receipt)
         self._receipt_delivery_backlog = still_pending
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM receipts WHERE receipt_file_delivered = 0 LIMIT ?",
+                    (RECEIPT_OUTBOX_DRAIN_LIMIT,),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return
+        in_flight = {receipt.command_id for receipt in still_pending}
+        for row in rows:
+            command_id = str(row["command_id"])
+            if command_id in in_flight:
+                continue
+            receipt = Receipt(
+                receipt_id=row["receipt_id"],
+                command_id=command_id,
+                idempotency_key=row["idempotency_key"],
+                status=row["status"],
+                result=self._receipt_result_from_row(row),
+                error_message=row["error_message"],
+                processed_at_utc=row["processed_at_utc"],
+                schema_version=row["schema_version"],
+            )
+            try:
+                self.write_receipt_file(receipt)
+                self._mark_receipt_file_delivered(command_id)
+            except Exception:
+                self._receipt_delivery_backlog.append(receipt)
 
     def _reconcile_pending_receipt_files_from_db(self) -> None:
-        """Derive undelivered receipt files from committed DB rows (survives restart)."""
-        with self._connection() as conn:
-            if not conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipts'"
-            ).fetchone():
-                return
-            rows = conn.execute(
-                "SELECT * FROM receipts WHERE receipt_file_delivered = 0"
-            ).fetchall()
-        pending_ids = {r.command_id for r in self._receipt_delivery_backlog}
-        for row in rows:
-            if row["command_id"] in pending_ids:
-                continue
-            self._receipt_delivery_backlog.append(
-                Receipt(
-                    receipt_id=row["receipt_id"],
-                    command_id=row["command_id"],
-                    idempotency_key=row["idempotency_key"],
-                    status=row["status"],
-                    result=self._receipt_result_from_row(row),
-                    error_message=row["error_message"],
-                    processed_at_utc=row["processed_at_utc"],
-                    schema_version=row["schema_version"],
-                )
-            )
+        """Deliver receipt files derived from committed DB rows (survives restart).
+
+        Startup shares the maintenance drain: the outbox query is the same one
+        ``ensure_receipt_files_delivered`` runs on every pass."""
         self.ensure_receipt_files_delivered()
 
     def _ensure_receipt_file_on_disk(self, receipt: Receipt) -> None:
