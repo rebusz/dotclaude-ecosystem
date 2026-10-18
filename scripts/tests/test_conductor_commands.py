@@ -194,3 +194,99 @@ def test_reconcile_expired_lease_liveness(processor: ConductorCommandProcessor):
 
     item = processor.store.get_work_item(work_item_id)
     assert item.state == WorkItemState.RECOVERY_REQUIRED
+
+
+def test_reaped_owner_publish_rejected_outcome_stays_unknown(processor: ConductorCommandProcessor):
+    # (H2) Stale reaped owner loses right to publish: publish is rejected and outcome stays UNKNOWN
+    from scripts.conductor_resources import HostResourceManager, DEFAULT_LEASE_TTL_SECONDS
+
+    enqueue_cmd = CommandEnvelope(
+        command_id="cmd_enq_reaped",
+        command_type="enqueue",
+        payload={
+            "idempotency_key": "idemp_reaped_task",
+            "title": "Reaped Task",
+            "repo_id": "dotclaude-ecosystem",
+            "repo_path": "D:/dotclaude/dotclaude-ecosystem",
+            "plan_path": "design/plans/test.md",
+            "risk_class": "R1",
+            "workflow": "fwf",
+            "requested_terminal_stage": "merged",
+            "job_kind": "engineering_plan_lifecycle",
+        },
+        idempotency_key="idemp_enq_reaped",
+    )
+    rcp_enq = processor.process_envelope(enqueue_cmd)
+    work_item_id = rcp_enq.result["work_item_id"]
+
+    processor.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.READY,
+        actor="operator",
+        reason_code="READY_TEST",
+    )
+
+    claim_cmd = CommandEnvelope(
+        command_id="cmd_claim_reaped",
+        command_type="claim",
+        payload={"work_item_id": work_item_id, "claimed_by_host": "claude_host"},
+        idempotency_key="idemp_claim_reaped",
+    )
+    rcp_claim = processor.process_envelope(claim_cmd)
+    attempt_id = rcp_claim.result["attempt_id"]
+
+    # Transition to RUNNING
+    processor.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.DISPATCHING,
+        actor="claude_host",
+        reason_code="DISPATCH_START",
+        attempt_id=attempt_id,
+    )
+    processor.store.transition_work_item_state(
+        work_item_id=work_item_id,
+        target_state=WorkItemState.RUNNING,
+        actor="claude_host",
+        reason_code="DISPATCH_RUNNING",
+        attempt_id=attempt_id,
+    )
+
+    # Request capacity on host:heavy
+    manager = HostResourceManager(processor.store, resource_key="host:heavy")
+    req = manager.request(
+        purpose="pytest_heavy",
+        attempt_id=attempt_id,
+        agent_instance="claude_host",
+    )
+    assert req["state"] == "ACTIVE"
+
+    # Slot is abandoned and reaped after TTL
+    future = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 1000)
+    sweep_res = manager.sweep_stale_slots(now=future)
+    assert sweep_res["swept_count"] == 1
+
+    # Verify attempt status was set to UNKNOWN
+    with processor.store._connection() as conn:
+        att = conn.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+        assert att["status"] == "UNKNOWN"
+        assert att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+
+    # Reaped agent attempts to publish via complete
+    complete_cmd = CommandEnvelope(
+        command_id="cmd_comp_reaped",
+        command_type="complete",
+        payload={"work_item_id": work_item_id, "attempt_id": attempt_id},
+        idempotency_key="idemp_comp_reaped",
+    )
+    rcp_comp = processor.process_envelope(complete_cmd)
+    assert rcp_comp.status == "ERROR"
+    assert "REAPED_LEASE_REJECTED" in rcp_comp.error_message
+
+    # WorkItem was not completed and remains in RECOVERY_REQUIRED
+    item = processor.store.get_work_item(work_item_id)
+    assert item.state == WorkItemState.RECOVERY_REQUIRED
+
+    # Attempt outcome stays UNKNOWN
+    with processor.store._connection() as conn:
+        att_after = conn.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+        assert att_after["status"] == "UNKNOWN"

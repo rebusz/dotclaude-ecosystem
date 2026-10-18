@@ -272,44 +272,17 @@ def _read_resource_live_snapshot_from_conn(
         fenced.append(_join_request_lease(freq, leases_by_request_id.get(freq["request_id"])))
 
     sweepable_count = 0
-    from scripts.conductor_resources import get_stale_slot_ttl_seconds
+    from scripts.conductor_resources import HostResourceManager, get_stale_slot_ttl_seconds
     ttl_s = get_stale_slot_ttl_seconds()
     if ttl_s > 0:
-        now_dt = datetime.now(timezone.utc)
-        for freq in fenced:
-            req_id = freq["request_id"]
-            timestamps = [parse_iso_or_expired(freq["created_at_utc"])]
-            if freq.get("last_heartbeat_utc"):
-                timestamps.append(parse_iso_or_expired(freq["last_heartbeat_utc"]))
-            max_ev = conn.execute(
-                "SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events WHERE request_id = ?",
-                (req_id,),
-            ).fetchone()
-            if max_ev and max_ev["max_ev"]:
-                timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
-            age = (now_dt - max(timestamps)).total_seconds()
-            if age >= ttl_s:
-                lease_id = freq.get("lease_id")
-                if lease_id:
-                    child_count = conn.execute(
-                        "SELECT COUNT(*) FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
-                        (lease_id, HostResourceRequestState.INHERITED.value),
-                    ).fetchone()[0]
-                    if child_count > 0:
-                        continue
-                pid = freq.get("process_pid")
-                start_time = freq.get("process_start_time")
-                if pid is None:
-                    sweepable_count += 1
-                else:
-                    try:
-                        obs = psutil.Process(int(pid)).create_time()
-                        if start_time is not None and abs(obs - float(start_time)) > 1.0:
-                            sweepable_count += 1
-                    except psutil.NoSuchProcess:
-                        sweepable_count += 1
-                    except (OSError, ValueError, psutil.Error):
-                        pass
+        mgr = HostResourceManager(None, resource_key=resource_key)  # type: ignore[arg-type]
+        sweep_res = mgr._sweep_stale_slots_locked(
+            conn,
+            resource_key=resource_key,
+            dry_run=True,
+            include_active=True,
+        )
+        sweepable_count = sweep_res["swept_count"]
 
     return {
         "resource_key": resource_key,
@@ -1098,6 +1071,7 @@ class ConductorStore:
 
         self._ensure_directories()
         self.leader_id = f"leader_{uuid.uuid4().hex[:12]}"
+        self._pending_receipts: Dict[int, List[Receipt]] = {}
         self._init_db()
 
     def _ensure_directories(self) -> None:
@@ -1120,10 +1094,16 @@ class ConductorStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn_id = id(conn)
+        self._pending_receipts[conn_id] = []
         try:
             with conn:
                 yield conn
+            # Commit succeeded! Write staged receipt files to disk after commit:
+            for receipt in self._pending_receipts.pop(conn_id, []):
+                self.write_receipt_file(receipt)
         finally:
+            self._pending_receipts.pop(conn_id, None)
             conn.close()
 
     def close(self) -> None:
@@ -1624,9 +1604,29 @@ class ConductorStore:
         files = sorted([p for p in self.inbox_dir.glob("env_*.json") if p.is_file()])
         return files
 
-    def save_receipt(self, receipt: Receipt, conn: Optional[sqlite3.Connection] = None) -> pathlib.Path:
-        """Save receipt to database and write atomic receipt file."""
+    def write_receipt_file(self, receipt: Receipt) -> pathlib.Path:
+        """Write atomic receipt JSON file to disk."""
         receipt_data = receipt.to_dict()
+        receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(self.receipts_dir), prefix="rcp_", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(receipt_data, f, indent=2)
+            os.replace(tmp_path, receipt_file)
+            return receipt_file
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+
+    def flush_pending_receipts(self, conn: sqlite3.Connection) -> None:
+        """Write any staged receipts to disk (e.g. after manual conn.commit())."""
+        for receipt in self._pending_receipts.pop(id(conn), []):
+            self.write_receipt_file(receipt)
+
+    def save_receipt(self, receipt: Receipt, conn: Optional[sqlite3.Connection] = None) -> pathlib.Path:
+        """Save receipt to database and write atomic receipt file after commit."""
+        receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
 
         if conn is not None:
             conn.execute(
@@ -1646,9 +1646,11 @@ class ConductorStore:
                     receipt.schema_version,
                 ),
             )
+            self._pending_receipts.setdefault(id(conn), []).append(receipt)
+            return receipt_file
         else:
-            with self._connection() as conn:
-                conn.execute(
+            with self._connection() as c:
+                c.execute(
                     """
                     INSERT OR REPLACE INTO receipts (
                         receipt_id, command_id, idempotency_key, status, result_json, error_message, processed_at_utc, schema_version
@@ -1665,18 +1667,8 @@ class ConductorStore:
                         receipt.schema_version,
                     ),
                 )
-
-        receipt_file = self.receipts_dir / f"receipt_{receipt.command_id}.json"
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(self.receipts_dir), prefix="rcp_", suffix=".tmp")
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                json.dump(receipt_data, f, indent=2)
-            os.replace(tmp_path, receipt_file)
-        except Exception:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-
-        return receipt_file
+                self._pending_receipts.setdefault(id(c), []).append(receipt)
+            return receipt_file
 
     def get_receipt(self, idempotency_key: str) -> Optional[Receipt]:
         """Fetch receipt by idempotency key."""

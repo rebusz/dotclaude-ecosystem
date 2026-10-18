@@ -1290,7 +1290,7 @@ def test_snapshot_sweepable_count_uses_get_stale_slot_ttl_seconds(tmp_path: path
 def test_stale_slot_fence_event_uses_reconcile_now(manager: HostResourceManager):
     # Finding 4: fence event uses event_time=now
     req = manager.request(purpose="pytest_heavy", attempt_id="at-fence-clk", agent_instance="clk-test")
-    fence_now = datetime(2026, 10, 17, 18, 0, 0, tzinfo=timezone.utc)
+    fence_now = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60)
     manager.reconcile(now=fence_now)
     with manager.store._connection() as conn:
         ev = conn.execute(
@@ -1403,6 +1403,11 @@ def test_stale_slot_never_auto_releases_inherited_or_parent_with_active_child(ma
     p_req_id = parent["request_id"]
     p_lease_id = parent["lease_id"]
 
+    # Active parent process keeps the inherited child and parent active
+    live_pid = os.getpid()
+    live_start = psutil.Process(live_pid).create_time()
+    _set_lease_process(manager, p_lease_id, live_pid, live_start)
+
     child = manager.request(
         purpose="pytest_focused",
         attempt_id="at-c1",
@@ -1421,7 +1426,7 @@ def test_stale_slot_never_auto_releases_inherited_or_parent_with_active_child(ma
     # Age past TTL relative to fence time (> 900s)
     future = fence_time + timedelta(seconds=1000)
 
-    # Sweeper runs: NEITHER parent nor child is auto-released
+    # Sweeper runs: NEITHER parent nor child is auto-released because owner is alive
     res = manager.sweep_stale_slots(now=future)
     assert res["swept_count"] == 0
     assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
@@ -1435,9 +1440,73 @@ def test_stale_slot_never_auto_releases_inherited_or_parent_with_active_child(ma
     manager.release(c_req_id)
     assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.RELEASED
 
-    # Now sweeper runs again: parent is now auto-released because child is no longer active
+    # Simulate parent owner gone
+    _set_lease_process(manager, p_lease_id, None, None)
+
+    # Now sweeper runs again: parent is now auto-released because child is no longer active and owner is gone
     res_after = manager.sweep_stale_slots(now=future)
     assert res_after["swept_count"] == 1
     assert p_req_id in res_after["swept_request_ids"]
     assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RELEASED
+
+
+def test_crashed_inherited_child_without_pid_released_and_frees_parent(manager: HostResourceManager):
+    # (H1) Crashed inherited child without pid gets released and frees the parent
+    base_time = datetime.now(timezone.utc)
+    parent = manager.request(purpose="pytest_heavy", attempt_id="at-p-crash", agent_instance="ag-p")
+    p_req_id = parent["request_id"]
+    p_lease_id = parent["lease_id"]
+
+    child = manager.request(
+        purpose="pytest_focused",
+        attempt_id="at-c-crash",
+        agent_instance="ag-c",
+        parent_lease_id=p_lease_id,
+    )
+    c_req_id = child["request_id"]
+    assert child["state"] == HostResourceRequestState.INHERITED.value
+
+    # Fence parent into RECOVERY_REQUIRED
+    fence_time = base_time + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60)
+    manager.reconcile(now=fence_time)
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.INHERITED
+
+    # Age past TTL (> 900s)
+    future = fence_time + timedelta(seconds=1000)
+
+    # Sweeper runs: both the crashed inherited child without pid and the parent are auto-released
+    res = manager.sweep_stale_slots(now=future)
+    assert res["swept_count"] == 2
+    assert c_req_id in res["swept_request_ids"]
+    assert p_req_id in res["swept_request_ids"]
+
+    assert manager.store.get_resource_request(c_req_id).state == HostResourceRequestState.RELEASED
+    assert manager.store.get_resource_request(c_req_id).reason_code == "STALE_SLOT_AUTO_RELEASED"
+    assert manager.store.get_resource_request(p_req_id).state == HostResourceRequestState.RELEASED
+    assert manager.store.get_resource_request(p_req_id).reason_code == "STALE_SLOT_AUTO_RELEASED"
+
+    # Pool is free: a fresh request succeeds immediately
+    fresh = manager.request(purpose="pytest_heavy", attempt_id="at-fresh", agent_instance="ag-fresh")
+    assert fresh["state"] == HostResourceRequestState.ACTIVE.value
+
+
+def test_reconcile_after_20_min_abandonment_releases_immediately(manager: HostResourceManager):
+    # (M2) An ACTIVE lease abandoned for 20 minutes without reconciler running releases immediately
+    req = manager.request(purpose="pytest_heavy", attempt_id="at-abandon-20", agent_instance="ag-abandon")
+    req_id = req["request_id"]
+    now_20m = datetime.now(timezone.utc) + timedelta(minutes=20)
+
+    res = manager.reconcile(now=now_20m)
+    assert res["stale_released_count"] == 1
+    assert req_id in res["stale_request_ids"]
+
+    r = manager.store.get_resource_request(req_id)
+    assert r.state == HostResourceRequestState.RELEASED
+    assert r.reason_code == "STALE_SLOT_AUTO_RELEASED"
+
+    # Receipt was generated and saved
+    rcp = manager.store.get_receipt(f"stale_slot_auto_release_{req_id}")
+    assert rcp is not None
+    assert rcp.status == "SUCCESS"
 

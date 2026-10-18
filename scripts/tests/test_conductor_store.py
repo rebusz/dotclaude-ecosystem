@@ -786,3 +786,34 @@ def test_read_all_pools_live_single_snapshot_read(tmp_path: pathlib.Path):
         assert mock_copy2.call_count == 1
         assert "gates" in frame
         assert len(frame["gates"]) >= 4
+
+
+def test_rollback_leaves_no_orphan_receipt_file(tmp_path: pathlib.Path):
+    # (M1) Rollback leaves no orphan receipt file; receipt file is written only after SQLite commit
+    store = ConductorStore(root_dir=tmp_path)
+    receipt = Receipt(
+        receipt_id="rcp_test_rollback",
+        command_id="cmd_rollback_test",
+        idempotency_key="idemp_rollback",
+        status="SUCCESS",
+        result={"action": "test"},
+    )
+    receipt_file = store.receipts_dir / f"receipt_{receipt.command_id}.json"
+
+    # Transaction that rolls back due to exception
+    with pytest.raises(RuntimeError, match="simulated failure before commit"):
+        with store._connection() as conn:
+            store.save_receipt(receipt, conn=conn)
+            raise RuntimeError("simulated failure before commit")
+
+    # DB has no receipt row
+    assert store.get_receipt(receipt.idempotency_key) is None
+    # Disk has no orphan receipt file
+    assert not receipt_file.exists()
+
+    # Successful commit writes both DB row and receipt file
+    with store._connection() as conn:
+        store.save_receipt(receipt, conn=conn)
+
+    assert store.get_receipt(receipt.idempotency_key) is not None
+    assert receipt_file.exists()

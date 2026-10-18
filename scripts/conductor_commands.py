@@ -277,6 +277,16 @@ class ConductorCommandProcessor:
         sequence = payload["sequence"]
         ttl_seconds = payload.get("ttl_seconds", 300)
 
+        with self.store._connection() as conn:
+            att = conn.execute(
+                "SELECT status, reason_code FROM attempts WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+            if att and (att["status"] == "UNKNOWN" or att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"):
+                raise ValueError(
+                    f"REAPED_LEASE_REJECTED: attempt {attempt_id} was reaped (STALE_SLOT_AUTO_RELEASED); heartbeat rejected"
+                )
+
         now_dt = datetime.now(timezone.utc)
         expires_dt = now_dt + timedelta(seconds=ttl_seconds)
 
@@ -381,6 +391,18 @@ class ConductorCommandProcessor:
 
     def _handle_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Record an EvidenceCheckpoint."""
+        attempt_id = payload.get("attempt_id")
+        if attempt_id:
+            with self.store._connection() as conn:
+                att = conn.execute(
+                    "SELECT status, reason_code FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                if att and (att["status"] == "UNKNOWN" or att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"):
+                    raise ValueError(
+                        f"REAPED_LEASE_REJECTED: attempt {attempt_id} was reaped (STALE_SLOT_AUTO_RELEASED); checkpoint rejected"
+                    )
+
         checkpoint = EvidenceCheckpoint(
             checkpoint_id=f"chk_{uuid.uuid4().hex[:12]}",
             work_item_id=payload["work_item_id"],
@@ -401,6 +423,47 @@ class ConductorCommandProcessor:
         work_item_id = payload["work_item_id"]
         attempt_id = payload.get("attempt_id")
         actor = payload.get("actor", "host")
+
+        with self.store._connection() as conn:
+            target_attempt_id = attempt_id
+            if not target_attempt_id:
+                latest_att = conn.execute(
+                    "SELECT attempt_id FROM attempts WHERE work_item_id = ? ORDER BY started_at_utc DESC LIMIT 1",
+                    (work_item_id,),
+                ).fetchone()
+                if latest_att:
+                    target_attempt_id = latest_att["attempt_id"]
+
+            if target_attempt_id:
+                att = conn.execute(
+                    "SELECT status, reason_code FROM attempts WHERE attempt_id = ?",
+                    (target_attempt_id,),
+                ).fetchone()
+                if att and (att["status"] == "UNKNOWN" or att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"):
+                    raise ValueError(
+                        f"REAPED_LEASE_REJECTED: attempt {target_attempt_id} was reaped (STALE_SLOT_AUTO_RELEASED); "
+                        "publish rejected and outcome remains UNKNOWN"
+                    )
+
+                stale_req = conn.execute(
+                    "SELECT request_id FROM host_resource_requests WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'",
+                    (target_attempt_id,),
+                ).fetchone()
+                if stale_req:
+                    raise ValueError(
+                        f"REAPED_LEASE_REJECTED: host resource for attempt {target_attempt_id} was auto-released; "
+                        "publish rejected and outcome remains UNKNOWN"
+                    )
+
+                lease = conn.execute(
+                    "SELECT lease_id FROM leases WHERE attempt_id = ?",
+                    (target_attempt_id,),
+                ).fetchone()
+                if att and not lease:
+                    raise ValueError(
+                        f"REAPED_LEASE_REJECTED: lease for attempt {target_attempt_id} not found or revoked; "
+                        "publish rejected and outcome remains UNKNOWN"
+                    )
 
         self.store.transition_work_item_state(
             work_item_id=work_item_id,

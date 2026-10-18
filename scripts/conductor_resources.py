@@ -25,6 +25,7 @@ from scripts.conductor_model import (
     HostResourceRequest,
     HostResourceRequestState,
     Receipt,
+    WorkItemState,
     current_utc_iso,
     parse_iso_or_expired,
 )
@@ -305,7 +306,7 @@ def classify_pytest_invocation(
 class HostResourceManager:
     """Single-writer resource admission over :class:`ConductorStore`."""
 
-    def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY):
+    def __init__(self, store: Optional[ConductorStore] = None, resource_key: str = RESOURCE_KEY):
         self.store = store
         self.resource_key = resource_key
         if resource_key not in KNOWN_RESOURCE_KEYS:
@@ -313,13 +314,14 @@ class HostResourceManager:
                 f"unknown resource key '{resource_key}'; "
                 f"expected one of {sorted(KNOWN_RESOURCE_KEYS)}"
             )
-        pool = self.store.get_resource_pool(resource_key)
-        if pool is None:
-            default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
-            # HRL-R2 intentionally has no environment-configurable capacity.
-            self.store.save_resource_pool(
-                HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
-            )
+        if self.store is not None:
+            pool = self.store.get_resource_pool(resource_key)
+            if pool is None:
+                default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
+                # HRL-R2 intentionally has no environment-configurable capacity.
+                self.store.save_resource_pool(
+                    HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
+                )
 
     def request(
         self,
@@ -614,137 +616,231 @@ class HostResourceManager:
         rk_filter = "AND resource_key = ?" if resource_key else ""
         params: list[Any] = [resource_key] if resource_key else []
 
-        candidates = conn.execute(
-            f"""
-            SELECT * FROM host_resource_requests
-            WHERE state IN {state_filter} {rk_filter}
-            ORDER BY created_at_utc, request_id
-            """,
-            params,
-        ).fetchall()
-
         swept_ids: list[str] = []
         receipts: list[Receipt] = []
 
-        for req in candidates:
-            req_id = req["request_id"]
-            state = req["state"]
+        while True:
+            newly_swept: list[str] = []
+            candidates = conn.execute(
+                f"""
+                SELECT * FROM host_resource_requests
+                WHERE state IN {state_filter} {rk_filter}
+                ORDER BY created_at_utc, request_id
+                """,
+                params,
+            ).fetchall()
 
-            lease_row = conn.execute(
-                "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
-            ).fetchone()
-            if not lease_row and req["parent_lease_id"]:
-                lease_row = conn.execute(
-                    "SELECT * FROM host_resource_leases WHERE lease_id = ?", (req["parent_lease_id"],)
-                ).fetchone()
-
-            if state in {HostResourceRequestState.ACTIVE.value, HostResourceRequestState.INHERITED.value}:
-                if not lease_row:
-                    heartbeat_expired = True
-                else:
-                    exp_str = lease_row["expires_at_utc"]
-                    heartbeat_expired = bool(exp_str and parse_iso_or_expired(exp_str) <= now)
-                if not heartbeat_expired:
+            for req in candidates:
+                req_id = req["request_id"]
+                state = req["state"]
+                if req_id in swept_ids:
                     continue
 
-            # (a) Check age relative to TTL:
-            # "measured from the later of created/last-seen/last-state-change"
-            timestamps: list[datetime] = [parse_iso_or_expired(req["created_at_utc"])]
-            if lease_row and lease_row["last_heartbeat_utc"]:
-                timestamps.append(parse_iso_or_expired(lease_row["last_heartbeat_utc"]))
-
-            max_ev = conn.execute(
-                "SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events WHERE request_id = ?",
-                (req_id,),
-            ).fetchone()
-            if max_ev and max_ev["max_ev"]:
-                timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
-
-            latest_activity = max(timestamps)
-            age_seconds = (now - latest_activity).total_seconds()
-            if age_seconds < ttl_seconds:
-                continue
-
-            # (b) Check INHERITED request and owner process liveness:
-            # Never auto-release an INHERITED request unless the inheriting worker is proven gone.
-            if state == HostResourceRequestState.INHERITED.value:
-                child_lease = conn.execute(
+                lease_row = conn.execute(
                     "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                 ).fetchone()
-                if not child_lease or not child_lease["process_pid"]:
-                    continue
-                is_gone, evidence = self._owner_liveness(
-                    child_lease["process_pid"], child_lease["process_start_time"]
-                )
-                if not is_gone:
-                    continue
-            else:
-                pid = lease_row["process_pid"] if lease_row else None
-                start_time = lease_row["process_start_time"] if lease_row else None
+                if not lease_row and req["parent_lease_id"]:
+                    lease_row = conn.execute(
+                        "SELECT * FROM host_resource_leases WHERE lease_id = ?", (req["parent_lease_id"],)
+                    ).fetchone()
 
-                if pid is None:
-                    is_gone = True
-                    evidence = "OWNER_UNRECORDED"
+                if state in {HostResourceRequestState.ACTIVE.value, HostResourceRequestState.INHERITED.value}:
+                    if not lease_row:
+                        heartbeat_expired = True
+                    else:
+                        exp_str = lease_row["expires_at_utc"]
+                        heartbeat_expired = bool(exp_str and parse_iso_or_expired(exp_str) <= now)
+                    if not heartbeat_expired:
+                        continue
+
+                # (a) Check age relative to TTL:
+                # "measured from the later of created/last-seen/last-state-change"
+                # Exclude fence events (LEASE_EXPIRED) and auto-release events so
+                # fencing an already-dead lease does not reset its staleness timer (M2).
+                timestamps: list[datetime] = [parse_iso_or_expired(req["created_at_utc"])]
+                if lease_row and lease_row["last_heartbeat_utc"]:
+                    timestamps.append(parse_iso_or_expired(lease_row["last_heartbeat_utc"]))
+
+                max_ev = conn.execute(
+                    """
+                    SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events
+                    WHERE request_id = ? AND reason_code NOT IN ('LEASE_EXPIRED', 'STALE_SLOT_AUTO_RELEASED')
+                    """,
+                    (req_id,),
+                ).fetchone()
+                if max_ev and max_ev["max_ev"]:
+                    timestamps.append(parse_iso_or_expired(max_ev["max_ev"]))
+
+                latest_activity = max(timestamps)
+                age_seconds = (now - latest_activity).total_seconds()
+                if age_seconds < ttl_seconds:
+                    continue
+
+                # (b) Check INHERITED request and owner process liveness (H1):
+                if state == HostResourceRequestState.INHERITED.value:
+                    child_lease = conn.execute(
+                        "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                    ).fetchone()
+                    pid = None
+                    start_time = None
+                    if child_lease and child_lease["process_pid"] is not None:
+                        pid = child_lease["process_pid"]
+                        start_time = child_lease["process_start_time"]
+                    elif lease_row and lease_row["process_pid"] is not None:
+                        pid = lease_row["process_pid"]
+                        start_time = lease_row["process_start_time"]
+
+                    if pid is None:
+                        is_gone = True
+                        evidence = "OWNER_UNRECORDED"
+                    else:
+                        is_gone, evidence = self._owner_liveness(pid, start_time)
+
+                    if not is_gone:
+                        continue
                 else:
-                    is_gone, evidence = self._owner_liveness(pid, start_time)
+                    pid = lease_row["process_pid"] if lease_row else None
+                    start_time = lease_row["process_start_time"] if lease_row else None
 
-                if not is_gone:
-                    continue
+                    if pid is None:
+                        is_gone = True
+                        evidence = "OWNER_UNRECORDED"
+                    else:
+                        is_gone, evidence = self._owner_liveness(pid, start_time)
 
-            # Never auto-release any parent that still has surviving INHERITED children.
-            lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
-            if lease_id:
-                child_count = conn.execute(
-                    "SELECT COUNT(*) FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
-                    (lease_id, HostResourceRequestState.INHERITED.value),
-                ).fetchone()[0]
-                if child_count > 0:
-                    continue
+                    if not is_gone:
+                        continue
 
-            swept_ids.append(req_id)
+                # Never auto-release any parent that still has surviving INHERITED children.
+                lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
+                if lease_id:
+                    child_rows = conn.execute(
+                        "SELECT request_id FROM host_resource_requests WHERE parent_lease_id = ? AND state = ?",
+                        (lease_id, HostResourceRequestState.INHERITED.value),
+                    ).fetchall()
+                    active_child_count = sum(
+                        1
+                        for c in child_rows
+                        if c["request_id"] not in swept_ids and c["request_id"] != req_id
+                    )
+                    if active_child_count > 0:
+                        continue
 
-            if not dry_run:
-                old_state = req["state"]
-                old_reason = req["reason_code"]
-                conn.execute(
-                    "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
-                    (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
-                )
-                self._event(
-                    conn,
-                    request_id=req_id,
-                    lease_id=lease_id,
-                    previous=old_state,
-                    next_state=HostResourceRequestState.RELEASED.value,
-                    actor=actor,
-                    reason="STALE_SLOT_AUTO_RELEASED",
-                    details={
-                        "previous_state": old_state,
-                        "previous_reason_code": old_reason,
-                        "evidence": evidence,
-                        "stale_reason": "STALE_SLOT_AUTO_RELEASED",
-                        "ttl_seconds": ttl_seconds,
-                    },
-                    event_time=now,
-                )
-                receipt = Receipt(
-                    receipt_id=f"rcp_{uuid.uuid4().hex[:12]}",
-                    command_id=f"cmd_stale_slot_{req_id}_{uuid.uuid4().hex[:8]}",
-                    idempotency_key=f"stale_slot_auto_release_{req_id}",
-                    status="SUCCESS",
-                    result={
-                        "request_id": req_id,
-                        "status": "RELEASED",
-                        "reason": "STALE_SLOT_AUTO_RELEASED",
-                        "previous_state": old_state,
-                        "previous_reason_code": old_reason,
-                        "resource_key": req["resource_key"],
-                    },
-                    processed_at_utc=now_iso,
-                )
-                self.store.save_receipt(receipt, conn=conn)
-                receipts.append(receipt)
-                self._promote_related_locked(conn, resource_key=req["resource_key"], actor=actor)
+                newly_swept.append(req_id)
+                swept_ids.append(req_id)
+
+                if not dry_run:
+                    old_state = req["state"]
+                    old_reason = req["reason_code"]
+                    conn.execute(
+                        "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
+                        (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
+                    )
+
+                    # (H2) Revoke the lease row in host_resource_leases
+                    conn.execute(
+                        "DELETE FROM host_resource_leases WHERE request_id = ?", (req_id,)
+                    )
+                    if lease_id and state != HostResourceRequestState.INHERITED.value:
+                        conn.execute(
+                            "DELETE FROM host_resource_leases WHERE lease_id = ?", (lease_id,)
+                        )
+
+                    # (H2) Mark associated attempt outcome as UNKNOWN and revoke lease in leases:
+                    attempt_id = req["attempt_id"]
+                    if attempt_id:
+                        conn.execute(
+                            "DELETE FROM leases WHERE attempt_id = ?", (attempt_id,)
+                        )
+                        conn.execute(
+                            """
+                            UPDATE attempts
+                            SET status = 'UNKNOWN', reason_code = 'STALE_SLOT_AUTO_RELEASED', ended_at_utc = ?
+                            WHERE attempt_id = ?
+                            """,
+                            (now_iso, attempt_id),
+                        )
+                        att_row = conn.execute(
+                            "SELECT work_item_id FROM attempts WHERE attempt_id = ?", (attempt_id,)
+                        ).fetchone()
+                        if att_row and att_row["work_item_id"]:
+                            wi_id = att_row["work_item_id"]
+                            wi_row = conn.execute(
+                                "SELECT state FROM work_items WHERE work_item_id = ?", (wi_id,)
+                            ).fetchone()
+                            if wi_row and wi_row["state"] in (
+                                WorkItemState.CLAIMED.value,
+                                WorkItemState.DISPATCHING.value,
+                                WorkItemState.RUNNING.value,
+                                WorkItemState.WAITING_EXTERNAL.value,
+                                WorkItemState.REVIEW.value,
+                                WorkItemState.RECOVERY_REQUIRED.value,
+                            ):
+                                old_wi_st = wi_row["state"]
+                                target_wi_st = WorkItemState.RECOVERY_REQUIRED.value
+                                conn.execute(
+                                    "UPDATE work_items SET state = ? WHERE work_item_id = ?",
+                                    (target_wi_st, wi_id),
+                                )
+                                conn.execute(
+                                    """
+                                    INSERT INTO events (
+                                        event_id, work_item_id, attempt_id, previous_state, next_state,
+                                        actor_identity, reason_code, recorded_at_utc, details_json, schema_version
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    """,
+                                    (
+                                        f"evt_{uuid.uuid4().hex[:12]}",
+                                        wi_id,
+                                        attempt_id,
+                                        old_wi_st,
+                                        target_wi_st,
+                                        actor,
+                                        "STALE_SLOT_AUTO_RELEASED",
+                                        now_iso,
+                                        json.dumps({"outcome": "UNKNOWN", "stale_slot_auto_released": True}),
+                                        "conductor.event.v1",
+                                    ),
+                                )
+
+                    self._event(
+                        conn,
+                        request_id=req_id,
+                        lease_id=lease_id,
+                        previous=old_state,
+                        next_state=HostResourceRequestState.RELEASED.value,
+                        actor=actor,
+                        reason="STALE_SLOT_AUTO_RELEASED",
+                        details={
+                            "previous_state": old_state,
+                            "previous_reason_code": old_reason,
+                            "evidence": evidence,
+                            "stale_reason": "STALE_SLOT_AUTO_RELEASED",
+                            "ttl_seconds": ttl_seconds,
+                        },
+                        event_time=now,
+                    )
+                    receipt = Receipt(
+                        receipt_id=f"rcp_{uuid.uuid4().hex[:12]}",
+                        command_id=f"cmd_stale_slot_{req_id}_{uuid.uuid4().hex[:8]}",
+                        idempotency_key=f"stale_slot_auto_release_{req_id}",
+                        status="SUCCESS",
+                        result={
+                            "request_id": req_id,
+                            "status": "RELEASED",
+                            "reason": "STALE_SLOT_AUTO_RELEASED",
+                            "previous_state": old_state,
+                            "previous_reason_code": old_reason,
+                            "resource_key": req["resource_key"],
+                        },
+                        processed_at_utc=now_iso,
+                    )
+                    self.store.save_receipt(receipt, conn=conn)
+                    receipts.append(receipt)
+                    self._promote_related_locked(conn, resource_key=req["resource_key"], actor=actor)
+
+            if not newly_swept:
+                break
 
         return {
             "swept_count": len(swept_ids),
@@ -814,7 +910,7 @@ class HostResourceManager:
                 ttl_seconds=stale_slot_ttl_seconds,
                 dry_run=dry_run,
                 actor="reconciler",
-                include_active=False,
+                include_active=True,
             )
             rows = conn.execute(
                 expired_query, (HostResourceRequestState.ACTIVE.value, now_iso)
@@ -960,7 +1056,7 @@ class HostResourceManager:
             return True, "OWNER_PID_REUSED"
         return False, "OWNER_PROCESS_ALIVE"
 
-    def status(self) -> Dict[str, Any]:
+    def status(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
         pool = self.store.get_resource_pool(self.resource_key)
         requests = self.store.list_resource_requests(resource_key=self.resource_key)
         leases = self.store.list_resource_leases(resource_key=self.resource_key)
@@ -971,6 +1067,7 @@ class HostResourceManager:
         with self.store._connection() as conn:
             sweepable = self._sweep_stale_slots_locked(
                 conn,
+                now=now,
                 resource_key=self.resource_key,
                 dry_run=True,
                 include_active=True,
