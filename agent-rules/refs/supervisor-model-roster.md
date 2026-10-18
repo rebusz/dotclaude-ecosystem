@@ -30,6 +30,8 @@ the three, it does not average them.
 
 > **Codex is NOT used at all (operator order 2026-10-18)**: no Codex CLI or Codex app for writing, reviews or supervision, unless the operator says otherwise in a new message. This overrides every Codex row, 'Codex last' and `codex exec` line below. The ChatGPT CDP Astra lane (`cdp_chatgpt_code.py` in Chrome) is a separate source and must never be routed through the Codex app.
 
+> **ChatGPT CDP code lane (`cdp_chatgpt_code.py`) is BANNED (operator order 2026-10-18)**: the ChatGPT Pro weekly limit is shared by Codex, Work mode and workspace agents, and Astra code-lane calls burned it (31% left). No Astra/Sol/ChatGPT submits of any kind unless the operator says otherwise in a new message. Reviews go to Argon, Perplexity, DeepSeek or GLM flash; writers to Cursor or DeepSeek. Every Astra/ChatGPT row, invocation line and review requirement below is suspended; where a rule asks for Astra, use Argon or Perplexity instead.
+
 ## 1a. Model map by task and R-class (v1.3, operator 2026-10-16)
 
 The supervisor sets model and effort for every lane it dispatches; it cannot change its own session model or effort (`/model`, `/effort` belong to the operator).
@@ -112,6 +114,6 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
   confusion (z.ai GLM CLI and Perplexity's GLM entry are two sources).
 - v1.3 (2026-10-16): model map by task and R-class, session model guard (Fable banned again), R3 plan brainstorm, grill coverage of other families, sub-supervisor rule, custody of handed-over lanes.
 - v1.6 (2026-10-18): first real OpenCode free-lane slice measured (DeepSeek V4.1 Flash Free, rebusz/Tsignal#2399): in scope, honest pytest, ~2 min; review caught an env leak; GLM-5.3-Flash Free unavailable at probe; DeepSeek = primary free writer for R0/R1 tests/tooling.
-- v1.7 (2026-10-18, operator): z.ai GLM used sparingly - glm-5.3-flash or lower effort for easy tasks, full glm-5.3 only for hard work. Same day: Codex banned entirely.
+- v1.7 (2026-10-18, operator): z.ai GLM used sparingly - glm-5.3-flash or lower effort for easy tasks, full glm-5.3 only for hard work. Same day: Codex banned entirely, then the ChatGPT CDP code lane too (shared weekly limit).
 - v1.5 (2026-10-18, operator): OpenCode Zen free lane added — DeepSeek V4.1 Flash and GLM-5.3-Flash as local writers (code, tests, fixes) and R0/R1 second opinions; anonymous invocation because the stored OpenCode key expired. Same day: key renewed, plain invocation, free models only (no paid OpenCode models).
 - v1.4 (2026-10-16 evening, operator): Antigravity accounts rotate AUTOMATICALLY on a pre-model `RESOURCE_EXHAUSTED ... Resets in X` (no lane shrinking; quota must not sit idle) - only pre-model 429s move to the next account, SUBMIT_UNCONFIRMED is never retried; design in progress (`agy-rotate`). z.ai has two quotas: the GLM CLI coding plan and the separate ZCode MCP quota (vision / webReader / image_search plugin tools) - route research reading and screenshot analysis there via the GLM lane once wired. Trading-logic parameters are never proposed from anecdote; they go to TsignalLAB / Edge150 / Argon research.
