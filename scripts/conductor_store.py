@@ -1359,13 +1359,13 @@ class ConductorStore:
             # checks outlasted every caller's 30 s CLI timeout, so the migration
             # rolled back and restarted forever and wedged every lane (2026-10-19).
             try:
-                delivered_files = {entry.name for entry in os.scandir(self.receipts_dir)}
+                delivered_files = {entry.name.lower() for entry in os.scandir(self.receipts_dir)}
             except OSError:
                 delivered_files = set()
             ids = [
                 (r_row["command_id"],)
                 for r_row in conn.execute("SELECT command_id FROM receipts").fetchall()
-                if f"receipt_{r_row['command_id']}.json" in delivered_files
+                if f"receipt_{r_row['command_id']}.json".lower() in delivered_files
             ]
             conn.executemany(
                 "UPDATE receipts SET receipt_file_delivered = 1 WHERE command_id = ?", ids
@@ -1394,7 +1394,8 @@ class ConductorStore:
                     return False
                 self._validate_v9_schema(conn)
                 return True
-        except (sqlite3.Error, RuntimeError):
+        except Exception:
+            # Any doubt at all: take the locked, authoritative path.
             return False
 
     def _init_db(self) -> None:
