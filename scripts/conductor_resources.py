@@ -1959,10 +1959,11 @@ class HostResourceManager:
         lease_pid = lease_row["process_pid"] if lease_row else None
         lease_start = lease_row["process_start_time"] if lease_row else None
         identities: list[tuple[Optional[int], Optional[float]]] = []
-        if lease_pid is not None:
-            identities.append((lease_pid, lease_start))
+        # The identity this result REPORTS (owner_pid, else lease_pid) is judged first.
         if owner_pid is not None:
             identities.append((owner_pid, owner_start_time))
+        if lease_pid is not None:
+            identities.append((lease_pid, lease_start))
         owner_alive: Optional[bool]
         if not identities:
             owner_alive = None  # unrecorded: the exact shape that hid the holder all night

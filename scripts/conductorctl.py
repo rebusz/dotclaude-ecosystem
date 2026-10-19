@@ -61,7 +61,7 @@ def _format_age(seconds: float | None) -> str:
     return f"{max(0.0, seconds):.0f}s"
 
 
-def _print_blocking_holders(entries) -> None:
+def _print_blocking_holders(entries, file=None) -> None:
     """Name every ACTIVE/RECOVERY_REQUIRED holder with pid, id, state, age.
 
     A RECOVERY_REQUIRED row holds capacity just like an ACTIVE one; printing
@@ -88,7 +88,7 @@ def _print_blocking_holders(entries) -> None:
         agent = entry.get("agent_instance")
         if agent:
             line += f" agent={agent}"
-        print(line)
+        print(line, file=file)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -372,7 +372,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         receipt = processor.process_envelope(envelope)
         if not args.json:
-            _print_blocking_holders((receipt.result or {}).get("holders"))
+            # stderr: stdout stays one parseable JSON document for callers.
+            _print_blocking_holders((receipt.result or {}).get("holders"), file=sys.stderr)
         print(json.dumps(receipt.result if args.json else receipt.to_dict(), indent=2))
         return 0
 
