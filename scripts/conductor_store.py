@@ -1354,12 +1354,49 @@ class ConductorStore:
             "SELECT name FROM sqlite_master WHERE type='table' AND name = 'receipts'"
         ).fetchone()
         if receipts_table is not None and (added_receipt_flag or backfill_history):
-            for r_row in conn.execute("SELECT command_id FROM receipts").fetchall():
-                if (self.receipts_dir / f"receipt_{r_row['command_id']}.json").exists():
-                    conn.execute(
-                        "UPDATE receipts SET receipt_file_delivered = 1 WHERE command_id = ?",
-                        (r_row["command_id"],),
-                    )
+            # One directory listing instead of one stat() per receipt row: this
+            # runs inside the migration's write lock, and 44k per-row filesystem
+            # checks outlasted every caller's 30 s CLI timeout, so the migration
+            # rolled back and restarted forever and wedged every lane (2026-10-19).
+            try:
+                delivered_files = {entry.name.lower() for entry in os.scandir(self.receipts_dir)}
+            except OSError:
+                delivered_files = set()
+            ids = [
+                (r_row["command_id"],)
+                for r_row in conn.execute("SELECT command_id FROM receipts").fetchall()
+                if f"receipt_{r_row['command_id']}.json".lower() in delivered_files
+            ]
+            conn.executemany(
+                "UPDATE receipts SET receipt_file_delivered = 1 WHERE command_id = ?", ids
+            )
+
+    def _schema_is_current(self) -> bool:
+        """True when the database is already at the latest schema and complete.
+
+        Read-only: opening a store must NOT take the write lock when there is
+        nothing to migrate. Taking ``BEGIN IMMEDIATE`` on every open queued every
+        CLI call, read-only ones included, behind whichever writer held the
+        lock, so a few slow writers wedged the whole fleet (2026-10-19). Any
+        doubt returns False and falls through to the locked, authoritative path.
+        """
+        if not self.db_path.exists():
+            return False
+        try:
+            with self._connection() as conn:
+                table = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name = 'schema_migrations'"
+                ).fetchone()
+                if table is None:
+                    return False
+                row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+                if not row or row[0] != LATEST_SCHEMA_VERSION:
+                    return False
+                self._validate_v9_schema(conn)
+                return True
+        except Exception:
+            # Any doubt at all: take the locked, authoritative path.
+            return False
 
     def _init_db(self) -> None:
         """Initialize SQLite tables and forward-only schema migrations.
@@ -1370,6 +1407,8 @@ class ConductorStore:
         their ALTERs, and a failure partway cannot commit a schema change
         without its migration marker (finding 5).
         """
+        if self._schema_is_current():
+            return
         with self._connection() as conn:
             # BEGIN IMMEDIATE takes the write lock before anything is read, so
             # a concurrent initializer re-reads the version only after this
