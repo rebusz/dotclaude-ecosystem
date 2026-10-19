@@ -182,3 +182,18 @@ def test_cli_unknown_state_allows(tmp_path: Path) -> None:
     res = _run(_marker_cmd(marker), tmp_path)
     assert res.returncode == 0 and marker.exists()
     assert _run(["--check"], tmp_path).returncode == 0
+
+
+def test_a_stale_reached_flag_after_the_window_rolled_over_does_not_refuse_forever(tmp_path: Path) -> None:
+    """A refused run never writes a fresher rollout, so an old 'reached' flag
+    from an expired window must not keep refusing (self-deadlock)."""
+    stale = _limits(100.0, resets_at=NOW - 10)
+    stale["payload"]["rate_limits"]["rate_limit_reached_type"] = "weekly"
+    _rollout(tmp_path, "a", stale)
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is None
+
+
+def test_a_boolean_resets_at_is_not_treated_as_an_expired_window(tmp_path: Path) -> None:
+    event = _limits(100.0, resets_at=False)  # type: ignore[arg-type]
+    _rollout(tmp_path, "a", event)
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is not None

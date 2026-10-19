@@ -107,6 +107,11 @@ def _opted_in() -> bool:
     return any(os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"} for name in ALLOW_ENVS)
 
 
+def _is_number(value: Any) -> bool:
+    """A real number (``bool`` is an ``int`` subclass and must not count)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def codex_limit_refusal(*, now: float | None = None, sessions: Path | None = None) -> str | None:
     """Refusal text when Codex is at its weekly limit and credits would be spent, else None."""
     if _opted_in():
@@ -132,14 +137,20 @@ def codex_limit_refusal(*, now: float | None = None, sessions: Path | None = Non
         except (TypeError, ValueError):
             continue
         window_resets = window.get("resets_at")
-        if isinstance(window_resets, (int, float)) and window_resets <= now:
+        if _is_number(window_resets) and window_resets <= now:
             continue  # that recorded window has already rolled over
         if window_used >= 100.0:
             exhausted, used = window, window_used
             break
     reached = limits.get("rate_limit_reached_type")
     if exhausted is None and reached:
-        exhausted, used = limits.get("primary") or {}, 100.0
+        primary = limits.get("primary") or {}
+        primary_resets = primary.get("resets_at") if isinstance(primary, dict) else None
+        # A stale "reached" flag from a window that has since rolled over must
+        # not refuse forever: a refused run never writes a fresher rollout, so
+        # the guard could otherwise never clear itself.
+        if not (_is_number(primary_resets) and primary_resets <= now):
+            exhausted, used = primary, 100.0
     if exhausted is None:
         return None
     resets_at = exhausted.get("resets_at")
