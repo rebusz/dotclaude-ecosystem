@@ -144,20 +144,27 @@ def codex_limit_refusal(*, now: float | None = None, sessions: Path | None = Non
             break
     reached = limits.get("rate_limit_reached_type")
     if exhausted is None and reached:
-        primary = limits.get("primary") or {}
-        primary_resets = primary.get("resets_at") if isinstance(primary, dict) else None
-        # A stale "reached" flag from a window that has since rolled over must
-        # not refuse forever: a refused run never writes a fresher rollout, so
-        # the guard could otherwise never clear itself.
-        if not (_is_number(primary_resets) and primary_resets <= now):
-            exhausted, used = primary, 100.0
+        # The CLI says a limit was reached even though no window reads 100.
+        # Trust that only for a window that has NOT provably rolled over: a
+        # stale flag from an expired window must not refuse forever (a refused
+        # run never writes a fresher rollout, so it could never clear), and a
+        # flag raised by either window counts while that window is live.
+        for window_name in ("primary", "secondary"):
+            candidate = limits.get(window_name)
+            if not isinstance(candidate, dict):
+                continue
+            candidate_resets = candidate.get("resets_at")
+            if _is_number(candidate_resets) and candidate_resets <= now:
+                continue
+            exhausted, used = candidate, 100.0
+            break
     if exhausted is None:
         return None
     resets_at = exhausted.get("resets_at")
     credits = limits.get("credits") or {}
     balance = credits.get("balance") if isinstance(credits, dict) else None
     reset_note = ""
-    if isinstance(resets_at, (int, float)):
+    if _is_number(resets_at):
         reset_note = " resets_at=" + time.strftime("%Y-%m-%d %H:%M", time.localtime(resets_at))
     return (
         f"{REFUSAL}: weekly used_percent={used:g}{reset_note}"

@@ -197,3 +197,27 @@ def test_a_boolean_resets_at_is_not_treated_as_an_expired_window(tmp_path: Path)
     event = _limits(100.0, resets_at=False)  # type: ignore[arg-type]
     _rollout(tmp_path, "a", event)
     assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is not None
+
+
+def test_reached_flag_from_a_live_secondary_refuses_even_when_primary_rolled_over(tmp_path: Path) -> None:
+    event = _limits(10.0, resets_at=NOW - 10)
+    event["payload"]["rate_limits"]["secondary"] = {"used_percent": 60.0, "resets_at": NOW + 3600}
+    event["payload"]["rate_limits"]["rate_limit_reached_type"] = "secondary"
+    _rollout(tmp_path, "a", event)
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is not None
+
+
+def test_reached_flag_from_a_rolled_over_secondary_does_not_refuse_a_healthy_primary(tmp_path: Path) -> None:
+    event = _limits(10.0, resets_at=NOW - 10)
+    event["payload"]["rate_limits"]["secondary"] = {"used_percent": 100.0, "resets_at": NOW - 5}
+    event["payload"]["rate_limits"]["rate_limit_reached_type"] = "secondary"
+    _rollout(tmp_path, "a", event)
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is None
+
+
+def test_malformed_non_dict_windows_never_crash_the_guard(tmp_path: Path) -> None:
+    event = _limits(10.0)
+    event["payload"]["rate_limits"]["primary"] = "garbage"
+    event["payload"]["rate_limits"]["rate_limit_reached_type"] = "primary"
+    _rollout(tmp_path, "a", event)
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is None
