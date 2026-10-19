@@ -821,6 +821,8 @@ class HostResourceManager:
                             continue
                         evidence = "OWNER_DEAD"
                     else:
+                        # The effective cutoff is max(TDCONDUCTOR_STALE_SLOT_TTL_S, this
+                        # value): the general age check above runs first by design.
                         if queued_unrecorded_ttl <= 0 or age_seconds < queued_unrecorded_ttl:
                             continue
                         evidence = "OWNER_UNRECORDED"
