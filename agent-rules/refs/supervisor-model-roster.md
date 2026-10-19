@@ -36,6 +36,8 @@ the three, it does not average them.
 > - **Cursor:** monthly limit used up; send it no work (`--model auto` does not help).
 > - **Writers now:** OpenCode DeepSeek V4.1 Flash free (unreliable: has hung or produced no output repeatedly; always wrap in `timeout` and check `git status`) and Claude Sonnet/Haiku subagents (Haiku only for well-specified R0/R1 slices). **Sub-sessions run on Sonnet 5.5 or Haiku, not Opus; writing goes to workers.**
 > - **Reviews now:** Gemini 4 Argon (through `cdp_lane_lock.py`) or Perplexity Sol / Grok / Kimi through CoderPX. Argon has returned confident false 'ship-blocking' claims; verify each against the code and get a second family to arbitrate before overriding a BLOCK.
+>
+> **Precedence:** this block overrides every table row, invocation line and review requirement below that names Codex (incl. Luna), Cursor, z.ai GLM or Astra in Work mode. Where a rule below asks for one of them, use the substitutes above (writers: DeepSeek free or Sonnet/Haiku subagent; reviewers: Argon or Perplexity); never wait on an exhausted source and never stall a lane for lack of a named model. Each quota hit is still reported at once.
 
 ## 1a. Model map by task and R-class (v1.3, operator 2026-10-16)
 
