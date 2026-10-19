@@ -22,7 +22,7 @@ class ConductorScheduler:
 
     @staticmethod
     def _resource_purpose(item: WorkItem) -> Optional[str]:
-        if item.job_kind in {"pytest_full", "pytest_heavy", "playwright", "cdp_provider"}:
+        if item.job_kind in {"pytest_full", "pytest_heavy"}:
             return item.job_kind
         return None
 

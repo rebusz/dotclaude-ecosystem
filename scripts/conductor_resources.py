@@ -33,7 +33,16 @@ RESOURCE_KEY = "host:heavy"
 LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
+PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
+PROVIDER_POOLS = frozenset(f"provider:{source}" for source in PROVIDER_SOURCES)
+PROVIDER_SOURCE_BY_POOL = {
+    **{f"provider:{source}": source for source in PROVIDER_SOURCES},
+    "cdp:chatgpt": "chatgpt", "cdp:perplexity": "perplexity", "cdp:gemini": "antigravity",
+}
+# Codex sessions have no source policy pool; callers retain platform admission.
+PROVIDER_SOURCE_CAPACITY = 3
 DEFAULT_POOL_CAPACITIES = {
+    **{key: PROVIDER_SOURCE_CAPACITY for key in PROVIDER_POOLS},
     "host:heavy": 1,
     "cdp:perplexity": 3,
     "cdp:chatgpt": 3,
@@ -49,10 +58,10 @@ ROLE_TO_RESOURCE_KEY = {
     "chrome_tv": "cdp:tv",
 }
 PURPOSE_TO_RESOURCE_KEY = {
+    **{f"provider_{source}": f"provider:{source}" for source in PROVIDER_SOURCES},
     "pytest_full": "host:heavy",
     "pytest_heavy": "host:heavy",
     "pytest_focused": "host:heavy",
-    "playwright": "host:heavy",
     "cdp_perplexity": "cdp:perplexity",
     "cdp_chatgpt": "cdp:chatgpt",
     "cdp_gemini": "cdp:gemini",
@@ -60,6 +69,7 @@ PURPOSE_TO_RESOURCE_KEY = {
 }
 VALID_PURPOSES = frozenset(
     {
+        *(f"provider_{source}" for source in PROVIDER_SOURCES),
         "pytest_full",
         "pytest_heavy",
         "pytest_focused",
@@ -244,6 +254,8 @@ class HostResourceManager:
     def __init__(self, store: ConductorStore, resource_key: str = RESOURCE_KEY):
         self.store = store
         self.resource_key = resource_key
+        if resource_key.startswith("provider:") and resource_key not in PROVIDER_POOLS:
+            raise ValueError(f"unknown resource key: {resource_key}")
         pool = self.store.get_resource_pool(resource_key)
         if pool is None:
             default_capacity = DEFAULT_POOL_CAPACITIES.get(resource_key, 1)
@@ -288,6 +300,10 @@ class HostResourceManager:
             ).fetchone()
             if existing:
                 request = self.store._row_to_resource_request(existing)
+                if (request.resource_key, request.purpose, request.attempt_id,
+                    request.agent_instance, request.slot_key, request.command_sha256) != (
+                        self.resource_key, purpose, attempt_id, agent_instance, slot_key, command_sha256):
+                    raise ResourceAdmissionError("RESOURCE_IDEMPOTENCY_CONFLICT")
                 return self._request_result(conn, request, replayed=True)
 
             pool = conn.execute(
@@ -302,6 +318,8 @@ class HostResourceManager:
             request_id = f"rr_{uuid.uuid4().hex[:12]}"
 
             if inherited_id:
+                if self._source_full_locked(conn, self.resource_key):
+                    raise ResourceBusyError("PROVIDER_SOURCE_BUSY")
                 parent = conn.execute(
                     """
                     SELECT l.*, r.state AS request_state
@@ -391,6 +409,9 @@ class HostResourceManager:
             if capacity_full:
                 state = HostResourceRequestState.QUEUED
                 reason = inherited_rejection or "HOST_RESOURCE_BUSY"
+            elif self._source_full_locked(conn, self.resource_key):
+                state = HostResourceRequestState.QUEUED
+                reason = "PROVIDER_SOURCE_BUSY"
             elif slot_busy:
                 state = HostResourceRequestState.QUEUED
                 reason = inherited_rejection or "SLOT_KEY_BUSY"
@@ -499,7 +520,7 @@ class HostResourceManager:
             ).fetchone()
             lease_id = lease_row["lease_id"] if lease_row else row["parent_lease_id"]
             self._event(conn, request_id, lease_id, old_state, HostResourceRequestState.RELEASED.value, actor, reason)
-            promoted = self._promote_locked(conn, resource_key=row["resource_key"], actor=actor)
+            promoted = self._promote_related_locked(conn, resource_key=row["resource_key"], actor=actor)
             return {"request_id": request_id, "status": "RELEASED", "promoted": promoted}
 
     def reconcile(self, *, dry_run: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -569,6 +590,11 @@ class HostResourceManager:
                 raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_FOUND")
             if row["state"] != HostResourceRequestState.RECOVERY_REQUIRED.value:
                 raise ResourceAdmissionError("RESOURCE_REQUEST_NOT_RECOVERABLE")
+            retained_provider = row["resource_key"] in PROVIDER_SOURCE_BY_POOL
+            if retained_provider and not (operator_attestation and reason.strip()):
+                # A dead local wrapper is not evidence that a remote provider
+                # stopped. Every provider hold requires explicit native evidence.
+                raise ResourceAdmissionError("RETAINED_PROVIDER_TERMINAL_UNPROVEN")
 
             lease_row = conn.execute(
                 "SELECT * FROM host_resource_leases WHERE request_id = ?", (request_id,)
@@ -600,7 +626,10 @@ class HostResourceManager:
                     raise ValueError("operator attestation requires a reason")
                 evidence = "OPERATOR_ATTESTED"
 
-            reason_code = "RECOVERY_ATTESTED" if evidence == "OPERATOR_ATTESTED" else "RECOVERY_OWNER_GONE"
+            if retained_provider:
+                evidence = "OPERATOR_PROVIDER_TERMINAL_ATTESTED"
+            attested = evidence in {"OPERATOR_ATTESTED", "OPERATOR_PROVIDER_TERMINAL_ATTESTED"}
+            reason_code = "RECOVERY_ATTESTED" if attested else "RECOVERY_OWNER_GONE"
             conn.execute(
                 "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
                 (HostResourceRequestState.RELEASED.value, current_utc_iso(), reason_code, request_id),
@@ -619,12 +648,12 @@ class HostResourceManager:
                     "recovered_lease_id": lease_id,
                 },
             )
-            promoted = self._promote_locked(conn, resource_key=row["resource_key"], actor=actor)
+            promoted = self._promote_related_locked(conn, resource_key=row["resource_key"], actor=actor)
             return {
                 "request_id": request_id,
                 "status": "RECOVERED",
                 "evidence": evidence,
-                "attested": evidence == "OPERATOR_ATTESTED",
+                "attested": attested,
                 "promoted": promoted,
             }
 
@@ -881,14 +910,19 @@ class HostResourceManager:
         if not 0 <= priority <= 1000:
             raise ValueError("priority must be between 0 and 1000")
 
+        if resource_key in PROVIDER_POOLS and purpose != "provider_" + resource_key.split(":", 1)[1]:
+            raise ValueError("provider pool requires its actual source purpose")
+        if purpose.startswith("provider_") and resource_key != PURPOSE_TO_RESOURCE_KEY[purpose]:
+            raise ValueError("provider purpose must use its actual source pool")
+
         # Cross-contamination invariants
         # A pytest or playwright purpose must NEVER admit into a cdp:* pool
         if (purpose.startswith("pytest_") or purpose == "playwright") and resource_key.startswith("cdp:"):
             raise ValueError(f"pytest purpose '{purpose}' cannot consume CDP pool '{resource_key}'")
 
-        # A cdp_provider or cdp_* purpose must NEVER consume host:heavy
-        if (purpose == "cdp_provider" or purpose.startswith("cdp_")) and resource_key == "host:heavy":
-            raise ValueError(f"CDP purpose '{purpose}' cannot consume '{resource_key}'")
+        # Only pytest may consume host:heavy; browser/provider work is independent.
+        if not purpose.startswith("pytest_") and resource_key == "host:heavy":
+            raise ValueError(f"non-pytest purpose '{purpose}' cannot consume '{resource_key}'")
 
         # Specific purpose to pool alignment
         if purpose == "cdp_perplexity" and resource_key != "cdp:perplexity":
@@ -897,6 +931,116 @@ class HostResourceManager:
             raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
         if purpose == "cdp_gemini" and resource_key != "cdp:gemini":
             raise ValueError(f"purpose '{purpose}' cannot consume pool '{resource_key}'")
+
+    def retain_observed_attempt(
+        self, *, observation_key: str, original_owner: str, evidence_ref: str,
+        evidence_sha256: str, actor: str, native_attempt_id: Optional[str] = None,
+        existing_request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Import trusted uncertainty into the existing resource journal.
+
+        This is a capacity hold, never a grant or a native submission. Unknown
+        native identity stays unknown; the synthetic observation identity is
+        explicitly labeled. An exact existing request is fenced in place,
+        including a request incorrectly released by an older provider wrapper.
+        The trusted caller must preserve a stable observation key and evidence.
+        """
+        source = PROVIDER_SOURCE_BY_POOL.get(self.resource_key)
+        if self.resource_key not in PROVIDER_POOLS:
+            raise ResourceAdmissionError("RETAINED_PROVIDER_SOURCE_REQUIRED")
+        for value in (observation_key, original_owner, evidence_ref, actor):
+            if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+                raise ValueError("retained observation needs bounded identity and evidence references")
+        if not isinstance(evidence_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+            raise ValueError("retained observation requires exact evidence SHA256")
+        if native_attempt_id is not None and (not isinstance(native_attempt_id, str)
+                or not native_attempt_id.strip() or len(native_attempt_id) > 4096
+                or native_attempt_id.startswith("unbound-observation:")):
+            raise ValueError("native attempt identity must be supplied only when verified")
+        if existing_request_id is not None and not native_attempt_id:
+            raise ValueError("binding an existing request requires its verified attempt identity")
+        payload = {"source": source, "observation_key": observation_key,
+                   "original_owner": original_owner, "evidence_ref": evidence_ref,
+                   "evidence_sha256": evidence_sha256, "native_attempt_id": native_attempt_id,
+                   "existing_request_id": existing_request_id}
+        observation_id = hashlib.sha256((source + "\0" + observation_key).encode()).hexdigest()
+        event_id = "hre_observed_" + observation_id
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute("SELECT request_id,details_json FROM host_resource_events WHERE event_id=?",
+                                    (event_id,)).fetchone()
+            if previous is not None:
+                if json.loads(previous["details_json"]) != payload:
+                    raise ResourceAdmissionError("RETAINED_OBSERVATION_DRIFT")
+                row = conn.execute("SELECT * FROM host_resource_requests WHERE request_id=?",
+                                   (previous["request_id"],)).fetchone()
+                return self._request_result(conn, self.store._row_to_resource_request(row), replayed=True)
+            row = None
+            if existing_request_id is not None:
+                row = conn.execute("SELECT * FROM host_resource_requests WHERE request_id=?",
+                                   (existing_request_id,)).fetchone()
+                if (row is None or row["attempt_id"] != native_attempt_id
+                        or row["agent_instance"] != original_owner
+                        or PROVIDER_SOURCE_BY_POOL.get(row["resource_key"]) != source):
+                    raise ResourceAdmissionError("RETAINED_REQUEST_IDENTITY_MISMATCH")
+            elif native_attempt_id is not None:
+                matches = [r for r in conn.execute(
+                    "SELECT * FROM host_resource_requests WHERE attempt_id=? AND agent_instance=?",
+                    (native_attempt_id, original_owner)).fetchall()
+                    if PROVIDER_SOURCE_BY_POOL.get(r["resource_key"]) == source]
+                if len(matches) > 1:
+                    raise ResourceAdmissionError("RETAINED_ATTEMPT_AMBIGUOUS")
+                row = matches[0] if matches else None
+            if row is None:
+                request = HostResourceRequest(
+                    request_id="rr_" + uuid.uuid4().hex[:12],
+                    idempotency_key="retained_observation:" + observation_id,
+                    resource_key="provider:" + source, purpose="provider_" + source,
+                    attempt_id=native_attempt_id or "unbound-observation:" + observation_id,
+                    agent_instance=original_owner, state=HostResourceRequestState.RECOVERY_REQUIRED,
+                    reason_code="PROVIDER_RETAINED_ATTEMPT", command_sha256=evidence_sha256)
+                self._insert_request(conn, request)
+                old_state = None
+                lease_id = None  # Imported uncertainty grants no execution lease.
+            else:
+                if row["state"] not in {"ACTIVE", "INHERITED", "RELEASED", "RECOVERY_REQUIRED"}:
+                    raise ResourceAdmissionError("RETAINED_REQUEST_STATE_UNQUALIFIED")
+                request = self.store._row_to_resource_request(row)
+                old_state = row["state"]
+                conn.execute("UPDATE host_resource_requests SET state=?,reason_code=? WHERE request_id=?",
+                             ("RECOVERY_REQUIRED", "PROVIDER_RETAINED_ATTEMPT", request.request_id))
+                lease = conn.execute("SELECT lease_id FROM host_resource_leases WHERE request_id=?",
+                                     (request.request_id,)).fetchone()
+                lease_id = lease[0] if lease else row["parent_lease_id"]
+                request.state = HostResourceRequestState.RECOVERY_REQUIRED
+                request.reason_code = "PROVIDER_RETAINED_ATTEMPT"
+            self._event(conn, request.request_id, lease_id, old_state, "RECOVERY_REQUIRED",
+                        actor, "PROVIDER_RETAINED_ATTEMPT", details=payload, event_id=event_id)
+            return self._request_result(conn, request)
+
+    def mark_uncertain(self, request_id: str, *, attempt_id: str,
+                       agent_instance: str, reason: str) -> Dict[str, Any]:
+        """Fence the same provider attempt without release or replacement."""
+        if not reason or len(reason) > 4096:
+            raise ValueError("uncertain provider result needs a bounded reason")
+        with self.store._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM host_resource_requests WHERE request_id=?",
+                               (request_id,)).fetchone()
+            if (row is None or (row["attempt_id"], row["agent_instance"]) != (attempt_id, agent_instance)
+                    or row["resource_key"] not in PROVIDER_SOURCE_BY_POOL):
+                raise ResourceAdmissionError("PROVIDER_ATTEMPT_IDENTITY_MISMATCH")
+            if row["state"] not in {"ACTIVE", "INHERITED", "RECOVERY_REQUIRED"}:
+                raise ResourceAdmissionError("PROVIDER_ATTEMPT_NOT_ACTIVE")
+            if row["state"] != "RECOVERY_REQUIRED":
+                conn.execute("UPDATE host_resource_requests SET state=?,reason_code=? WHERE request_id=?",
+                             ("RECOVERY_REQUIRED", reason, request_id))
+                lease = conn.execute("SELECT lease_id FROM host_resource_leases WHERE request_id=?",
+                                     (request_id,)).fetchone()
+                self._event(conn, request_id, lease[0] if lease else row["parent_lease_id"],
+                            row["state"], "RECOVERY_REQUIRED", agent_instance, reason)
+            return {"request_id": request_id, "state": "RECOVERY_REQUIRED"}
+
 
     def _mark_recovery(self, request_id: str, *, reason: str) -> None:
         """Persist an ambiguous child outcome without releasing capacity."""
@@ -986,10 +1130,40 @@ class HostResourceManager:
         )
         return lease_id
 
+    @staticmethod
+    def _source_full_locked(conn: Any, resource_key: str) -> bool:
+        source = PROVIDER_SOURCE_BY_POOL.get(resource_key)
+        if source is None:
+            return False
+        keys = [key for key, provider in PROVIDER_SOURCE_BY_POOL.items() if provider == source]
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
+            "AND state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')", keys).fetchone()[0]
+        # Missing PID/heartbeat, expiry and uncertain results never create space.
+        return count >= PROVIDER_SOURCE_CAPACITY
+
+
+    def _promote_related_locked(self, conn: Any, *, resource_key: str, actor: str) -> Optional[Dict[str, Any]]:
+        source = PROVIDER_SOURCE_BY_POOL.get(resource_key)
+        if source is None:
+            return self._promote_locked(conn, resource_key=resource_key, actor=actor)
+        keys = [key for key, provider in PROVIDER_SOURCE_BY_POOL.items() if provider == source]
+        waiting = conn.execute(
+            f"SELECT resource_key FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
+            "AND state='QUEUED' ORDER BY priority DESC,created_at_utc,request_id", keys).fetchall()
+        for row in waiting:
+            promoted = self._promote_locked(conn, resource_key=row["resource_key"], actor=actor)
+            if promoted is not None:
+                return promoted
+        return None
+
+
     def _promote_locked(
         self, conn: Any, *, resource_key: Optional[str] = None, actor: str
     ) -> Optional[Dict[str, Any]]:
         target_resource_key = resource_key or self.resource_key
+        if self._source_full_locked(conn, target_resource_key):
+            return None
         pool = conn.execute(
             "SELECT * FROM host_resource_pools WHERE resource_key = ?", (target_resource_key,)
         ).fetchone()
@@ -1056,6 +1230,7 @@ class HostResourceManager:
         actor: str,
         reason: str,
         details: Optional[Mapping[str, Any]] = None,
+        event_id: Optional[str] = None,
     ) -> None:
         conn.execute(
             """
@@ -1065,7 +1240,7 @@ class HostResourceManager:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                f"hre_{uuid.uuid4().hex[:12]}",
+                event_id or f"hre_{uuid.uuid4().hex[:12]}",
                 request_id,
                 lease_id,
                 previous,

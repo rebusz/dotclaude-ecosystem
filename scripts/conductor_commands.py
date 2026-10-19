@@ -302,6 +302,20 @@ class ConductorCommandProcessor:
             reason=payload.get("reason", "RESOURCE_RELEASED"),
         )
 
+    def _handle_resource_retain_observed(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        manager = HostResourceManager(self.store, resource_key=payload["resource_key"])
+        return manager.retain_observed_attempt(
+            observation_key=payload["observation_key"], original_owner=payload["original_owner"],
+            evidence_ref=payload["evidence_ref"], evidence_sha256=payload["evidence_sha256"],
+            actor=payload["actor"], native_attempt_id=payload.get("native_attempt_id"),
+            existing_request_id=payload.get("existing_request_id"))
+
+    def _handle_resource_uncertain(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.resources.mark_uncertain(
+            payload["request_id"], attempt_id=payload["attempt_id"],
+            agent_instance=payload["agent_instance"], reason=payload["reason"])
+
+
     def _handle_resource_recover(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Clear one RECOVERY_REQUIRED request once its owner is proven gone."""
         return self.resources.recover(
