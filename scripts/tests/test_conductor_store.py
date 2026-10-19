@@ -1372,3 +1372,63 @@ def test_surviving_store_drains_committed_receipt_outbox_during_maintenance(
     # Draining again is idempotent: same row, same file, no duplicates.
     daemon.ensure_receipt_files_delivered()
     assert receipt_file.exists()
+
+
+# -- 2026-10-19 wedge: opening a current store must not need the write lock -----------------
+
+
+def test_opening_a_current_store_does_not_wait_for_a_writer(tmp_path: pathlib.Path):
+    """Every ConductorStore() open used to run BEGIN IMMEDIATE, so a single slow
+    writer queued every CLI call -- read-only ones too -- behind it until their
+    callers' timeouts fired. A store already at the latest schema opens without
+    taking the write lock."""
+    import time
+
+    ConductorStore(root_dir=tmp_path)  # create + migrate once
+    holder = sqlite3.connect(str(tmp_path / "conductor.db"), timeout=1.0)
+    try:
+        holder.execute("BEGIN IMMEDIATE")  # a long-running writer
+        started = time.monotonic()
+        reopened = ConductorStore(root_dir=tmp_path)
+        elapsed = time.monotonic() - started
+    finally:
+        holder.rollback()
+        holder.close()
+    assert reopened is not None
+    assert elapsed < 3.0, f"open waited {elapsed:.1f}s behind a writer"
+
+
+def test_v9_migration_backfills_receipt_flags_from_one_directory_listing(tmp_path: pathlib.Path):
+    """The receipt backfill ran one stat() per row inside the write lock; with
+    44k receipts it outlasted every caller's 30 s timeout, rolled back and
+    restarted forever. It must stay fast and still flag exactly the receipts
+    whose file exists."""
+    import time
+
+    store = ConductorStore(root_dir=tmp_path)
+    with store._connection() as conn:
+        rows = [(f"cmd_bulk_{i}", f"idem_bulk_{i}") for i in range(3000)]
+        conn.executemany(
+            "INSERT INTO receipts (receipt_id, command_id, idempotency_key, status, result_json, "
+            "error_message, processed_at_utc, schema_version) VALUES (?, ?, ?, 'SUCCESS', '{}', NULL, "
+            "'2026-10-19T00:00:00+00:00', 'conductor.receipt.v1')",
+            [(f"rcp_{c}", c, k) for c, k in rows],
+        )
+    for i in range(0, 3000, 2):  # half of them have their file on disk
+        (store.receipts_dir / f"receipt_cmd_bulk_{i}.json").write_text("{}", encoding="utf-8")
+    _rewind_schema(store.db_path, ["ALTER TABLE receipts DROP COLUMN receipt_file_delivered"], max_version=7)
+
+    started = time.monotonic()
+    migrated = ConductorStore(root_dir=tmp_path)
+    elapsed = time.monotonic() - started
+    assert elapsed < 20.0, f"migration took {elapsed:.1f}s"
+    with migrated._connection() as conn:
+        flagged = {
+            r["command_id"]
+            for r in conn.execute(
+                "SELECT command_id FROM receipts WHERE receipt_file_delivered = 1 AND command_id LIKE 'cmd_bulk_%'"
+            ).fetchall()
+        }
+    # The migration flagged every receipt whose file existed (the bounded startup
+    # outbox drain may deliver more of the rest, never fewer of these).
+    assert {f"cmd_bulk_{i}" for i in range(0, 3000, 2)} <= flagged
