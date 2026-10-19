@@ -165,7 +165,10 @@ def codex_limit_refusal(*, now: float | None = None, sessions: Path | None = Non
     balance = credits.get("balance") if isinstance(credits, dict) else None
     reset_note = ""
     if _is_number(resets_at):
-        reset_note = " resets_at=" + time.strftime("%Y-%m-%d %H:%M", time.localtime(resets_at))
+        try:
+            reset_note = " resets_at=" + time.strftime("%Y-%m-%d %H:%M", time.localtime(resets_at))
+        except (OSError, OverflowError, ValueError):
+            reset_note = ""  # an out-of-range timestamp must not crash the refusal itself
     return (
         f"{REFUSAL}: weekly used_percent={used:g}{reset_note}"
         f"{' credit_balance=' + str(balance) if balance is not None else ''}; "

@@ -221,3 +221,8 @@ def test_malformed_non_dict_windows_never_crash_the_guard(tmp_path: Path) -> Non
     event["payload"]["rate_limits"]["rate_limit_reached_type"] = "primary"
     _rollout(tmp_path, "a", event)
     assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is None
+
+
+def test_an_out_of_range_resets_at_still_yields_a_refusal_not_a_crash(tmp_path: Path) -> None:
+    _rollout(tmp_path, "a", _limits(100.0, resets_at=1e20))
+    assert guard.codex_limit_refusal(now=NOW, sessions=tmp_path) is not None
