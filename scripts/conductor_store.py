@@ -111,6 +111,7 @@ def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Co
 
 
 def _row_to_request_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    keys = row.keys()
     return {
         "request_id": str(row["request_id"]),
         "idempotency_key": str(row["idempotency_key"]),
@@ -125,7 +126,11 @@ def _row_to_request_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "created_at_utc": str(row["created_at_utc"]),
         "released_at_utc": str(row["released_at_utc"]) if row["released_at_utc"] is not None else None,
         "reason_code": str(row["reason_code"]) if row["reason_code"] is not None else None,
-        "slot_key": str(row["slot_key"]) if "slot_key" in row.keys() and row["slot_key"] is not None else "",
+        "slot_key": str(row["slot_key"]) if "slot_key" in keys and row["slot_key"] is not None else "",
+        "owner_process_pid": int(row["owner_process_pid"]) if "owner_process_pid" in keys and row["owner_process_pid"] is not None else None,
+        "owner_process_start_time": float(row["owner_process_start_time"]) if "owner_process_start_time" in keys and row["owner_process_start_time"] is not None else None,
+        "owner_identity_source": str(row["owner_identity_source"]) if "owner_identity_source" in keys and row["owner_identity_source"] is not None else None,
+        "owner_last_seen_at_utc": str(row["owner_last_seen_at_utc"]) if "owner_last_seen_at_utc" in keys and row["owner_last_seen_at_utc"] is not None else None,
         "schema_version": str(row["schema_version"]),
     }
 

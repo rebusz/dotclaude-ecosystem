@@ -2040,6 +2040,162 @@ def test_reconcile_drains_another_writers_undelivered_receipt(
         ).fetchone()[0] == 1
 
 
+# ── Holder visibility on SLOT_KEY_BUSY refusals (binding 2026-10-19) ─────────
+#
+# Incident: Perplexity runs failed all night behind
+# `cdp:perplexity not admitted slot=GPT-6.1 Sol: state=QUEUED reason=SLOT_KEY_BUSY
+# ... holders: unavailable from dry-run` while a ~13 h RECOVERY_REQUIRED row with
+# an unrecorded owner held the slot. A refusal must name who holds it, and a
+# holder past the stale-slot TTL with a dead/unrecorded owner must be swept
+# during the next request() for that slot.
+
+def _wedge_slot(manager: HostResourceManager, *, slot_key: str, attempt_id: str) -> dict:
+    """Drive a real slot-holding request into RECOVERY_REQUIRED the way expiry does."""
+    request = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id=attempt_id,
+        agent_instance="inst-holder",
+        slot_key=slot_key,
+    )
+    manager.reconcile(now=datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LEASE_TTL_SECONDS + 60))
+    assert manager.status()["recovery_required"] == 1
+    return request
+
+
+def _age_out_holder(manager: HostResourceManager, request: dict, *, seconds: int) -> None:
+    """Rewind every timestamp the sweep counts so the holder is `seconds` old."""
+    past_iso = _iso(datetime.now(timezone.utc) - timedelta(seconds=seconds))
+    with manager.store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            (past_iso, request["request_id"]),
+        )
+        conn.execute(
+            "UPDATE host_resource_leases SET expires_at_utc = ?, last_heartbeat_utc = ? WHERE request_id = ?",
+            (past_iso, past_iso, request["request_id"]),
+        )
+        conn.execute(
+            "UPDATE host_resource_events SET recorded_at_utc = ? WHERE request_id = ?",
+            (past_iso, request["request_id"]),
+        )
+
+
+def test_queued_slot_key_busy_names_the_holder(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    holder = _wedge_slot(manager, slot_key="GPT-6.1 Sol", attempt_id="at-night-holder")
+
+    refused = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id="at-next",
+        agent_instance="inst-next",
+        slot_key="GPT-6.1 Sol",
+        idempotency_key="holder-visibility-1",
+    )
+    assert refused["state"] == HostResourceRequestState.QUEUED.value
+    assert refused["reason_code"] == "SLOT_KEY_BUSY"
+    assert [entry["request_id"] for entry in refused["blocking_holders"]] == [holder["request_id"]]
+    entry = refused["blocking_holders"][0]
+    assert entry["state"] == HostResourceRequestState.RECOVERY_REQUIRED.value
+    assert entry["slot_key"] == "GPT-6.1 Sol"
+    assert entry["owner_pid"] is None  # unrecorded, exactly the incident shape
+    assert entry["owner_identity_source"] == "UNRECORDED"
+    assert entry["owner_alive"] is None
+    assert entry["lease_id"] == holder["lease_id"]
+    assert 0 <= entry["age_seconds"] <= get_stale_slot_ttl_seconds()
+
+    # Idempotent replay returns the field computed fresh against current rows.
+    replay = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id="at-next",
+        agent_instance="inst-next",
+        slot_key="GPT-6.1 Sol",
+        idempotency_key="holder-visibility-1",
+    )
+    assert replay["idempotent_replay"] is True
+    assert [e["request_id"] for e in replay["blocking_holders"]] == [holder["request_id"]]
+
+
+def test_stale_holder_past_ttl_swept_and_new_request_admitted_same_call(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    holder = _wedge_slot(manager, slot_key="GPT-6.1 Sol", attempt_id="at-13h-holder")
+    ttl = get_stale_slot_ttl_seconds()
+    assert ttl > 0  # default 900; a disabled TTL would make this test meaningless
+    _age_out_holder(manager, holder, seconds=ttl + 300)  # 20 min stale, unrecorded owner
+
+    fresh = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id="at-morning",
+        agent_instance="inst-morning",
+        slot_key="GPT-6.1 Sol",
+    )
+
+    assert fresh["state"] == HostResourceRequestState.ACTIVE.value
+    assert fresh["reason_code"] == "HOST_RESOURCE_ADMITTED"
+    assert fresh["blocking_holders"] == []
+    # The stale holder was auto-released inside the same request() call...
+    old = manager.store.get_resource_request(holder["request_id"])
+    assert old.state == HostResourceRequestState.RELEASED
+    assert old.reason_code == "STALE_SLOT_AUTO_RELEASED"
+    receipt = manager.store.get_receipt(f"stale_slot_auto_release_{holder['request_id']}")
+    assert receipt is not None
+    assert receipt.status == "SUCCESS"
+    assert receipt.result["reason"] == "STALE_SLOT_AUTO_RELEASED"
+    # ...and the job was not resubmitted: the morning run is a fresh admission
+    # with its own lease, not a promotion or re-dispatch of the swept attempt.
+    assert fresh["request_id"] != holder["request_id"]
+    assert fresh["lease_id"] != holder["lease_id"]
+
+
+def test_stale_holder_younger_than_ttl_kept_and_refusal_names_it(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    holder = _wedge_slot(manager, slot_key="GPT-6.1 Sol", attempt_id="at-young-holder")
+    ttl = get_stale_slot_ttl_seconds()
+    _age_out_holder(manager, holder, seconds=max(30, ttl // 3))
+
+    refused = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id="at-blocked",
+        agent_instance="inst-blocked",
+        slot_key="GPT-6.1 Sol",
+    )
+    assert refused["state"] == HostResourceRequestState.QUEUED.value
+    assert refused["reason_code"] == "SLOT_KEY_BUSY"
+    assert [e["request_id"] for e in refused["blocking_holders"]] == [holder["request_id"]]
+    assert refused["blocking_holders"][0]["age_seconds"] < ttl
+    kept = manager.store.get_resource_request(holder["request_id"])
+    assert kept.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_receipt(f"stale_slot_auto_release_{holder['request_id']}") is None
+
+
+def test_live_owner_past_ttl_is_not_released_and_refusal_reports_it_alive(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    holder = _wedge_slot(manager, slot_key="GPT-6.1 Sol", attempt_id="at-live-owner")
+    pid = os.getpid()
+    _set_lease_process(manager, holder["lease_id"], pid, psutil.Process(pid).create_time())
+    ttl = get_stale_slot_ttl_seconds()
+    _age_out_holder(manager, holder, seconds=ttl + 300)
+
+    refused = manager.request(
+        purpose="cdp_perplexity",
+        attempt_id="at-blocked-live",
+        agent_instance="inst-blocked-live",
+        slot_key="GPT-6.1 Sol",
+    )
+    assert refused["state"] == HostResourceRequestState.QUEUED.value
+    assert refused["reason_code"] == "SLOT_KEY_BUSY"
+    entry = refused["blocking_holders"][0]
+    assert entry["request_id"] == holder["request_id"]
+    assert entry["owner_pid"] == pid
+    assert entry["owner_alive"] is True
+    kept = manager.store.get_resource_request(holder["request_id"])
+    assert kept.state == HostResourceRequestState.RECOVERY_REQUIRED
+    assert manager.store.get_receipt(f"stale_slot_auto_release_{holder['request_id']}") is None
+
+
 def test_sweep_of_non_inherited_child_does_not_delete_parent_lease(manager: HostResourceManager):
     """A stale non-inherited child that only points at parent_lease_id must not free the parent.
 

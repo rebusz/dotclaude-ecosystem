@@ -1247,6 +1247,7 @@ class HostResourceManager:
                 dry_run=True,
                 include_active=True,
             )
+            holders = self._holder_rows_locked(conn, self.resource_key)
         sweepable_count = sweepable["swept_count"]
 
         return {
@@ -1257,6 +1258,7 @@ class HostResourceManager:
             "queued": counts.get(HostResourceRequestState.QUEUED.value, 0),
             "recovery_required": counts.get(HostResourceRequestState.RECOVERY_REQUIRED.value, 0),
             "sweepable_count": sweepable_count,
+            "holders": holders,
             "state_counts": counts,
             "storage": self.store.storage_status(),
             "requests": [request.to_dict() for request in requests],
@@ -1939,8 +1941,126 @@ class HostResourceManager:
             ),
         )
 
-    @staticmethod
+    def _holder_entry_locked(self, conn: Any, row: Any, now: datetime) -> Dict[str, Any]:
+        """Describe one capacity-holding row the way a refusal must name it.
+
+        Liveness is adjudicated by the sweep's own rule (_all_recorded_owners_gone
+        over every recorded identity, lease and request alike); there is no second
+        liveness rule just for reporting.
+        """
+        lease_row = conn.execute(
+            "SELECT * FROM host_resource_leases WHERE request_id = ?", (row["request_id"],)
+        ).fetchone()
+        if not lease_row and row["parent_lease_id"]:
+            lease_row = conn.execute(
+                "SELECT * FROM host_resource_leases WHERE lease_id = ?", (row["parent_lease_id"],)
+            ).fetchone()
+        owner_pid, owner_start_time, owner_last_seen = _request_owner_identity(row)
+        lease_pid = lease_row["process_pid"] if lease_row else None
+        lease_start = lease_row["process_start_time"] if lease_row else None
+        identities: list[tuple[Optional[int], Optional[float]]] = []
+        # The identity this result REPORTS (owner_pid, else lease_pid) is judged first.
+        if owner_pid is not None:
+            identities.append((owner_pid, owner_start_time))
+        if lease_pid is not None:
+            identities.append((lease_pid, lease_start))
+        owner_alive: Optional[bool]
+        if not identities:
+            owner_alive = None  # unrecorded: the exact shape that hid the holder all night
+        else:
+            all_gone, evidence = self._all_recorded_owners_gone(identities)
+            if all_gone:
+                owner_alive = False
+            else:
+                # A veto that is merely unproven reports unknown, not alive.
+                owner_alive = True if evidence == "OWNER_PROCESS_ALIVE" else None
+        timestamps = [parse_iso_or_expired(row["created_at_utc"])]
+        if owner_last_seen:
+            timestamps.append(parse_iso_or_expired(owner_last_seen))
+        keys = row.keys()
+        return {
+            "request_id": row["request_id"],
+            "state": row["state"],
+            "slot_key": row["slot_key"] if "slot_key" in keys and row["slot_key"] is not None else "",
+            "agent_instance": row["agent_instance"],
+            "owner_pid": owner_pid if owner_pid is not None else lease_pid,
+            "owner_start_time": owner_start_time if owner_pid is not None else lease_start,
+            "owner_identity_source": (
+                row["owner_identity_source"] if "owner_identity_source" in keys else None
+            ),
+            "age_seconds": round(max(0.0, (now - max(timestamps)).total_seconds()), 3),
+            "lease_id": lease_row["lease_id"] if lease_row else row["parent_lease_id"],
+            "lease_expires_at_utc": lease_row["expires_at_utc"] if lease_row else None,
+            "owner_alive": owner_alive,
+        }
+
+    def _holder_rows_locked(
+        self,
+        conn: Any,
+        resource_key: str,
+        *,
+        slot_key: str = "",
+        across_source: bool = False,
+        limit: int = 10,
+    ) -> list[Dict[str, Any]]:
+        """List the rows holding capacity, oldest first, for refusals and views."""
+        if across_source:
+            source = PROVIDER_SOURCE_BY_POOL.get(resource_key)
+            keys = [key for key, provider in PROVIDER_SOURCE_BY_POOL.items() if provider == source]
+            if not keys:
+                keys = [resource_key]
+            # _source_full_locked counts INHERITED children toward the source.
+            state_filter = "('ACTIVE', 'INHERITED', 'RECOVERY_REQUIRED')"
+        else:
+            keys = [resource_key]
+            # The same rows request() counts toward active_or_fenced.
+            state_filter = "('ACTIVE', 'RECOVERY_REQUIRED')"
+        rows = conn.execute(
+            f"""
+            SELECT * FROM host_resource_requests
+            WHERE resource_key IN ({','.join('?' for _ in keys)}) AND state IN {state_filter}
+            ORDER BY created_at_utc, request_id
+            """,
+            keys,
+        ).fetchall()
+        if slot_key:
+            rows = [row for row in rows if row["slot_key"] == slot_key]
+        now = _now()
+        return [self._holder_entry_locked(conn, row, now) for row in rows[:limit]]
+
+    def _queued_blocking_holders_locked(
+        self, conn: Any, *, resource_key: str, slot_key: str
+    ) -> list[Dict[str, Any]]:
+        """Name who keeps a QUEUED request waiting, mirroring request()'s decision order.
+
+        Computed fresh from current rows, so an idempotent replay reports the
+        holders holding now, not those recorded when the request first queued.
+        """
+        pool = conn.execute(
+            "SELECT capacity FROM host_resource_pools WHERE resource_key = ?", (resource_key,)
+        ).fetchone()
+        capacity = int(pool["capacity"]) if pool else 0
+        active_or_fenced = conn.execute(
+            """
+            SELECT slot_key FROM host_resource_requests
+            WHERE resource_key = ? AND state IN (?, ?)
+            """,
+            (
+                resource_key,
+                HostResourceRequestState.ACTIVE.value,
+                HostResourceRequestState.RECOVERY_REQUIRED.value,
+            ),
+        ).fetchall()
+        if len(active_or_fenced) >= capacity:
+            return self._holder_rows_locked(conn, resource_key)
+        if self._source_full_locked(conn, resource_key):
+            return self._holder_rows_locked(conn, resource_key, across_source=True)
+        if slot_key and slot_key in {row["slot_key"] for row in active_or_fenced if row["slot_key"]}:
+            return self._holder_rows_locked(conn, resource_key, slot_key=slot_key)
+        return []
+
     def _request_result(
+        self,
         conn: Any,
         request: HostResourceRequest,
         lease_id: Optional[str] = None,
@@ -1951,6 +2071,13 @@ class HostResourceManager:
                 "SELECT lease_id FROM host_resource_leases WHERE request_id = ?", (request.request_id,)
             ).fetchone()
             lease_id = row["lease_id"] if row else None
+        blocking_holders: list[Dict[str, Any]] = []
+        if request.state == HostResourceRequestState.QUEUED:
+            # A refusal names its holders instead of leaving "unavailable from
+            # dry-run" in the log; the reason_code text itself is unchanged.
+            blocking_holders = self._queued_blocking_holders_locked(
+                conn, resource_key=request.resource_key, slot_key=request.slot_key
+            )
         return {
             "request_id": request.request_id,
             "resource_key": request.resource_key,
@@ -1962,4 +2089,5 @@ class HostResourceManager:
             "slot_key": request.slot_key,
             "priority": request.priority,
             "idempotent_replay": replayed,
+            "blocking_holders": blocking_holders,
         }

@@ -7,6 +7,7 @@ All environment variables use TDCONDUCTOR_* to avoid collision with 3rd-party ho
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hmac
 import json
 import pathlib
@@ -36,6 +37,58 @@ def _print_receipt_exit(receipt) -> int:
     """Receipts are the verdict. ERROR/REJECTED must not look like success."""
     print(json.dumps(receipt.to_dict(), indent=2))
     return 0 if receipt.status == "SUCCESS" else 1
+
+
+def _age_seconds_from_iso(value) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds()
+
+
+def _format_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    if seconds >= 3600:
+        return f"{seconds / 3600:.1f}h"
+    if seconds >= 60:
+        return f"{seconds / 60:.0f}m"
+    return f"{max(0.0, seconds):.0f}s"
+
+
+def _print_blocking_holders(entries, file=None) -> None:
+    """Name every ACTIVE/RECOVERY_REQUIRED holder with pid, id, state, age.
+
+    A RECOVERY_REQUIRED row holds capacity just like an ACTIVE one; printing
+    only the ACTIVE holder left `Holder: None` over a fence that was blocking
+    admission all night (2026-10-19).
+    """
+    for entry in entries or []:
+        pid = entry.get("owner_pid")
+        if pid is None:
+            pid = entry.get("process_pid")
+        if pid is None:
+            pid = entry.get("owner_process_pid")
+        pid_text = str(pid) if pid is not None else "unrecorded"
+        age = entry.get("age_seconds")
+        if age is None:
+            age = _age_seconds_from_iso(entry.get("created_at_utc"))
+        line = (
+            f"  Blocking Holder: request_id={entry.get('request_id')} "
+            f"state={entry.get('state')} pid={pid_text} age={_format_age(age)}"
+        )
+        slot = entry.get("slot_key") or ""
+        if slot:
+            line += f" slot={slot!r}"
+        agent = entry.get("agent_instance")
+        if agent:
+            line += f" agent={agent}"
+        print(line, file=file)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -261,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                     holder = res.get("holder")
                     holder_id = holder.get("request_id") if holder else "None"
                     print(f"  Holder: {holder_id}")
+                    _print_blocking_holders([*(res.get("holders") or []), *(res.get("fenced") or [])])
                     print(f"  Queue Depth: {len(res.get('queue', []))}")
                     print(f"  Fenced Count: {len(res.get('fenced', []))}")
                     print(f"  Sweepable Count: {res.get('sweepable_count', 0)}")
@@ -280,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             holder = result.get("holder")
             holder_id = holder.get("request_id") if holder else "None"
             print(f"  Holder: {holder_id}")
+            _print_blocking_holders([*(result.get("holders") or []), *(result.get("fenced") or [])])
             print(f"  Queue Depth: {len(result.get('queue', []))}")
             print(f"  Fenced Count: {len(result.get('fenced', []))}")
             print(f"  Sweepable Count: {result.get('sweepable_count', 0)}")
@@ -316,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
             idempotency_key=f"idemp_resource_status_{uuid.uuid4().hex[:8]}",
         )
         receipt = processor.process_envelope(envelope)
+        if not args.json:
+            # stderr: stdout stays one parseable JSON document for callers.
+            _print_blocking_holders((receipt.result or {}).get("holders"), file=sys.stderr)
         print(json.dumps(receipt.result if args.json else receipt.to_dict(), indent=2))
         return 0
 
