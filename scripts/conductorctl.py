@@ -88,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_resource_request.add_argument("--attempt-id", required=True)
     p_resource_request.add_argument("--agent-instance", required=True)
+    p_resource_request.add_argument("--owner-pid", type=int)
+    p_resource_request.add_argument("--owner-start-time", type=float)
     p_resource_request.add_argument("--priority", type=int, default=50)
     p_resource_request.add_argument("--idempotency-key")
     p_resource_request.add_argument("--parent-lease-id")
@@ -325,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
                 "purpose": args.purpose,
                 "attempt_id": args.attempt_id,
                 "agent_instance": args.agent_instance,
+                "owner_pid": args.owner_pid,
+                "owner_start_time": args.owner_start_time,
                 "priority": args.priority,
                 "idempotency_key": args.idempotency_key,
                 "parent_lease_id": args.parent_lease_id,
