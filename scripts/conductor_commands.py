@@ -322,6 +322,8 @@ class ConductorCommandProcessor:
             purpose=payload["purpose"],
             attempt_id=payload["attempt_id"],
             agent_instance=payload["agent_instance"],
+            owner_pid=payload.get("owner_pid"),
+            owner_start_time=payload.get("owner_start_time"),
             slot_key=payload.get("slot_key", ""),
             idempotency_key=payload.get("idempotency_key"),
             command_sha256=payload.get("command_sha256", ""),

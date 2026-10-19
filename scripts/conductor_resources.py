@@ -389,6 +389,8 @@ class HostResourceManager:
         environment: Optional[Mapping[str, str]] = None,
         lease_ttl_seconds: int = DEFAULT_LEASE_TTL_SECONDS,
         actor: str = "resource-adapter",
+        owner_pid: Optional[int] = None,
+        owner_start_time: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Admit a named consumer, queue it, or inherit its ancestor lease.
 
@@ -480,6 +482,13 @@ class HostResourceManager:
                                 slot_key=slot_key,
                             ),
                         )
+                        self._record_explicit_owner_locked(
+                            conn,
+                            request_id,
+                            owner_pid=owner_pid,
+                            owner_start_time=owner_start_time,
+                            now_iso=now_iso,
+                        )
                         self._event(conn, request_id, None, None, HostResourceRequestState.QUARANTINED.value, actor, "INHERITED_CHILD_BUSY")
                         # Commit the refusal ledger before surfacing the
                         # exception; otherwise the connection context would
@@ -502,6 +511,13 @@ class HostResourceManager:
                         slot_key=slot_key,
                     )
                     self._insert_request(conn, request)
+                    self._record_explicit_owner_locked(
+                        conn,
+                        request_id,
+                        owner_pid=owner_pid,
+                        owner_start_time=owner_start_time,
+                        now_iso=now_iso,
+                    )
                     self._event(conn, request_id, inherited_id, None, request.state.value, actor, "LEASE_INHERITED")
                     return self._request_result(conn, request, lease_id=inherited_id)
 
@@ -553,10 +569,22 @@ class HostResourceManager:
                 slot_key=slot_key,
             )
             self._insert_request(conn, request)
+            owner_identity = self._record_explicit_owner_locked(
+                conn,
+                request_id,
+                owner_pid=owner_pid,
+                owner_start_time=owner_start_time,
+                now_iso=now_iso,
+            )
             lease_id: Optional[str] = None
             if state == HostResourceRequestState.ACTIVE:
                 lease_id = self._create_lease_locked(
-                    conn, request, lease_ttl_seconds=lease_ttl_seconds, now=now
+                    conn,
+                    request,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    now=now,
+                    process_pid=owner_identity[0] if owner_identity else None,
+                    process_start_time=owner_identity[1] if owner_identity else None,
                 )
             self._event(conn, request_id, lease_id, None, state.value, actor, reason)
             return self._request_result(conn, request, lease_id=lease_id)
@@ -763,6 +791,7 @@ class HostResourceManager:
                     is_gone, evidence = self._all_recorded_owners_gone(identities)
                     if not is_gone:
                         continue
+                    evidence = "OWNER_DEAD"
                 else:
                     identities = []
                     if lease_row and lease_row["process_pid"] is not None:
@@ -775,6 +804,7 @@ class HostResourceManager:
                         is_gone, evidence = self._all_recorded_owners_gone(identities)
                         if not is_gone:
                             continue
+                        evidence = "OWNER_DEAD"
 
                 # Never auto-release any parent that still has surviving INHERITED children.
                 lease_id = lease_row["lease_id"] if lease_row else req["parent_lease_id"]
@@ -797,6 +827,28 @@ class HostResourceManager:
                 if not dry_run:
                     old_state = req["state"]
                     old_reason = req["reason_code"]
+                    event_details = {
+                        "previous_state": old_state,
+                        "previous_reason_code": old_reason,
+                        "evidence": evidence,
+                        "stale_reason": "STALE_SLOT_AUTO_RELEASED",
+                        "ttl_seconds": ttl_seconds,
+                        "age_seconds": age_seconds,
+                    }
+                    receipt_result = {
+                        "request_id": req_id,
+                        "status": "RELEASED",
+                        "reason": "STALE_SLOT_AUTO_RELEASED",
+                        "previous_state": old_state,
+                        "previous_reason_code": old_reason,
+                        "resource_key": req["resource_key"],
+                        "evidence": evidence,
+                        "age_seconds": age_seconds,
+                    }
+                    if evidence == "OWNER_UNRECORDED":
+                        event_details["warning"] = "OWNER_UNRECORDED_RECLAIM"
+                        receipt_result["warning"] = "OWNER_UNRECORDED_RECLAIM"
+
                     conn.execute(
                         "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
                         (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
@@ -899,7 +951,19 @@ class HostResourceManager:
                                             actor,
                                             "STALE_SLOT_AUTO_RELEASED",
                                             now_iso,
-                                            json.dumps({"outcome": "UNKNOWN", "stale_slot_auto_released": True}),
+                                            json.dumps(
+                                                {
+                                                    "outcome": "UNKNOWN",
+                                                    "stale_slot_auto_released": True,
+                                                    "evidence": evidence,
+                                                    "age_seconds": age_seconds,
+                                                    **(
+                                                        {"warning": "OWNER_UNRECORDED_RECLAIM"}
+                                                        if evidence == "OWNER_UNRECORDED"
+                                                        else {}
+                                                    ),
+                                                }
+                                            ),
                                             "conductor.event.v1",
                                         ),
                                     )
@@ -912,13 +976,7 @@ class HostResourceManager:
                         next_state=HostResourceRequestState.RELEASED.value,
                         actor=actor,
                         reason="STALE_SLOT_AUTO_RELEASED",
-                        details={
-                            "previous_state": old_state,
-                            "previous_reason_code": old_reason,
-                            "evidence": evidence,
-                            "stale_reason": "STALE_SLOT_AUTO_RELEASED",
-                            "ttl_seconds": ttl_seconds,
-                        },
+                        details=event_details,
                         event_time=now,
                     )
                     receipt = Receipt(
@@ -926,14 +984,7 @@ class HostResourceManager:
                         command_id=f"cmd_stale_slot_{req_id}_{uuid.uuid4().hex[:8]}",
                         idempotency_key=f"stale_slot_auto_release_{req_id}",
                         status="SUCCESS",
-                        result={
-                            "request_id": req_id,
-                            "status": "RELEASED",
-                            "reason": "STALE_SLOT_AUTO_RELEASED",
-                            "previous_state": old_state,
-                            "previous_reason_code": old_reason,
-                            "resource_key": req["resource_key"],
-                        },
+                        result=receipt_result,
                         processed_at_utc=now_iso,
                     )
                     self.store.save_receipt(receipt, conn=conn)
@@ -1660,31 +1711,93 @@ class HostResourceManager:
         )
 
     @staticmethod
-    def _create_lease_locked(conn: Any, request: HostResourceRequest, *, lease_ttl_seconds: int, now: datetime) -> str:
+    def _create_lease_locked(
+        conn: Any,
+        request: HostResourceRequest,
+        *,
+        lease_ttl_seconds: int,
+        now: datetime,
+        process_pid: Optional[int] = None,
+        process_start_time: Optional[float] = None,
+    ) -> str:
         lease_id = f"hrl_{uuid.uuid4().hex[:12]}"
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(host_resource_leases)").fetchall()}
+        values = {
+            "lease_id": lease_id,
+            "request_id": request.request_id,
+            "resource_key": request.resource_key,
+            "attempt_id": request.attempt_id,
+            "agent_instance": request.agent_instance,
+            "heartbeat_sequence": 1,
+            "expires_at_utc": _iso(now + timedelta(seconds=lease_ttl_seconds)),
+            "last_heartbeat_utc": _iso(now),
+            "schema_version": "conductor.resource-lease.v1",
+        }
+        if "process_pid" in columns:
+            values["process_pid"] = process_pid
+        if "process_start_time" in columns:
+            values["process_start_time"] = process_start_time
+        ordered_columns = [
+            "lease_id", "request_id", "resource_key", "attempt_id", "agent_instance",
+            "heartbeat_sequence", "expires_at_utc", "last_heartbeat_utc",
+        ]
+        ordered_columns.extend(name for name in ("process_pid", "process_start_time") if name in columns)
+        ordered_columns.append("schema_version")
         conn.execute(
-            """
-            INSERT INTO host_resource_leases (
-                lease_id, request_id, resource_key, attempt_id, agent_instance,
-                heartbeat_sequence, expires_at_utc, last_heartbeat_utc,
-                process_pid, process_start_time, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                lease_id,
-                request.request_id,
-                request.resource_key,
-                request.attempt_id,
-                request.agent_instance,
-                1,
-                _iso(now + timedelta(seconds=lease_ttl_seconds)),
-                _iso(now),
-                None,
-                None,
-                "conductor.resource-lease.v1",
-            ),
+            f"INSERT INTO host_resource_leases ({', '.join(ordered_columns)}) "
+            f"VALUES ({', '.join('?' for _ in ordered_columns)})",
+            tuple(values[name] for name in ordered_columns),
         )
         return lease_id
+
+    @staticmethod
+    def _record_explicit_owner_locked(
+        conn: Any,
+        request_id: str,
+        *,
+        owner_pid: Optional[int],
+        owner_start_time: Optional[float],
+        now_iso: str,
+    ) -> Optional[tuple[int, Optional[float], str]]:
+        """Persist the caller's owner claim without making it an admission gate."""
+        if owner_pid is None:
+            return None
+
+        pid = int(owner_pid)
+        claimed_start = float(owner_start_time) if owner_start_time is not None else None
+        try:
+            observed_start = psutil.Process(pid).create_time()
+        except (OSError, ValueError, psutil.Error):
+            # Dead (or unreadable) at request time: a claim nobody can verify is
+            # NOT an identity. Record nothing so the sweep treats the owner as
+            # unrecorded (with its warning) instead of trusting a bare pid.
+            return None
+        validated = claimed_start is None or abs(observed_start - claimed_start) <= 2.0
+
+        # The pid is alive, so the identity that counts is the OBSERVED one. A
+        # mismatching claimed start time (wrong units, drift) is kept out of the
+        # row: persisting it would make the sweep read a live owner as a reused
+        # pid and reclaim it as OWNER_DEAD.
+        source = "EXPLICIT_VALIDATED" if validated else "EXPLICIT_UNVERIFIED"
+        recorded_start = observed_start
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
+        }
+        identity_values = {
+            "owner_process_pid": pid,
+            "owner_process_start_time": recorded_start,
+            "owner_identity_source": source,
+            "owner_last_seen_at_utc": now_iso,
+        }
+        updates = [(name, value) for name, value in identity_values.items() if name in columns]
+        if updates:
+            conn.execute(
+                "UPDATE host_resource_requests SET "
+                + ", ".join(f"{name} = ?" for name, _ in updates)
+                + " WHERE request_id = ?",
+                tuple(value for _, value in updates) + (request_id,),
+            )
+        return pid, recorded_start, source
 
     @staticmethod
     def _source_full_locked(conn: Any, resource_key: str) -> bool:
@@ -1774,12 +1887,20 @@ class HostResourceManager:
             return None
 
         request = self.store._row_to_resource_request(eligible_row)
+        owner_pid, owner_start_time, _ = _request_owner_identity(eligible_row)
         now = _now()
         conn.execute(
             "UPDATE host_resource_requests SET state = ?, reason_code = ? WHERE request_id = ?",
             (HostResourceRequestState.ACTIVE.value, "HOST_RESOURCE_PROMOTED", request.request_id),
         )
-        lease_id = self._create_lease_locked(conn, request, lease_ttl_seconds=DEFAULT_LEASE_TTL_SECONDS, now=now)
+        lease_id = self._create_lease_locked(
+            conn,
+            request,
+            lease_ttl_seconds=DEFAULT_LEASE_TTL_SECONDS,
+            now=now,
+            process_pid=owner_pid,
+            process_start_time=owner_start_time,
+        )
         self._event(conn, request.request_id, lease_id, request.state.value, HostResourceRequestState.ACTIVE.value, actor, "HOST_RESOURCE_PROMOTED")
         return {"request_id": request.request_id, "lease_id": lease_id, "state": HostResourceRequestState.ACTIVE.value}
 
