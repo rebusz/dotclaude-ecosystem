@@ -140,8 +140,27 @@ def test_cli_wrong_owner_start_time_is_recorded_unverified_but_admitted(tmp_path
 
     assert row["state"] == "ACTIVE"
     assert row["owner_process_pid"] == pid
-    assert row["owner_process_start_time"] == claimed_start
+    # The OBSERVED identity is stored, never the mismatching claim: a wrong
+    # claimed start would later make the sweep read a live owner as a reused pid.
+    assert row["owner_process_start_time"] == psutil.Process(pid).create_time()
+    assert row["owner_process_start_time"] != claimed_start
     assert row["owner_identity_source"] == "EXPLICIT_UNVERIFIED"
+
+
+def test_live_owner_with_wrong_claimed_start_is_never_reclaimed_as_dead(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "1")
+    pid = os.getpid()
+    row = _cli_request(
+        tmp_path, monkeypatch, attempt_id="owner-pid-live-wrong-start", owner_pid=pid,
+        owner_start_time=psutil.Process(pid).create_time() + 3600.0, slot_key="live-wrong-slot",
+    )
+    capsys.readouterr()
+    store = ConductorStore(root_dir=tmp_path)
+    _age_active_request(store, row["request_id"])
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    sweep = manager.sweep_stale_slots()
+    assert row["request_id"] not in sweep["swept_request_ids"]
+    assert store.get_resource_request(row["request_id"]).state.value == "ACTIVE"
 
 
 def test_owner_pid_without_start_time_records_observed_process_identity(tmp_path):
@@ -245,22 +264,23 @@ def test_idempotent_replay_does_not_replace_validated_owner(tmp_path):
 
 def test_dead_cdp_owner_is_reclaimed_and_same_slot_is_admitted(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "1")
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    dead_pid = proc.pid
-    dead_start = psutil.Process(dead_pid).create_time()
-    assert proc.wait(timeout=10) == 0
-
-    row = _cli_request(
-        tmp_path,
-        monkeypatch,
-        attempt_id="owner-pid-dead",
-        owner_pid=dead_pid,
-        owner_start_time=dead_start,
-        slot_key="same-model-slot",
-    )
-    capsys.readouterr()
-    assert row["state"] == "ACTIVE"
-    assert row["owner_identity_source"] == "EXPLICIT_UNVERIFIED"
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        owner_start = psutil.Process(proc.pid).create_time()
+        row = _cli_request(
+            tmp_path,
+            monkeypatch,
+            attempt_id="owner-pid-dead",
+            owner_pid=proc.pid,
+            owner_start_time=owner_start,
+            slot_key="same-model-slot",
+        )
+        capsys.readouterr()
+        assert row["state"] == "ACTIVE"
+        assert row["owner_identity_source"] == "EXPLICIT_VALIDATED"
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
 
     store = ConductorStore(root_dir=tmp_path)
     _age_active_request(store, row["request_id"])
@@ -281,6 +301,26 @@ def test_dead_cdp_owner_is_reclaimed_and_same_slot_is_admitted(tmp_path, monkeyp
     assert receipt is not None
     assert receipt.result["evidence"] == "OWNER_DEAD"
     assert "warning" not in receipt.result
+
+
+def test_pid_already_dead_at_request_is_recorded_as_unrecorded_not_trusted(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TDCONDUCTOR_STALE_SLOT_TTL_S", "1")
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_pid = proc.pid
+    assert proc.wait(timeout=10) == 0
+    row = _cli_request(
+        tmp_path, monkeypatch, attempt_id="owner-pid-dead-at-request", owner_pid=dead_pid,
+        owner_start_time=1.0, slot_key="dead-at-request-slot",
+    )
+    capsys.readouterr()
+    assert row["state"] == "ACTIVE"
+    assert row["owner_process_pid"] is None
+    store = ConductorStore(root_dir=tmp_path)
+    _age_active_request(store, row["request_id"])
+    HostResourceManager(store, resource_key="cdp:perplexity").sweep_stale_slots()
+    event = _stale_release_event(store, row["request_id"])
+    assert event["evidence"] == "OWNER_UNRECORDED"
+    assert event["warning"] == "OWNER_UNRECORDED_RECLAIM"
 
 
 def test_unrecorded_stale_owner_reclaim_has_warning_and_age(tmp_path, monkeypatch):

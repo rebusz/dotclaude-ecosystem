@@ -1768,12 +1768,18 @@ class HostResourceManager:
         try:
             observed_start = psutil.Process(pid).create_time()
         except (OSError, ValueError, psutil.Error):
-            validated = False
-        else:
-            validated = claimed_start is None or abs(observed_start - claimed_start) <= 2.0
+            # Dead (or unreadable) at request time: a claim nobody can verify is
+            # NOT an identity. Record nothing so the sweep treats the owner as
+            # unrecorded (with its warning) instead of trusting a bare pid.
+            return None
+        validated = claimed_start is None or abs(observed_start - claimed_start) <= 2.0
 
+        # The pid is alive, so the identity that counts is the OBSERVED one. A
+        # mismatching claimed start time (wrong units, drift) is kept out of the
+        # row: persisting it would make the sweep read a live owner as a reused
+        # pid and reclaim it as OWNER_DEAD.
         source = "EXPLICIT_VALIDATED" if validated else "EXPLICIT_UNVERIFIED"
-        recorded_start = observed_start if validated else claimed_start
+        recorded_start = observed_start
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(host_resource_requests)").fetchall()
         }
