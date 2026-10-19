@@ -37,6 +37,19 @@ LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
 DEFAULT_STALE_SLOT_TTL_SECONDS = 900
 STALE_SLOT_TTL_ENV = "TDCONDUCTOR_STALE_SLOT_TTL_S"
+DEFAULT_STALE_QUEUED_UNRECORDED_TTL_SECONDS = 14400
+STALE_QUEUED_UNRECORDED_TTL_ENV = "TDCONDUCTOR_STALE_QUEUED_UNRECORDED_TTL_S"
+
+
+def get_stale_queued_unrecorded_ttl_seconds() -> int:
+    """Cutoff for QUEUED requests that never recorded an owner (0 disables)."""
+    env_val = os.environ.get(STALE_QUEUED_UNRECORDED_TTL_ENV)
+    if env_val is not None:
+        try:
+            return max(0, int(env_val))
+        except ValueError:
+            pass
+    return DEFAULT_STALE_QUEUED_UNRECORDED_TTL_SECONDS
 
 
 def get_stale_slot_ttl_seconds() -> int:
@@ -698,7 +711,12 @@ class HostResourceManager:
         now = now or _now()
         now_iso = _iso(now)
 
-        state_filter = "('RECOVERY_REQUIRED', 'INHERITED')" if not include_active else "('RECOVERY_REQUIRED', 'ACTIVE', 'INHERITED')"
+        state_filter = (
+            "('QUEUED', 'RECOVERY_REQUIRED', 'INHERITED')"
+            if not include_active
+            else "('QUEUED', 'RECOVERY_REQUIRED', 'ACTIVE', 'INHERITED')"
+        )
+        queued_unrecorded_ttl = get_stale_queued_unrecorded_ttl_seconds()
         rk_filter = "AND resource_key = ?" if resource_key else ""
         params: list[Any] = [resource_key] if resource_key else []
 
@@ -792,6 +810,20 @@ class HostResourceManager:
                     if not is_gone:
                         continue
                     evidence = "OWNER_DEAD"
+                elif state == HostResourceRequestState.QUEUED.value:
+                    # A waiter holds no capacity. Only a recorded owner that is
+                    # provably gone (short TTL), or a never-recorded owner past
+                    # the long cutoff, makes it a ghost. A live or unprovable
+                    # recorded owner keeps it at any age.
+                    if owner_pid is not None:
+                        is_gone, evidence = self._all_recorded_owners_gone([(owner_pid, owner_start_time)])
+                        if not is_gone:
+                            continue
+                        evidence = "OWNER_DEAD"
+                    else:
+                        if queued_unrecorded_ttl <= 0 or age_seconds < queued_unrecorded_ttl:
+                            continue
+                        evidence = "OWNER_UNRECORDED"
                 else:
                     identities = []
                     if lease_row and lease_row["process_pid"] is not None:
