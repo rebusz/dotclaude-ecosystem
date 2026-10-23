@@ -58,15 +58,27 @@ A diff or PR pasted means `review`. A plan pasted with "is this right" means
 ambiguous, state the kind you chose in one line and proceed — a clarifying
 question costs a bounded invocation.
 
-## Step 2 — choose the lane
+## Step 2 — choose the lane (binding roster: `agent-rules/refs/supervisor-model-roster.md`)
 
-Lanes, ports and drivers are in `DISPATCHERS.md` §1. Reach for:
+This flow is the DEFAULT behaviour of every session since 2026-10-16; the
+command is only a shortcut. Lanes, ports and drivers are in `DISPATCHERS.md`
+§1. Three slots per source, all kept busy; every quota hit is reported to the
+operator at once and rerouted. Reach for:
 
-- **gpt lane** — heavy reasoning: concurrency, lease/CAS lifecycle,
-  restart-adoption, R3 order path, PR audits.
-- **ppl lane** — plans, reviews, grills, ordinary single-slice implementation.
-- **glm / qwen** — chain fallbacks; `qwen` only under `--night`.
-- **local** — hand the slice to coderpxA (or coderpxG as the last chain link)
+- **High-limit CDP lanes — text, to the max:** `gpt` (ChatGPT, GPT-6 Astra at
+  Pro/max first) for plans, architecture, hard R3 review; `gemini` (Gemini 4
+  Argon) for important reviews, grills and top-weight decisions; `ppl`
+  (Perplexity: GLM 5.3 Thinking, Kimi K3 Thinking, Grok 4.7, Nemotron 3 Ultra)
+  for grills, reviews, research, ordinary implementation packets.
+- **Local CLIs with repo access — writing code, tests, fixes in worktrees:**
+  Antigravity `agy` (5 accounts), z.ai GLM CLI (a separate source from
+  Perplexity's GLM entry), Cursor CLI, OpenCode free (`opencode run`,
+  DeepSeek V4.1 Flash / GLM-5.3-Flash; anonymous invocation in the roster §5).
+  Codex (`gpt-6-luna`) is the LAST local worker.
+- **Claude / Codex high effort** — supervision, coordination, critical
+  decisions, plans, synthesis. Top-weight decisions: Astra + Fable/Opus +
+  Argon in parallel at the highest effort, then synthesize.
+- `qwen` only under `--night`; `local` hands a slice to coderpxA/coderpxG
   through `dispatch.py plan`.
 
 **Keep it in your own context only when one of these holds** — otherwise it
@@ -77,11 +89,12 @@ goes outward:
 - two outward rounds went red (the per-slice round cap).
 
 When you do dispatch a local Claude subagent, the standing binding applies:
-**implementation never runs on Fable or Haiku**, and every `Agent` or
-`Workflow` call sets `model` **explicitly** — omitting it inherits the session
-model and is a violation. `sonnet` is the default implementation lane, `opus`
-for hard work. Record such a slice in the ledger with dispatcher `C`, so a
-bootstrap is visible rather than pretended away.
+every `Agent` or `Workflow` call sets `model` **explicitly** — omitting it
+inherits the session model and is a violation. **Haiku never writes code and
+never audits or reviews.** `sonnet` is for root-cause work only while the local
+lanes (agy, z.ai GLM, Cursor) are busy or down; Fable/Opus stay in the main
+session for supervision and top decisions. Record such a slice in the ledger
+with dispatcher `C`, so a bootstrap is visible rather than pretended away.
 
 ## Step 3 — name the model before you submit
 
@@ -150,6 +163,54 @@ self-merges; R0 docs and CI-ignored paths may use the normal flow.
   background loop. Reuse the WatchF-owned lifecycle.
 - Relay output is advisory until it passes the normal R-class gates.
 - Connector exposure is a per-repo operator decision.
+
+## Status board — periodic operator table (binding, operator 2026-10-23)
+
+While supervising lanes or a trading session, publish a status board about
+every 15 minutes (in Claude Desktop: one in-session `CronCreate` job on
+off-minutes, e.g. `7,22,37,52 * * * *`), and at once whenever something new
+needs the operator. If nothing changed since the last board, say so in one
+line ("bez zmian od HH:MM") instead of re-rendering it — every board costs
+supervisor tokens. Polish, Edmonton time first, ET in brackets.
+
+Build it from fresh, cheap, deterministic reads, never from memory; anything
+not read this cycle is `UNKNOWN`, never a guess:
+
+- Trading truth: broker readback (`scripts/projectx_position_readback.py`;
+  IBKR read-only on the PAPER port only unless the operator says otherwise),
+  bot health `:6101/health`, checkout SHA vs `origin/main`, bot start time,
+  last `OPTIONS_STARTUP_SAFETY`, entry holds, halts/containment, log-sentinel
+  CRITICAL groups since the last board, loop lag.
+- Work: `gh pr list`/`gh pr checks` per touched repo (Tsignal, TSU, WatchF,
+  apps-shared, dotclaude), linked sessions (`list_sessions {"linked": true}`),
+  background tasks and their owners, CI runner status.
+- Capacity: `conductorctl.py resource-live --all --json` (slots per pool),
+  Claude limits via `get_usage`, other sources from the last 429/quota receipt
+  with its reset time (GLM z.ai, Codex, AGY accounts), CDP lane health
+  (logged-out / timeout / ok).
+
+Fixed layout, at most ~40 lines:
+
+1. **Header** — Edmonton/ET time, session phase and time to close, checkout
+   SHA, bot uptime, merged-but-not-deployed commits.
+2. **Trading** — per account: positions, working orders, protection (stop/TP
+   at broker vs software), armed/disarmed, engine modes, today's realized P&L
+   per lane (`UNKNOWN` if no source), blocks and their cause, urgent items.
+3. **Work** — one row per item: repo | PR/plan/task | owner (session/model) |
+   state (`ACTIVE`, `WAITING_REVIEW`, `WAITING_CI`, `WAITING_OPERATOR`,
+   `BLOCKED`, `DONE`) | next step.
+4. **Capacity** — source | model/effort | slots used/total | quota left and
+   reset | lane health.
+5. **Decisions** — numbered; each with the exact text the operator can paste
+   to approve (e.g. the `GO R3 ...` token).
+
+Make decisions clickable with the app's own controls: the single most urgent
+decision is the next-step box question with answer buttons (`wrap_up`), and
+every startable lane or follow-up task is a New-task card
+(`start_session` own_initiative). Operator-typed confirmation tokens
+(R3 releases, real-money/Combine triggers) stay typed — never turn them into a
+one-click button. A future local dashboard reads the same snapshot; until it
+exists, the chat board is the source of truth.
 
 ## Closing — ownership ledger (mandatory)
 
