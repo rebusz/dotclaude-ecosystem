@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta, timezone
 import json
 import pathlib
-from unittest.mock import patch
 
 import pytest
 
@@ -600,7 +599,6 @@ def test_superseded_attempt_worker_writes_rejected_after_replacement_claim(
         )
     )
     attempt_b = claim_b.result["attempt_id"]
-    gen_b = int(claim_b.result.get("lease_generation", 1))
     for state, reason in (
         (WorkItemState.DISPATCHING, "DISPATCH_START"),
         (WorkItemState.RUNNING, "DISPATCH_RUNNING"),

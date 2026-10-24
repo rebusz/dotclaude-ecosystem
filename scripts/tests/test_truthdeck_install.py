@@ -39,28 +39,26 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.draft == false", workflow)
         self.assertNotIn("paths:", workflow)
 
-    def test_ci_never_routes_to_hosted_or_trading_runners(self):
-        """Operator policy 2026-09-17: self-hosted CI only, in every repository.
+    def test_public_ci_uses_standard_hosted_and_never_trading_runners(self):
+        """The 2026-10-24 policy permits public standard-hosted CI only.
 
-        This repository is also PUBLIC, and public code must never execute on
-        the trusted trading workstation. So the contract is three-sided: no
-        GitHub-hosted image anywhere, a dedicated isolation label no workstation
-        runner carries, and a guard that keeps fork pull requests -- untrusted
-        code and untrusted workflow edits -- off self-hosted infrastructure.
-        A route that drifts back to `windows-latest` fails here before it can
-        be pushed (agent-rules/refs/self-hosted-ci-only.md).
+        The paid private-repository allowance does not apply here. Losing
+        hosted capacity must never route public code onto the workstation.
+        Keep the original full-suite and draft-admission contract intact.
         """
-        hosted_images = ("-latest", "ubuntu-2", "windows-2", "macos-1", "macos-2")
         for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
             text = path.read_text(encoding="utf-8")
             with self.subTest(workflow=path.name):
-                for image in hosted_images:
-                    self.assertNotIn(image, text, f"hosted runner image {image!r} in {path.name}")
-                self.assertIn("self-hosted", text)
-                self.assertIn("dotclaude-isolated", text)
+                routes = [line.strip() for line in text.splitlines() if line.lstrip().startswith("runs-on:")]
+                self.assertEqual(routes, ["runs-on: windows-latest"])
+                self.assertNotIn("self-hosted", text)
+                self.assertIn("contents: read", text)
+                self.assertIn("persist-credentials: false", text)
+                self.assertIn("python-version: '3.12'", text)
+                self.assertIn("run: python -m pytest -q", text)
                 self.assertIn(
                     "github.event.pull_request.head.repo.full_name == github.repository", text,
-                    "fork pull requests must never reach a self-hosted runner",
+                    "preserve the existing PR trust admission",
                 )
 
     def test_install_status_idempotency_and_uninstall_preserve_state(self):

@@ -9,6 +9,7 @@ payload mojibakes instead of raising — silently, because every hook fails open
 from __future__ import annotations
 
 import io
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -59,7 +60,6 @@ class OutputSeamTests(unittest.TestCase):
 
     def _run(self, code: str) -> "subprocess.CompletedProcess[bytes]":
         import os
-        import subprocess
 
         env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
         return subprocess.run(
