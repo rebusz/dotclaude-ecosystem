@@ -5,8 +5,10 @@ Headless-safe: constructs widgets without mainloop(), asserts widget state direc
 
 from __future__ import annotations
 
+import gc
 import pathlib
 import queue
+import re
 import shutil
 import sqlite3
 from unittest.mock import MagicMock, patch
@@ -27,19 +29,38 @@ from scripts.conductor_gui import (
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _collect_destroyed_tk_objects():
+    """Finalize GUI cycles on Tk's owner thread before another module runs."""
+    yield
+    gc.collect()
+
+
 @pytest.fixture
-def tk_root():
+def tk_root(capsys):
     """Create a headless Tk root window."""
     try:
-        root = tk.Tk()
-        root.withdraw()
-        yield root
-        try:
-            root.destroy()
-        except Exception:
-            pass
+        # Tcl's native standard channels must not retain pytest's temporary FDs.
+        with capsys.disabled():
+            root = tk.Tk()
+            root.withdraw()
     except tk.TclError as exc:
-        pytest.skip(f"Tk display not available: {exc}")
+        message = str(exc)
+        reported_files = re.findall(r'couldn.t read file "([^"]+)"', message)
+        if any(pathlib.Path(path).is_file() for path in reported_files):
+            raise
+        if ("no display name" in message or "couldn't connect to display" in message
+                or "Can't find a usable" in message or reported_files):
+            pytest.skip(f"Tk display or installation not available: {exc}")
+        raise
+    try:
+        yield root
+    finally:
+        try:
+            with capsys.disabled():
+                root.destroy()
+        except tk.TclError:
+            pass
 
 
 def _create_sample_store(tmp_path: pathlib.Path) -> ConductorStore:
