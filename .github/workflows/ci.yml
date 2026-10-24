@@ -50,6 +50,22 @@ jobs:
         run: python --version
       - name: Install
         run: python -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+      - name: Install isolated TruthDeck CLI
+        shell: pwsh
+        run: |
+          $truthdeckHome = Join-Path $env:RUNNER_TEMP 'truthdeck-home'
+          $truthdeckBin = Join-Path $truthdeckHome 'bin'
+          New-Item -ItemType Directory -Path $truthdeckBin -Force | Out-Null
+          $env:PATH = "$truthdeckBin;$env:PATH"
+          python scripts/truthdeck_install.py install --home "$truthdeckHome" --enable-mcp none
+          if ($LASTEXITCODE -ne 0) { throw 'TruthDeck installation failed' }
+          $truthdeckBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify TruthDeck CLI
+        shell: pwsh
+        run: |
+          python scripts/truthdeck_install.py status --home (Join-Path $env:RUNNER_TEMP 'truthdeck-home')
+          if ($LASTEXITCODE -ne 0) { throw 'TruthDeck installation readback failed' }
+          truthctl version
       - name: Lint
         run: python -m ruff check scripts
       - name: Compile
