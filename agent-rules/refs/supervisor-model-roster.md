@@ -90,15 +90,15 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
   outward (Perplexity GLM/Kimi, Argon, AGY) -> revise -> fwf matrix
   (cross-family review) -> slice stamps -> implement outward -> review outward
   (author family != reviewer family; R3 needs two families, Argon one of them)
-  -> self-hosted CI green on the exact head -> squash-merge -> fast-forward the
+  -> policy-routed CI green on the exact head -> squash-merge -> fast-forward the
   operator checkout. `/coderpxC`, `/fwf`, `/grill-me` are helpers for this; the
   behaviour applies without typing them.
 - Normal work: the session writes a plan of parallel lanes (one line each:
   lane, source/slot, worktree, DoD), then supervises them: dispatch, verify
   the diff and the test run itself (never trust a narrative), commit, push,
   reviews, CI, merge. One supervisor per program; implementers never merge.
-- Risk classes, paper/live parity, the live-trigger GO, delegated landing and
-  self-hosted-only CI are unchanged.
+- Risk classes, paper/live parity, the live-trigger GO and delegated landing
+  are unchanged. CI follows the current `self-hosted-ci-only.md` routing policy.
 
 ## 5. Invocation cheat-sheet (measured 2026-10-15/16)
 

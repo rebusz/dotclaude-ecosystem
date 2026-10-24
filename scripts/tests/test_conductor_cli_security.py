@@ -10,6 +10,7 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -150,71 +151,30 @@ def test_read_only_status_sees_uncheckpointed_wal_without_touching_source(tmp_pa
 
 def test_read_only_resource_live_sees_uncheckpointed_wal_without_touching_source(tmp_path: pathlib.Path):
     conductor_home = tmp_path / "wal-resource-live"
-    conductor_home.mkdir()
+    ConductorStore(root_dir=conductor_home)
     db_path = conductor_home / "conductor.db"
+    before_main_db = db_path.read_bytes()
     writer = sqlite3.connect(db_path)
     try:
         writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
         writer.execute(
             """
-            CREATE TABLE host_resource_pools (
-                resource_key TEXT PRIMARY KEY,
-                capacity INTEGER NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                schema_version TEXT NOT NULL
-            )
-            """
-        )
-        writer.execute(
-            """
-            CREATE TABLE host_resource_requests (
-                request_id TEXT PRIMARY KEY,
-                idempotency_key TEXT UNIQUE NOT NULL,
-                resource_key TEXT NOT NULL,
-                purpose TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                agent_instance TEXT NOT NULL,
-                state TEXT NOT NULL,
-                priority INTEGER NOT NULL DEFAULT 50,
-                parent_lease_id TEXT,
-                command_sha256 TEXT NOT NULL DEFAULT '',
-                created_at_utc TEXT NOT NULL,
-                released_at_utc TEXT,
-                reason_code TEXT,
-                schema_version TEXT NOT NULL
-            )
-            """
-        )
-        writer.execute(
-            """
-            CREATE TABLE host_resource_leases (
-                lease_id TEXT PRIMARY KEY,
-                request_id TEXT UNIQUE NOT NULL,
-                resource_key TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                agent_instance TEXT NOT NULL,
-                heartbeat_sequence INTEGER NOT NULL,
-                expires_at_utc TEXT NOT NULL,
-                last_heartbeat_utc TEXT NOT NULL,
-                process_pid INTEGER,
-                process_start_time REAL,
-                schema_version TEXT NOT NULL
-            )
-            """
-        )
-        writer.execute(
-            "INSERT INTO host_resource_pools VALUES ('host:heavy', 1, 1, 'conductor.resource-pool.v1')"
-        )
-        writer.execute(
-            """
-            INSERT INTO host_resource_requests VALUES (
+            INSERT INTO host_resource_requests (
+                request_id, idempotency_key, resource_key, purpose, attempt_id,
+                agent_instance, state, priority, parent_lease_id, command_sha256,
+                created_at_utc, released_at_utc, reason_code, schema_version
+            ) VALUES (
                 'rr_wal01', 'idemp_wal01', 'host:heavy', 'pytest_full', 'at-wal',
-                'agent-wal', 'QUEUED', 50, NULL, '', '2026-08-28T10:00:00Z', NULL,
+                'agent-wal', 'QUEUED', 50, NULL, '', ?, NULL,
                 'HOST_RESOURCE_BUSY', 'conductor.resource-request.v1'
             )
-            """
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
         )
         writer.commit()
+        assert db_path.read_bytes() == before_main_db
+        assert db_path.with_name("conductor.db-wal").stat().st_size > 0
         before_tree = _tree_snapshot(conductor_home)
 
         live = read_resource_live_snapshot(resource_key="host:heavy", root_dir=conductor_home)

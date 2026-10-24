@@ -57,11 +57,15 @@ def test_chatgpt_role_builds_only_the_cdp_driver_command(tmp_path: Path) -> None
     assert all("codex" not in str(part).lower() for part in command)
 
 
-def test_policy_text_requires_chatgpt_cdp_and_names_only_runtime_exception() -> None:
+def test_policy_delegates_to_roster_and_preserves_legacy_dispatch_contract() -> None:
     core = (ROOT / "agent-rules" / "core.md").read_text(encoding="utf-8")
     skill = (ROOT / "skills" / "run-model-team" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "GPT coding, plan-audit, and implementation-review work uses signed-in" in core
-    assert "purpose=latency_critical_runtime" in core
+    # Provider policy now lives in the referenced roster. The compatibility
+    # dispatcher still retains its own CDP-only contract, tested above.
+    roster_path = "agent-rules/refs/supervisor-model-roster.md"
+    assert roster_path in core
+    assert (ROOT / roster_path).is_file()
+    assert "../coderpxG/SKILL.md" in skill
     assert "no Codex CLI fallback" in skill
     assert "--role luna" not in skill

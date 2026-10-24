@@ -1,7 +1,7 @@
 name: CI
 
-# One workflow, whole suite, no path filters -- routed ONLY to an isolated,
-# operator-controlled self-hosted runner.
+# One workflow, whole suite, no path filters, on a standard GitHub-hosted
+# Windows runner. This public repository never uses the trading workstation.
 #
 # Coverage: this replaces hooks-ci, session-lifecycle-ci and truthdeck-ci,
 # which between them named 27 of 72 scripts in hand-maintained argument lists.
@@ -11,21 +11,17 @@ name: CI
 # ready_for_review transition, so a PR taken draft -> ready merged with
 # `completed/skipped` checks and zero executed tests (P1-22).
 #
-# Routing: operator policy 2026-09-17 (agent-rules/refs/self-hosted-ci-only.md)
-# forbids GitHub-hosted execution in every operator-owned repository, and this
-# repository is PUBLIC. Public-repository code must never run on the trusted
-# trading workstation, so the job targets a dedicated `dotclaude-isolated`
-# label that no workstation runner carries. Until the operator registers an
-# isolated runner with that label, jobs cannot start: CI is BLOCKED, never
-# PASS, and trusted local validation at the exact head is the substitute the
-# policy names. The workflow is additionally paused (disabled_manually) as
-# containment; re-enable only after route validation and a real local run.
+# Routing: operator policy 2026-10-24 permits free standard hosted compute
+# for public repositories. There is no fallback to a trusted local runner.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+
+permissions:
+  contents: read
 
 # Without path filters, every push runs the suite -- including the design-doc
 # auto-backups the PostToolUse hook pushes in bursts. Superseding a run is the
@@ -36,24 +32,43 @@ concurrency:
 
 jobs:
   suite:
-    # Draft PRs stay cheap (the operator batches pushes while drafting), and a
-    # fork's PR never reaches a self-hosted runner: on a public repository its
-    # workflow edits and code are untrusted by definition.
+    # Preserve draft batching and the existing same-repository PR admission.
     if: >-
       github.event_name == 'push' ||
       (github.event.pull_request.draft == false &&
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, windows, dotclaude-isolated]
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Interpreter
-        run: py -3 --version
+        run: python --version
       - name: Install
-        run: py -3 -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+        run: python -m pip install --disable-pip-version-check pytest "ruff==0.15.20" psutil -r requirements-truthdeck-mcp.txt
+      - name: Install isolated TruthDeck CLI
+        shell: pwsh
+        run: |
+          $truthdeckHome = Join-Path $env:RUNNER_TEMP 'truthdeck-home'
+          $truthdeckBin = Join-Path $truthdeckHome 'bin'
+          New-Item -ItemType Directory -Path $truthdeckBin -Force | Out-Null
+          $env:PATH = "$truthdeckBin;$env:PATH"
+          python scripts/truthdeck_install.py install --home "$truthdeckHome" --enable-mcp none
+          if ($LASTEXITCODE -ne 0) { throw 'TruthDeck installation failed' }
+          $truthdeckBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify TruthDeck CLI
+        shell: pwsh
+        run: |
+          python scripts/truthdeck_install.py status --home (Join-Path $env:RUNNER_TEMP 'truthdeck-home')
+          if ($LASTEXITCODE -ne 0) { throw 'TruthDeck installation readback failed' }
+          truthctl version
       - name: Lint
-        run: py -3 -m ruff check scripts
+        run: python -m ruff check scripts
       - name: Compile
-        run: py -3 -m compileall -q scripts
+        run: python -m compileall -q scripts
       - name: Tests
-        run: py -3 -m pytest -q
+        run: python -m pytest -q

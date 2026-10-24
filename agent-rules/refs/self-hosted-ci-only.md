@@ -1,60 +1,100 @@
-# Self-hosted CI only
+# Included GitHub Actions capacity with local fallback
 
-Risk: R0 policy. Operator decision: 2026-09-17.
+Risk: R0 policy within the R3-authorized hybrid CI project.
+Operator decision: 2026-10-24. The existing filename remains a compatibility link.
 
 ## Scope and authority
 
-All operator-owned repositories, including small, public, experimental and newly
-created repositories, execute CI/build/release jobs only on operator-controlled
-local self-hosted infrastructure. GitHub remains the repository, PR, artifact and
-workflow orchestration service. Free hosted minutes and a zero-dollar billing
-cap are not exceptions. This supersedes the small-repository hosted-free-tier
-exception in the 2026-08-13 local CI plan and any older agent instructions.
+This policy supersedes the 2026-09-17 prohibition on GitHub-hosted CI in all
+operator-owned repositories, including new repositories. GitHub remains the
+repository, PR, check and workflow control plane. Use the included allowance for
+portable private-repository jobs and switch to compatible local self-hosted
+runners before exhausting that allowance. The existing `rebusz` Actions budget
+is **USD 3 per month with Stop usage when budget limit is reached enabled**.
+It is a backstop for metered usage, not permission to increase the budget or a
+target to spend. Other billing products and account settings are unchanged.
 
-## Agent contract
+Project plan:
+`D:/APPS/_shared/design/plans/2026-10-24_hybrid_ci_budget_r3.md`.
+The August local-CI plan's resource isolation and watchdog contracts remain in
+force. This decision changes routing, not review, required checks or live-trigger
+authority.
 
-1. Before push, PR-ready, workflow dispatch or rerun, read all affected workflow
-   triggers and routes at the exact head. Inspect matrices, expressions, reusable
-   workflows and third-party build services, not only literal `runs-on` strings.
-   Every executable job must resolve to an approved local self-hosted runner.
-2. Verify repository visibility, runner registration, labels, OS and online
-   capacity. A workflow edit is not runner installation, and an online Windows
-   service does not prove a Linux/container job works. A repository with no CI
-   is NO_CI, not migrated or PASS.
-3. No automatic cloud fallback, hosted rerun, free-tier exception, or fake green
-   check. Missing infrastructure/review/required check means BLOCKED. Preserve
-   required-check names and test coverage during migration. Do not remove branch
-   protection to get a merge through.
-4. Use bounded local concurrency, isolated job environments, timeouts and the
-   existing affinity/priority/watchdog contracts. Do not create one unbounded
-   heavy lane per repository on the workstation. Changes to services, pools and
-   Linux infrastructure follow the R1 workflow and applicable operator gates.
-5. Validate locally, batch pushes and keep implementation PRs draft. Completion
-   requires a successful real job at the exact head with runner name/OS/labels,
-   job URL, exit/conclusion and artifact evidence. Static validation alone is
-   CONFIGURED, not runtime acceptance.
+## Admission and routing
+
+1. Before push, PR-ready, dispatch or rerun, inspect the affected workflows at
+   the exact head, including matrices, expressions, reusable workflows and
+   third-party execution. Classify each job as portable, host-affine or untrusted.
+   Existing host-affine jobs and workflows pinned to another attempt's host or
+   provenance remain local; do not silently rewrite their custody contract.
+2. Admit portable private jobs to standard GitHub-hosted runners only using
+   authenticated, fresh usage and entitlement evidence for the repository owner
+   and current billing period. Quota is shared across that owner's repositories.
+   Include the configured safety margin, bounded job cost and concurrent
+   reservations. Unknown or stale usage, an exhausted admission threshold, an
+   unverified runner SKU or missing billing access selects the compatible local
+   route. An API error is never zero usage. Larger runners and other paid cloud
+   services are outside this policy.
+3. The private-job selector must run independently of hosted-minute availability,
+   on an approved trusted self-hosted controller. It must not execute untrusted
+   checked-out code or expose its billing credential to build steps. A cached
+   repository variable alone is not fresh admission evidence. Monthly reset
+   requires a fresh current-period observation; clock rollover alone does not
+   clear unresolved reservations or authorize hosted work.
+4. Verify local runner registration, OS, labels and online capacity before
+   claiming fallback is available. Windows capacity does not establish Linux
+   compatibility. Preserve job/check names, test coverage, environment isolation,
+   artifacts and required-check semantics across routes. A missing compatible
+   runner or required check is BLOCKED; a repository without CI is NO_CI.
+5. Preserve the account's USD 3 hard-stop setting and check storage as well as
+   minutes. Artifact retention and cache limits must remain bounded. Budget
+   alerts alone are not a stop control. Never add a payment method, raise a
+   budget, disable the hard stop or expand credential permissions to force
+   admission without the applicable authorization.
 
 ## Public repositories and untrusted contributions
 
-Never route public/fork pull-request code or untrusted workflow edits onto the
-trusted trading workstation. Use separately isolated operator-controlled local
-infrastructure and admission controls, or leave automated execution BLOCKED and
-run trusted reviewed validation locally. Do not change repository visibility,
-weaken security, or substitute cloud execution to avoid this boundary.
+Public repositories use standard GitHub-hosted runners, whose compute is free
+under GitHub's current public-repository terms. This does not authorize larger
+runners, unbounded storage or automatic transfer of public/fork pull-request
+code to the trusted trading workstation. Keep ordinary GitHub fork approval,
+token and secret restrictions. Untrusted private contributions also never reach
+the trusted controller or workstation. If hosted execution is unavailable, keep
+the failure visible or use separately approved isolated infrastructure; do not
+fall back to the trusted workstation or weaken repository security.
 
-## Migration and recovery
+## Execution, migration and recovery
 
-Hosted workflows may be paused as containment with their prior state and exact
-workflow IDs recorded. That pauses CI; it does not constitute a completed
-migration. Re-enable only after route validation and compatible local execution
-are proven. Rollback restores a known self-hosted workflow or pauses the broken
-workflow; it never restores cloud execution. Keep failures and queued work visible.
+Use bounded local concurrency, job timeouts and the existing affinity,
+BelowNormal-priority and watchdog contracts. Do not create an unbounded heavy
+lane per repository. Preserve unknown submissions, existing attempts and live
+runner ownership. A failed test/build remains a failure, not a trigger to rerun
+elsewhere until green. A confirmed pre-execution infrastructure rejection may
+select the validated fallback; uncertainty about whether execution started must
+be reconciled before any replacement run.
+
+Retain before/after workflow states and IDs. Re-enable previously paused
+workflows only after their routes and compatible environments are validated.
+Keep implementation PRs draft and batch pushes. Do not remove branch protection,
+rename away a required failure, or treat a skipped check as a passing test.
+Completion needs real successful exact-head jobs with job URL, runner identity,
+OS, conclusion and test evidence for the hosted and applicable local routes.
+Exercise quota exhaustion, stale/missing telemetry, concurrent admission,
+billing reset and infrastructure rejection through the real selector path.
+Static validation establishes configuration, not runtime acceptance.
+
+Rollback selects a proven local route for trusted private jobs or pauses the
+affected workflow while preserving the failure and custody evidence. Public
+jobs retain standard-hosted-only admission. Rollback never lifts the USD 3 cap,
+routes untrusted code to the workstation, or removes services automatically.
 
 ## Instruction delivery
 
 Canonical policy is this file plus `agent-rules/core.md`; update generated global
-rules only with `scripts/sync_agent_rules.py`. Verify Claude, Codex, Cline and
-Antigravity readback separately. Other hosts and delegated workers must receive
-this policy through their actual instruction loader/task packet. Existing agent
-conversations can retain old instructions: require a fresh read before their next
-CI action. File installation is not proof every running agent acknowledged it.
+rules only with `scripts/sync_agent_rules.py`. Review pre-existing source/target
+drift before installation so a CI change does not overwrite unrelated rules.
+Preserve manual sections and verify Claude, Codex, Cline and Antigravity readback
+separately. Update the CI section of `D:/APPS/AGENTS.md` through its owner, keeping
+the port contract intact. Existing conversations and delegated workers must read
+the current policy before their next CI action; installation alone is not proof
+every active session acknowledged it.
