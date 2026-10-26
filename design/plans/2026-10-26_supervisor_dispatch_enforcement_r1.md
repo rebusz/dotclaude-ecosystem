@@ -60,11 +60,26 @@ operator ──> Claude main session (SUPERVISOR: decide, brief, read verdicts)
    - When the chain for a role is exhausted it exits `QUEUED` and writes `~/.claude/state/lane_queue/*.json`. The queue drains automatically when a lane's reset time passes; a scheduled runner retries every 15 min.
    - For implementation lanes it pins the venv python, LF line endings, "do not commit", and "finish all items", and applies a post-check: if the diff is empty or partial, the lane counts as FAILED and the job moves to the next lane.
 
-3. **Hard enforcement hooks (PreToolUse).**
+3. **Three tiers. Claude coordinates, roster models work (operator decision, 2026-10-26).**
+   - **Tier 1, main supervisor** (Opus/Fable, this session): decides, writes briefs, reads verdicts, reports. Nothing else.
+   - **Tier 2, task coordinator**: a separate session (`start_session`) or a subagent per task, on **Sonnet** (or **Haiku** for pure relay and status), never Opus.
+     - It drives the job through `lane`: brief, dispatch, read the receipt, send the result to the next lane (review), relay a short report to Tier 1.
+     - The roster models do about 80% of the work: code, tests, reviews, diagnosis.
+     - The coordinator's own edits are limited to commits and glue: staging, commit messages, merge-conflict resolution, a ≤20-line fix the lanes failed twice.
+     - Its report states its own lines changed vs lane-produced lines.
+     - This keeps the supervisor's context clean without burning Claude tokens on work.
+   - **Tier 3, roster lanes**: AGY, Cursor, GLM, Codex luna, ChatGPT Chat/Work, Argon, Perplexity, Kimi.
+
+4. **Hard enforcement hooks (PreToolUse).**
    - `Agent` matcher, new `hooks/claude_worker_guard.py`.
-     - It DENIES spawning a Claude subagent for implementation, review, audit or diagnosis. Detection: the prompt or description matches impl/fix/review/audit/diagnose patterns, or the subagent type is executor or general-purpose with write intent.
-     - Allowed only with an operator-created override file `~/.claude/state/allow_claude_workers` that has a TTL. Agents never create it.
-     - The deny message returns the exact `lane …` command to use instead.
+     - It DENIES an `Agent` call with no explicit `model`, or with `model` opus/fable.
+     - It DENIES a brief that lacks the coordinator contract line: "You are a Tier-2 coordinator: all code, tests, reviews and diagnosis go through `dispatch.py lane`; you only relay, commit and glue."
+     - The deny message returns the corrected call.
+     - The same rule applies to `start_session`: it needs an explicit `model` sonnet/haiku and a coordinator brief.
+   - Coordinator edit cap. PreToolUse on Edit/Write inside Tier-2 contexts (identified by the hook payload's agent or session id; mapping to be verified in S2).
+     - Writes to source files (`*.py`, `*.ts`, `*.tsx`) are counted.
+     - Above 20 changed lines per task the hook denies, with "dispatch it to `lane impl`".
+   - Operator override: a TTL file `~/.claude/state/allow_claude_workers` lifts both rules. Agents never create it.
    - Bash matcher (extends `model_launch_guard.py`).
      - It denies direct model CLI launches (`codex exec`, `glm`, `kimi`, `cursor-agent`, `cdp_*`) that do not go through `dispatch.py lane`.
      - Direct calls stay possible only with `--lane-repair` (for repairing a lane).
