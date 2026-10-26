@@ -87,6 +87,39 @@ operator ──> Claude main session (SUPERVISOR: decide, brief, read verdicts)
      - It counts bytes read per turn. Above 60 KB in one turn it injects "STOP reading: send this to `lane diagnose`".
      - It blocks a single Read over 40 KB unless the path is a review verdict or a receipt.
 
+4a. **Lane registry: every model is a data row, not code (`lanes.json`).**
+   - Each lane declares:
+     - `id`
+     - `family` (gpt, gemini, zai, moonshot, anthropic, local, other), used for the cross-family rule;
+     - `roles` (impl, review, grill, plan, diagnose);
+     - `cost_class`: `subscription` (ChatGPT Chat/Work, Gemini, Perplexity, GLM z.ai, Kimi, Cursor, Codex, AGY), `free` (OpenRouter `:free` models, OpenCode free models), or `local` (llama.cpp/GGUF on this workstation);
+     - `quota_window` (5h/weekly/none);
+     - `invoke` adapter (CLI or CDP command template);
+     - `probe` (health check);
+     - `trust` (`trusted`, or `probation` for a newly tested model);
+     - `rth_allowed`.
+   - Covered from day one:
+     - AGY (impl);
+     - Cursor CLI (impl);
+     - GLM z.ai CLI (impl, review, grill);
+     - Kimi CLI (review, impl);
+     - Codex luna (impl, last);
+     - ChatGPT Chat GPT-6 Pro (review, diagnose);
+     - ChatGPT Work Astra/Sol (plan, R3 review);
+     - Gemini Argon CDP (review, grill, diagnose);
+     - Perplexity picker models (grill, review);
+     - OpenCode (impl/review, model chosen per row);
+     - OpenRouter free models (review, diagnose; impl only if trusted).
+   - `free` lanes are hard-capped at zero spend.
+     - The adapter refuses any OpenRouter model id without the `:free` suffix, and any response that reports a non-zero cost.
+     - Free lanes go first in the order wherever their trust allows.
+   - `local` lanes (models under test on the RX 9070 XT) run as `rth_allowed: false` by default, because of the no-heavy-compute-during-RTH rule; the operator can flip that per lane.
+   - `probation` lanes (any newly added free or local model):
+     - get only R0/R1 work, plus shadow reviews whose verdicts are recorded but never gate a merge;
+     - are never the sole reviewer of R2/R3.
+     - Promotion to `trusted` is an operator decision, based on recorded shadow agreement with trusted reviewers.
+   - Adding a model means adding a row and a probe. No supervisor habit is involved.
+
 5. **Lane health and repair loop.**
    - `lane_health.json` is written by the router and by a probe (`lane probe --all`: ChatGPT Chat and Work, Argon, Perplexity, Kimi, GLM, AGY, Cursor, Codex) that runs at SessionStart and every 30 min.
    - A lane DOWN for UI drift or a permission reason, rather than quota, automatically creates a lane-repair job. That job is itself routed through `lane impl` in the WatchF and dispatch repos.
