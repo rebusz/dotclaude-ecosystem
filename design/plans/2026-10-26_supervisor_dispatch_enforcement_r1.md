@@ -117,8 +117,8 @@ operator ──> Claude main session (SUPERVISOR: decide, brief, read verdicts)
 
 Implementation goes through the lanes themselves (AGY/GLM/Codex). Review is cross-family, on plain ChatGPT Chat or Argon. Self-hosted CI only.
 
-# Operator decisions needed
+# Operator decisions
 
-1. **Strict `Agent` deny with an override file:** Claude subagents are blocked entirely for code, review and diagnosis, and only you can lift that with a TTL file. Alternative: allow Sonnet read-only `Explore`.
-2. **Direct model CLI deny:** everything must go through `lane`, except `--lane-repair`.
-3. **AGY permission rule:** add `"Bash(python D:/APPS/_shared/dispatch/dispatch.py:*)"` to `permissions.allow`. This one rule then covers every lane.
+1. DECIDED 2026-10-26: per-task coordinators are allowed, on Sonnet or Haiku, never Opus. Roster models do about 80% of the work; the coordinator relays to the supervisor.
+2. DECIDED 2026-10-26: every model goes through `lane` only, with a hard deny on direct CLI/CDP launches except `--lane-repair`.
+3. OPEN, operator action: add `"Bash(python D:/APPS/_shared/dispatch/dispatch.py:*)"` to `permissions.allow`. This one rule then covers every lane.
