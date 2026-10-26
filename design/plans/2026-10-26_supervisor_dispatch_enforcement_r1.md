@@ -102,7 +102,7 @@ operator ──> Claude main session (SUPERVISOR: decide, brief, read verdicts)
 
 # Hard rules (the contract's 5 lines)
 
-1. Claude writes no code, does no review and does no diagnosis. Claude decides and briefs. Workers are always launched with `lane`.
+1. The supervisor writes no code, does no review and does no diagnosis. Claude decides and briefs. Per-task work runs in a Sonnet/Haiku coordinator that sends about 80% of the work to roster lanes through `lane`.
 2. Never fall back to Claude. If the chain is exhausted, the job is QUEUED, the operator is alerted and the lane gets repaired.
 3. Free lanes before quota lanes: ChatGPT Chat, Argon and Perplexity first; Codex and Astra-on-Work last or for R3 only.
 4. Every quota hit or DOWN lane is reported to the operator in the same turn, in one line.
