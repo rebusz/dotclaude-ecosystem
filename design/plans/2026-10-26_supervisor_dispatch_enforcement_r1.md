@@ -133,6 +133,35 @@ operator ──> Claude main session (SUPERVISOR: decide, brief, read verdicts)
    - The supervisor does not read source code to verify a reviewer; it sends the cross-check to a second lane.
    - A status line lists: lanes in use, models, and what is DOWN or QUEUED.
 
+# v2: grill fixes (Gemini 4 Argon, plus a partial Grok 4.7 answer; operator GO 2026-10-26)
+
+1. **Bash bypass.**
+   - The Bash PreToolUse hook denies file mutation of guarded paths from Bash (redirects, `sed -i`, `tee`, `cp`/`mv` into source extensions, the hooks dir, `settings*.json`, `~/.claude/state/allow_claude_workers*`, `lane_health.json`, the queue).
+   - `--lane-repair` is accepted only when a lane-repair job id exists in the queue for that lane.
+   - The override is never a plain file. It is created only by an operator-only command, `lane authorize --interactive`, which requires a real TTY and an exact typed GO, using the Conductor `authorize --interactive` pattern. The command writes an HMAC-signed, TTL-bounded token; the key is in the operator's user DPAPI store, not readable by repo files.
+   - A PostToolUse net-diff cap (`git diff --numstat` against the task's BASE_SHA) catches any edits that slipped through.
+2. **Read budget.**
+   - It is PreToolUse (checked before the read), cumulative per session, and applies to both tiers. Default caps: supervisor 150 KB/session, Tier-2 400 KB/task.
+   - Max agent depth is 1: a Tier-2 cannot spawn an Agent or `start_session`.
+   - Large Bash output is forced to a file, and only a tail is returned.
+3. **Router isolation.**
+   - Every impl job records BASE_SHA in its own worktree.
+   - Between lane attempts, `git reset --hard BASE_SHA` and `git clean -fd`, in that job's worktree only.
+   - Success means the job's `verify_cmd` exit code is 0 and the diff is non-empty. Anything else is FAILED, and the job moves to the next lane.
+4. **State integrity.**
+   - `lane_health.json`, the queue and the receipts use a file lock plus write-temp and `os.replace`.
+   - Lane-repair jobs bypass the impl chain. They run on a dedicated repair path (a direct lane CLI with `--lane-repair` and the job id), so an all-down impl chain cannot deadlock its own repair.
+5. **Chunked reads.**
+   - In the supervisor session, Read and Grep are denied on source extensions (`*.py`, `*.ts`, `*.tsx`, `*.js`).
+   - Allowed: `design/**`, handoffs, memory, receipts, verdicts, logs (tail only).
+6. **Main session self-edit.**
+   - Edit/Write in the supervisor session is denied on source extensions (fail-closed).
+   - Allowed: plans, handoffs, memory and docs.
+7. **Hook safety.**
+   - A hook that crashes denies the guarded tool, with a message naming the hook file and the error.
+   - The operator's `lane authorize --interactive` can disable all dispatch hooks for a TTL, as the emergency-off path.
+   - Hook tests replay recorded payloads, including today's Opus spawns and direct `codex exec`, and assert deny/allow.
+
 # Hard rules (the contract's 5 lines)
 
 1. The supervisor writes no code, does no review and does no diagnosis. Claude decides and briefs. Per-task work runs in a Sonnet/Haiku coordinator that sends about 80% of the work to roster lanes through `lane`.
