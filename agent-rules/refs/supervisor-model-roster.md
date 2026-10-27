@@ -8,6 +8,13 @@ session. Where older rules conflict (Execution Defaults 2026-09 "Claude CLI and
 Codex CLI are never workflow lanes", the 2026-09-26 Fable ban, "subagents only
 haiku" 2026-10-05, the 2026-10-10 flexible-roles note), THIS file wins.
 
+## 0. Supersession (2026-10-26)
+
+Routing, fallback and enforcement are defined by `templates/supervisor-contract.md`
+(installed `~/.claude/refs/supervisor-contract.md`) and the `dispatch.py lane`
+router; this file is reference for roles and quotas and must not contradict it;
+where it does, the contract wins.
+
 ## 1. Roles by source
 
 | Source (own quota) | Role | Notes |
@@ -18,8 +25,8 @@ haiku" 2026-10-05, the 2026-10-10 flexible-roles note), THIS file wins.
 | **Antigravity `agy`** (gemini-3.8-flash, effort high; **5 accounts**) | **implementation, tests, fixes** in a worktree (local repo/PC access); reviews when a writer slot is free | push hard; switch account on RESOURCE_EXHAUSTED |
 | **z.ai GLM CLI** (`glm.cmd`, GLM family; separate zcode MCP limit) | **implementation, tests, fixes** in a worktree | separate source from Perplexity's GLM entry; 5h window resets |
 | **Cursor CLI** (`cursor-agent`) | **implementation, tests, fixes** in a worktree | main local workhorse |
-| **Codex CLI** (gpt-6-luna / gpt-6-sol / gpt-6-astra) | local worker (Luna) when the three above are busy; Astra/Sol high effort for planning second opinions | LAST in the implementation queue |
-| **Claude** (this session: Opus 5.5 / Fable 5.1; subagents Sonnet) | **management, supervision, coordination, critical decisions, plans, synthesis, adversarial verification** | not bulk implementation; Sonnet subagent only for root-cause work when local lanes are down |
+| **Codex CLI** (gpt-6.1-terra first, gpt-6-luna fallback if the CLI rejects terra for ChatGPT accounts (medium effort only; never Astra/Sol on Codex)) | local worker (Luna) when the three above are busy; Astra/Sol high effort for planning second opinions | LAST in the implementation queue |
+| **Claude** (this session: Opus 5.5 / Fable 5.1; subagents Sonnet) | **management, supervision, coordination, critical decisions, plans, synthesis, adversarial verification** | not bulk implementation; Sonnet subagent only for root-cause work when local lanes are down; per-task coordinators run on Sonnet/Haiku, never Opus; Claude never falls back into bulk implementation, review or diagnosis (chain exhausted = QUEUED) |
 | Haiku | mechanical bulk without judgement, if at all | **never audits, reviews or code** |
 | **OpenCode Zen free** (`opencode run`; free models ONLY, never paid): **DeepSeek V4.1 Flash** (`opencode/deepseek-v4.1-flash-free`), **GLM-5.3-Flash** (`opencode/glm-5.3-flash-free`, a third GLM source, separate from z.ai and Perplexity) | **implementation, tests, fixes** in a worktree (agentic: edits files, runs pytest); second-opinion R0/R1 review | free for a limited time, no end date; 200K context cap; ZDR claimed (OpenCode statement via press, no primary doc). R2/R3 code only with the operator's OK |
 | Local Qwen, LongCat (OpenCode free), Grok bot | night/offline, free extra lane, QA operator lane | opportunistic |
