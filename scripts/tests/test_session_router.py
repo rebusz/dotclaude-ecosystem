@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 _SCRIPTS = Path(__file__).parent.parent
 sys.path.insert(0, str(_SCRIPTS))
 
@@ -23,6 +25,23 @@ import session_lifecycle as lifecycle  # noqa: E402
 
 
 NOW = datetime(2026, 7, 25, 18, 30, tzinfo=UTC)
+_TINY_CONTRACT = "C\n"
+
+
+@pytest.fixture(autouse=True)
+def _tiny_supervisor_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the router at a one-line contract so length bounds stay on the routed body."""
+
+    contract_path = tmp_path / "supervisor-contract.md"
+    contract_path.write_bytes(_TINY_CONTRACT.encode("utf-8"))
+    monkeypatch.setenv("SUPERVISOR_CONTRACT_PATH", str(contract_path))
+    router._contract_cache.clear()
+
+
+def _without_contract(context: str) -> str:
+    if context.startswith(_TINY_CONTRACT):
+        return context[len(_TINY_CONTRACT) :]
+    return context
 
 
 def _registration(root: Path) -> state.RepositoryRegistration:
@@ -127,7 +146,7 @@ class TestSessionRouter(unittest.TestCase):
             self.assertIn("Installer-managed hook block", context)
             self.assertIn("latest.md", context)
             self.assertIn("model chooses", context)
-            self.assertLessEqual(len(context), router.FULL_CONTEXT_MAX_CHARS)
+            self.assertLessEqual(len(_without_contract(context)), router.FULL_CONTEXT_MAX_CHARS)
             hook_output = output["hookSpecificOutput"]
             assert isinstance(hook_output, dict)
             self.assertEqual(
@@ -164,8 +183,9 @@ class TestSessionRouter(unittest.TestCase):
                 )
 
             context = _context(output)
-            self.assertEqual(len(context.splitlines()), 1)
-            self.assertLessEqual(len(context), router.MINIMAL_CONTEXT_MAX_CHARS)
+            body = _without_contract(context)
+            self.assertEqual(len(body.splitlines()), 1)
+            self.assertLessEqual(len(body), router.MINIMAL_CONTEXT_MAX_CHARS)
             self.assertFalse(state_dir.exists())
 
     def test_resume_reads_existing_plan_without_clobbering_it(self):
@@ -244,7 +264,9 @@ class TestSessionRouter(unittest.TestCase):
             context = _context(output)
             self.assertIn("Survive compaction", context)
             self.assertIn("2026-07-25T18:45:00Z", context)
-            self.assertLessEqual(len(context), router.COMPACT_CONTEXT_MAX_CHARS)
+            self.assertLessEqual(
+                len(_without_contract(context)), router.COMPACT_CONTEXT_MAX_CHARS
+            )
             self.assertEqual(path.read_bytes(), before)
             self.assertNotIn("sessionTitle", output["hookSpecificOutput"])
 
