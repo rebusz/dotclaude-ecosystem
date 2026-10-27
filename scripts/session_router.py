@@ -671,6 +671,8 @@ def handle_event(
         return _output(context, title=title)
     except Exception as exc:  # noqa: BLE001 - hook must fail open
         append_hook_error("ROUTER_INVALID_INPUT", exception_detail(exc), state_dir=target_state)
+        if isinstance(event, dict) and event.get("source") in _VALID_SOURCES:
+            return _output("")
         return {}
 
 
@@ -721,6 +723,10 @@ def main() -> int:
             event["transcript_path"] = ""
     output = handle_event(event)
     _start_lane_probe(event)
+    if isinstance(event, dict) and event.get("source") in _VALID_SOURCES:
+        hook_specific = output.get("hookSpecificOutput") if isinstance(output, dict) else None
+        if not isinstance(hook_specific, dict) or not hook_specific.get("additionalContext"):
+            output = _output("")
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
     return 0
 
