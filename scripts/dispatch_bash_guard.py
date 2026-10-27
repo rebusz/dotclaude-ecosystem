@@ -111,7 +111,7 @@ _SCRIPT_RE = re.compile(
     re.IGNORECASE,
 )
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_REDIR_RE = re.compile(r"(\d*)(>>|>)")
+_REDIR_RE = re.compile(r"(\d*)(>>|>\||>|<>)|&>>|&>")
 
 _MAX_RECURSION_DEPTH = 4
 _INTERPRETERS = frozenset({
@@ -148,7 +148,7 @@ _READ_CMDS = frozenset({
     "get-content", "gc", "awk", "rg", "grep",
     "select-string", "findstr",
 })
-_PYTHON_VALUE_OPTS = frozenset({"-w", "-x", "--check-hash-based-pycs"})
+_PYTHON_VALUE_OPTS = frozenset({"-w", "-x", "-W", "-X", "--check-hash-based-pycs"})
 _INLINE_EXEC_RE = re.compile(
     r"\b(?:subprocess|os\.system|Popen|spawn|spawnSync|"
     r"child_process|exec|execSync|system|passthru|shell_exec|proc_open)\b|`"
@@ -190,6 +190,15 @@ _GIT_VALUE_FLAGS = frozenset({
 })
 _GIT_READ_SUBS = frozenset({"show", "grep", "log", "blame", "cat-file"})
 _GIT_MUTATE_SUBS = frozenset({"apply", "am", "restore", "checkout"})
+_GIT_EXEC_BEARING_CORE = frozenset({
+    "core.hookspath",
+    "core.pager",
+    "core.editor",
+    "core.sshcommand",
+    "core.fsmonitor",
+    "core.askpass",
+    "core.gitproxy",
+})
 _FUNC_DEF_PREFIX_RE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{|"
     r"(?:function|filter)\s+[A-Za-z_][A-Za-z0-9_:\-]*\s*(?:\([^)]*\)\s*)?\{)",
@@ -217,16 +226,10 @@ class _Cmd(NamedTuple):
     input_redirs: list[str] = []
 
 
-def split_statements(command: str) -> list[str]:
-    """Split a Bash or PowerShell command into statements.
-
-    Non-interpreter heredoc bodies and PowerShell here-string bodies are
-    removed first. Interpreter heredoc bodies are preserved intact. Separators
-    are newlines, ``;``, ``&&``, ``||``, ``|``, and a lone ``&``. A separator
-    inside single or double quotes does not split. ``2>&1`` is not a separator.
-    """
+def _split_statements_with_pipe(command: str) -> list[tuple[str, bool]]:
+    """Split a command into (statement, is_first_in_pipeline) tuples."""
     text = _strip_bodies(command)
-    parts: list[str] = []
+    parts: list[tuple[str, bool]] = []
     buf: list[str] = []
     i = 0
     n = len(text)
@@ -234,12 +237,18 @@ def split_statements(command: str) -> list[str]:
     in_double = False
     in_ansi = False
     escaped = False
+    next_is_first = True
 
-    def flush() -> None:
+    def flush(next_first: bool) -> None:
+        nonlocal next_is_first
         piece = "".join(buf).replace("\x00", "\n").strip()
         buf.clear()
         if piece:
-            parts.append(piece)
+            parts.append((piece, next_is_first))
+            next_is_first = next_first
+        else:
+            if next_first:
+                next_is_first = True
 
     while i < n:
         ch = text[i]
@@ -301,15 +310,20 @@ def split_statements(command: str) -> list[str]:
             continue
         two = text[i:i + 2]
         if two in {"&&", "||"}:
-            flush()
+            flush(next_first=True)
             i += 2
             continue
         if ch in {";", "\n"}:
-            flush()
+            flush(next_first=True)
             i += 1
             continue
         if ch == "|":
-            flush()
+            prev = text[i - 1] if i else ""
+            if prev == ">":
+                buf.append(ch)
+                i += 1
+                continue
+            flush(next_first=False)
             i += 1
             continue
         if ch == "&":
@@ -323,13 +337,24 @@ def split_statements(command: str) -> list[str]:
                 buf.append(ch)
                 i += 1
                 continue
-            flush()
+            flush(next_first=True)
             i += 1
             continue
         buf.append(ch)
         i += 1
-    flush()
+    flush(next_first=True)
     return parts
+
+
+def split_statements(command: str) -> list[str]:
+    """Split a Bash or PowerShell command into statements.
+
+    Non-interpreter heredoc bodies and PowerShell here-string bodies are
+    removed first. Interpreter heredoc bodies are preserved intact. Separators
+    are newlines, ``;``, ``&&``, ``||``, ``|``, and a lone ``&``. A separator
+    inside single or double quotes does not split. ``2>&1`` is not a separator.
+    """
+    return [stmt for stmt, _ in _split_statements_with_pipe(command)]
 
 
 def program_of(statement: str) -> str:
@@ -383,7 +408,7 @@ def _command_text_reason(
     banned_git_aliases: set[str] | None,
 ) -> str | None:
     cwd = effective_cwd
-    for stmt in split_statements(text):
+    for stmt, is_first in _split_statements_with_pipe(text):
         reason = _statement_reason(
             statement=stmt,
             env=env,
@@ -391,6 +416,7 @@ def _command_text_reason(
             effective_cwd=cwd,
             is_tier2_caller=is_tier2_caller,
             banned_git_aliases=banned_git_aliases,
+            is_first_in_pipeline=is_first,
         )
         if reason is not None:
             return reason
@@ -405,6 +431,7 @@ def _statement_reason(
     effective_cwd: str = "",
     is_tier2_caller: bool = False,
     banned_git_aliases: set[str] | None = None,
+    is_first_in_pipeline: bool = True,
 ) -> str | None:
     if depth >= _MAX_RECURSION_DEPTH:
         return _depth_exceeded_reason(statement)
@@ -493,7 +520,9 @@ def _statement_reason(
 
     # 9. Supervisor read rule
     if not is_tier2_caller and _is_read_cmd(parsed):
-        read_reason = _supervisor_read_check(statement, parsed, effective_cwd, env)
+        read_reason = _supervisor_read_check(
+            statement, parsed, effective_cwd, env, is_first_in_pipeline,
+        )
         if read_reason is not None:
             return read_reason
 
@@ -1022,23 +1051,40 @@ def _inline_code_check(
     prog = parsed.program
     flags = _INLINE_FLAGS.get(prog, ("-c",))
     short_chars = _INLINE_SHORT_CHARS.get(prog, ())
+    val_opts = _VALUE_OPTS_BY_PROG.get(prog, frozenset())
     code_pieces: list[str] = []
 
     args = parsed.args
     i = 0
     while i < len(args):
         arg = args[i]
+        if arg == "--":
+            break
+        if arg == "-m" or arg.startswith("-m="):
+            break
+        if prog in _PYTHON and (
+            arg in _PYTHON_VALUE_OPTS
+            or any(arg.lower().startswith(opt) for opt in ("-w", "-x"))
+        ):
+            if arg in _PYTHON_VALUE_OPTS and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+            continue
+        if arg in val_opts and i + 1 < len(args):
+            i += 2
+            continue
         if arg in flags and arg.startswith("--"):
             if i + 1 < len(args):
                 code_pieces.append(_strip_surrounding_quotes(args[i + 1]))
                 i += 2
             else:
                 i += 1
-            continue
+            break
         if any(arg.startswith(f + "=") for f in flags if f.startswith("--")):
             code_pieces.append(_strip_surrounding_quotes(arg.split("=", 1)[1]))
             i += 1
-            continue
+            break
         if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
             cluster = arg[1:]
             matched_idx = -1
@@ -1056,8 +1102,14 @@ def _inline_code_check(
                     i += 2
                 else:
                     i += 1
-                continue
-        i += 1
+                break
+            i += 1
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        # First operand (script or -): options after belong to the program
+        break
 
     if "<<" in statement:
         code_pieces.append(statement)
@@ -1117,9 +1169,26 @@ def _has_inline_code(prog: str, args: list[str], statement: str) -> bool:
         return True
     flags = _INLINE_FLAGS.get(prog, ("-c",))
     short_chars = _INLINE_SHORT_CHARS.get(prog, ())
+    val_opts = _VALUE_OPTS_BY_PROG.get(prog, frozenset())
     i = 0
     while i < len(args):
         arg = args[i]
+        if arg == "--":
+            break
+        if arg == "-m" or arg.startswith("-m="):
+            break
+        if prog in _PYTHON and (
+            arg in _PYTHON_VALUE_OPTS
+            or any(arg.lower().startswith(opt) for opt in ("-w", "-x"))
+        ):
+            if arg in _PYTHON_VALUE_OPTS and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+            continue
+        if arg in val_opts and i + 1 < len(args):
+            i += 2
+            continue
         if arg in flags and arg.startswith("--"):
             return True
         if any(arg.startswith(f + "=") for f in flags if f.startswith("--")):
@@ -1129,24 +1198,32 @@ def _has_inline_code(prog: str, args: list[str], statement: str) -> bool:
             for ch in cluster:
                 if ch in short_chars:
                     return True
-        i += 1
+            i += 1
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        break
     return False
 
 
 def _is_interp_introspection(prog: str, args: list[str]) -> bool:
+    if not args:
+        return False
+    first = args[0]
+    if first == "--":
+        return False
+    low = first.lower()
+    flag = low.split("=", 1)[0] if low.startswith("--") else low
+    if flag in {"--help", "-h", "--version"}:
+        return True
     is_py = prog in _PYTHON
-    for a in args:
-        low = a.lower()
-        if low in {"--help", "-h"} or low.startswith("--help"):
+    if is_py:
+        if first in {"-V", "-VV"}:
             return True
-        if low in {"--version"} or low.startswith("--version"):
+    else:
+        if first in {"-v", "-V"}:
             return True
-        if is_py:
-            if a in {"-V", "-VV"}:
-                return True
-        else:
-            if a in {"-v", "-V"}:
-                return True
     return False
 
 
@@ -1206,7 +1283,7 @@ def _git_check(
             val_clean = val.strip()
             if key_low.startswith("alias.") and val_clean.startswith("!"):
                 return _git_config_reason(statement)
-            if key_low.startswith("core."):
+            if key_low in _GIT_EXEC_BEARING_CORE:
                 return _git_config_reason(statement)
 
     # "git config" writing alias.* or core.* is denied; aliases registered in
@@ -1215,10 +1292,12 @@ def _git_check(
         positionals = _git_config_positionals(args)
         if positionals:
             key = positionals[0].lower()
-            if key.startswith("alias.") or key.startswith("core."):
-                if len(positionals) >= 2:
-                    if key.startswith("alias."):
-                        banned_git_aliases.add(key[len("alias."):].strip())
+            if len(positionals) >= 2:
+                val = positionals[1].strip()
+                if key in _GIT_EXEC_BEARING_CORE:
+                    return _git_config_reason(statement)
+                if key.startswith("alias.") and val.startswith("!"):
+                    banned_git_aliases.add(key[len("alias."):].strip())
                     return _git_config_reason(statement)
     return None
 
@@ -1254,18 +1333,21 @@ def _is_proven_non_source_file(target: str, effective_cwd: str) -> bool:
         return False
     if any(ch in t for ch in "*?[]"):
         return False
-    try:
-        resolved = _canonical_path(t, effective_cwd)
-        if resolved.is_dir():
-            return False
-    except (OSError, ValueError):
-        pass
     p = Path(t)
     suffix = p.suffix.lower()
     if not suffix:
         return False
-    if suffix in _DENIED_WRITE_EXTS:
+    if suffix in _DENIED_WRITE_EXTS or is_source_path(t):
         return False
+    try:
+        resolved = _canonical_path(t, effective_cwd)
+        if resolved.is_dir():
+            return False
+        if is_source_path(str(resolved)) or _has_denied_write_ext(str(resolved)):
+            return False
+    except Exception:
+        if is_source_path(t) or _has_denied_write_ext(t):
+            return False
     return True
 
 
@@ -1338,6 +1420,17 @@ def _git_mutation_check(
         return _git_mutation_reason(statement)
 
     if sub == "restore":
+        has_staged = any(
+            a in {"--staged", "-S"} or a.startswith("--staged=")
+            for a in sub_args
+        )
+        has_worktree = any(
+            a in {"--worktree", "-W"} or a.startswith("--worktree=")
+            for a in sub_args
+        )
+        if has_staged and not has_worktree:
+            return None
+
         if "--" in sub_args:
             targets = sub_args[sub_args.index("--") + 1:]
         else:
@@ -1399,8 +1492,9 @@ def _git_mutation_check(
                     return _git_mutation_reason(statement)
                 if len(positionals) >= 2 and idx > 0 and resolved.is_dir():
                     return _git_mutation_reason(statement)
-            except (OSError, ValueError):
-                pass
+            except Exception:
+                if is_source_path(clean_pos) or _has_denied_write_ext(clean_pos):
+                    return _git_mutation_reason(statement)
         return None
 
     return None
@@ -1481,6 +1575,7 @@ def _supervisor_read_check(
     parsed: _Cmd,
     effective_cwd: str,
     env: Mapping[str, str] | None,
+    is_first_in_pipeline: bool = True,
 ) -> str | None:
     # Check input redirections
     for r in parsed.input_redirs:
@@ -1538,10 +1633,44 @@ def _supervisor_read_check(
         has_recursive = any(a in {"-r", "-R", "--recursive"} for a in args)
         while index < len(args):
             a = args[index]
+            if a == "--":
+                index += 1
+                while index < len(args):
+                    pos = args[index]
+                    if not saw_pat:
+                        saw_pat = True
+                    else:
+                        targets.append(pos)
+                    index += 1
+                break
             name, inline = _opt(a)
-            if name in {"-e", "-f", "--regexp", "--file"}:
+            if name in {"-e", "-f", "--regexp", "--file"} or a in {"-e", "-f"}:
                 saw_pat = True
-                index += 1 if inline is not None else 2
+                if inline is not None:
+                    index += 1
+                elif len(a) > 2 and not a.startswith("--") and (a.startswith("-e") or a.startswith("-f")):
+                    index += 1
+                elif index + 1 < len(args):
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if name in {"--glob", "--type"}:
+                if inline is not None:
+                    index += 1
+                elif index + 1 < len(args):
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if a in {"-g", "-t", "-T", "-A", "-B", "-C", "-m"}:
+                if index + 1 < len(args):
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if a.startswith("-") and not a.startswith("--") and len(a) > 2 and any(a.startswith(opt) for opt in ("-g", "-t", "-T", "-A", "-B", "-C", "-m")):
+                index += 1
                 continue
             if a.startswith("-"):
                 index += 1
@@ -1552,7 +1681,8 @@ def _supervisor_read_check(
                 targets.append(a)
             index += 1
         if not targets and (has_recursive or prog == "rg"):
-            targets.append(effective_cwd)
+            if is_first_in_pipeline and not parsed.input_redirs:
+                targets.append(effective_cwd)
     elif prog == "select-string":
         index = 0
         saw_pat = False
@@ -1579,8 +1709,9 @@ def _supervisor_read_check(
             else:
                 targets.append(a)
             index += 1
-        if not targets and not parsed.input_redirs:
-            targets.append(effective_cwd)
+        if not targets:
+            if is_first_in_pipeline and not parsed.input_redirs:
+                targets.append(effective_cwd)
     elif prog == "findstr":
         index = 0
         saw_pat = False
@@ -1600,19 +1731,43 @@ def _supervisor_read_check(
                 targets.append(a)
             index += 1
         if not targets and has_recursive:
-            targets.append(effective_cwd)
+            if is_first_in_pipeline and not parsed.input_redirs:
+                targets.append(effective_cwd)
     elif prog == "awk":
         index = 0
         saw_prog = False
         while index < len(args):
             a = args[index]
+            if a == "--":
+                index += 1
+                while index < len(args):
+                    pos = args[index]
+                    if not saw_prog:
+                        saw_prog = True
+                    else:
+                        targets.append(pos)
+                    index += 1
+                break
             name, inline = _opt(a)
-            if name in {"-f", "--file"}:
+            if name in {"-f", "--file"} or a in {"-f", "--file"}:
                 saw_prog = True
-                index += 1 if inline is not None else 2
+                if inline is not None:
+                    index += 1
+                elif len(a) > 2 and not a.startswith("--") and a.startswith("-f"):
+                    index += 1
+                elif index + 1 < len(args):
+                    index += 2
+                else:
+                    index += 1
                 continue
-            if name in {"-f", "-v"}:
-                index += 1 if inline is not None else 2
+            if a in {"-F", "-v"}:
+                if index + 1 < len(args):
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if (a.startswith("-F") or a.startswith("-v")) and len(a) > 2:
+                index += 1
                 continue
             if a.startswith("-"):
                 index += 1
@@ -1676,9 +1831,20 @@ def _is_non_allowlisted_dir(
 def _canonical_path(p: str, cwd: str) -> Path:
     cleaned = p.strip().strip("'\"")
     expanded = os.path.expanduser(os.path.expandvars(cleaned))
+    if (
+        len(expanded) >= 2
+        and expanded[0] == "/"
+        and expanded[1].isalpha()
+        and (len(expanded) == 2 or expanded[2] == "/")
+    ):
+        expanded = f"{expanded[1].upper()}:{expanded[2:] or '/'}"
     path_obj = Path(expanded)
     if not path_obj.is_absolute():
-        path_obj = Path(cwd) / path_obj
+        if expanded.startswith("/") or expanded.startswith("\\"):
+            drive = Path(cwd).drive
+            path_obj = Path(f"{drive}{expanded}") if drive else path_obj
+        else:
+            path_obj = Path(cwd) / path_obj
     try:
         return path_obj.resolve()
     except Exception:
@@ -1791,8 +1957,6 @@ def _is_source_target(
         folded = cleaned.lower()
         if any(folded.endswith(ext) for ext in _DENIED_WRITE_EXTS):
             return True
-        if cleaned.endswith("*") or cleaned.endswith("/*") or cleaned.endswith(r"\*"):
-            return True
     return False
 
 
@@ -1818,27 +1982,30 @@ def _update_cwd(current_cwd: str, statement: str) -> str:
     if first_non_assign < len(words):
         cmd_name = _normalize_exe(words[first_non_assign])
         if cmd_name in {"cd", "chdir", "pushd"}:
-            args = [
-                a for a in words[first_non_assign + 1:]
-                if not a.startswith("/") and not a.startswith("-")
-            ]
+            args = []
+            for a in words[first_non_assign + 1:]:
+                low = a.lower()
+                if low in {"/d", "-d"}:
+                    continue
+                if low in {"-p", "-l", "--"}:
+                    continue
+                if a.startswith("-") and not a.startswith("--") and len(a) > 1 and all(c in "pl" for c in a[1:].lower()):
+                    continue
+                args.append(a)
             if args:
                 target = args[0].strip().strip("'\"")
                 try:
-                    expanded = os.path.expanduser(os.path.expandvars(target))
-                    p = Path(expanded)
-                    if not p.is_absolute():
-                        p = Path(current_cwd) / p
-                    return str(p.resolve())
+                    p = _canonical_path(target, current_cwd)
+                    return str(p)
                 except Exception:
                     pass
     return current_cwd
 
 
 def _write_paths(parsed: _Cmd, cwd: str) -> list[str]:
-    if parsed.program == "git":
-        return []
     paths = list(parsed.redirs)
+    if parsed.program == "git":
+        return paths
     program = parsed.program
     if program == "sed":
         paths.extend(_sed_files(parsed.args))
@@ -2477,6 +2644,10 @@ def _lex(statement: str) -> list[tuple[str, str]]:
         if ch in " \t\r\n":
             index += 1
             continue
+        if ch == "#":
+            while index < length and text[index] not in "\r\n":
+                index += 1
+            continue
         redirect = _read_redirect(text, index)
         if redirect is not None:
             kind, value, index = redirect
@@ -2511,6 +2682,9 @@ def _read_redirect(text: str, index: int) -> tuple[str, str, int] | None:
         op_end = index + 3
         write = True
     elif text.startswith("&>", index):
+        op_end = index + 2
+        write = True
+    elif text.startswith("<>", index):
         op_end = index + 2
         write = True
     else:
@@ -2696,6 +2870,13 @@ def _strip_bodies(command: str) -> str:
                 in_double = False
             index += 1
             continue
+        if ch == "#" and (
+            index == 0
+            or command[index - 1] in " \t\r\n;(&|"
+        ):
+            while index < length and command[index] not in "\r\n":
+                index += 1
+            continue
         if pending and ch == "\n":
             delim, strip_tabs, is_interp = pending.pop(0)
             index = _skip_newline(command, index)
@@ -2777,6 +2958,8 @@ def _parse_heredoc_op(text: str, index: int) -> tuple[str, bool, int] | None:
     if cursor < len(text) and text[cursor] == "-":
         strip_tabs = True
         cursor += 1
+    while cursor < len(text) and text[cursor] in " \t":
+        cursor += 1
     if cursor >= len(text):
         return None
     if text[cursor] in "'\"":
@@ -2787,7 +2970,7 @@ def _parse_heredoc_op(text: str, index: int) -> tuple[str, bool, int] | None:
         return text[cursor + 1:end], strip_tabs, end + 1
     if text[cursor] == "\\":
         cursor += 1
-    matched = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[cursor:])
+    matched = re.match(r"[^\s<>|&;()]+", text[cursor:])
     if not matched:
         return None
     return matched.group(0), strip_tabs, cursor + matched.end()

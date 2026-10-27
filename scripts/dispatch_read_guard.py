@@ -7,15 +7,16 @@ limit is denied unless that path is allow-listed. Bytes are measured for
 the selected slice (cap 2 MB, binary-safe) and charged against 150 KB
 (supervisor) or 400 KB (Tier-2) atomically.
 
-Supervisor Grep denies directory paths unless allowlisted or restricted to
-non-source extensions, and denies Grep with no path (cwd search).
+Supervisor Grep denies directory paths and path-less Grep (cwd search) unless
+allowlisted or restricted to non-source extensions.
 
 When the tier registry is corrupt or unreadable, source reads and counted
 actions are denied with an operator guidance message for both tiers.
 
 PostToolUse (``--post``) covers Read, Grep, Glob, Bash, and PowerShell. Real
-output size is added for every tool except Read (Read was charged in Pre).
-A response over 30 KB, or a counter that passes the cap, adds context and
+output size is added for Grep and Glob (Read was charged in Pre; Bash and
+PowerShell do not count toward the read budget). A response over 30 KB, or
+a counter that passes the cap (for Read, Grep, and Glob), adds context and
 does not block.
 
 decide() and decide_post() return the JSON object to print, or None. They do
@@ -77,8 +78,9 @@ _GREP_SOURCE_TYPES = frozenset({
     "mjs",
     "cjs",
 })
-_ACCOUNT_TOOLS = frozenset({"Grep", "Glob", "Bash", "PowerShell"})
-_POST_TOOLS = _ACCOUNT_TOOLS | {"Read"}
+_ACCOUNT_TOOLS = frozenset({"Grep", "Glob"})
+_READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
+_POST_TOOLS = _READ_TOOLS | {"Bash", "PowerShell"}
 _SLICE_CAP = 2 * 1024 * 1024
 
 
@@ -332,12 +334,14 @@ def _decide_grep(
     path = _text(tool_input, "path").strip()
     if supervisor:
         if not path:
-            return deny(_SOURCE_DENY)
-        allow = _is_allowlisted_path_or_dir(payload, path)
-        if _grep_targets_source(tool_input) and not allow:
-            return deny(_SOURCE_DENY)
-        if _is_directory(payload, path) and not allow and not _restricts_to_non_source(tool_input):
-            return deny(_SOURCE_DENY)
+            if not _restricts_to_non_source(tool_input):
+                return deny(_SOURCE_DENY)
+        else:
+            allow = _is_allowlisted_path_or_dir(payload, path)
+            if _grep_targets_source(tool_input) and not allow:
+                return deny(_SOURCE_DENY)
+            if _is_directory(payload, path) and not allow and not _restricts_to_non_source(tool_input):
+                return deny(_SOURCE_DENY)
     return _charge(key, 0, cap, env)
 
 
@@ -384,12 +388,14 @@ def decide_post(payload: dict, env: Mapping[str, str] | None = None) -> dict | N
     key = agent_key(payload)
     if tool in _ACCOUNT_TOOLS:
         total = bump_counter(_COUNTER, key, size, env)
-    else:
+    elif tool in _READ_TOOLS:
         total = get_counter(_COUNTER, key, env)
+    else:
+        total = 0
     messages: list[str] = []
     if size > BIG_OUTPUT_WARN:
         messages.append(_LARGE_OUTPUT)
-    if total > _cap(payload, env):
+    if tool in _READ_TOOLS and total > _cap(payload, env):
         messages.append(_STOP_READING)
     if not messages:
         return None

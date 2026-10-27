@@ -11,6 +11,7 @@ Importing this module creates no files.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -79,21 +80,25 @@ def _raw_path(tool_input: dict) -> str | None:
     return None
 
 
-def _absolute_path(payload: dict, raw: str) -> Path:
-    cleaned = raw.strip().strip("'\"")
-    expanded = Path(os.path.expandvars(cleaned)).expanduser()
-    if not expanded.is_absolute():
-        cwd = payload.get("cwd")
-        base = Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
-        expanded = base / expanded
+def _absolute_path(payload: dict, raw: str) -> Path | None:
     try:
+        cleaned = raw.strip().strip("'\"")
+        expanded = Path(os.path.expandvars(cleaned)).expanduser()
+        if not expanded.is_absolute():
+            cwd = payload.get("cwd")
+            base = Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
+            expanded = base / expanded
         return expanded.resolve()
     except Exception:
-        return expanded
+        return None
 
 
 def _pair_lines(edit: Mapping[str, object]) -> int:
-    return max(count_lines(edit.get("old_string")), count_lines(edit.get("new_string")))
+    old_str = edit.get("old_string")
+    new_str = edit.get("new_string")
+    old_text = old_str if isinstance(old_str, str) else ""
+    new_text = new_str if isinstance(new_str, str) else ""
+    return _diff_lines(old_text, new_text)
 
 
 def _diff_lines(old_text: str, new_text: str) -> int:
@@ -114,7 +119,7 @@ def _diff_lines(old_text: str, new_text: str) -> int:
 def _declared_lines(tool_name: object, tool_input: dict) -> int:
     """Declared lines from tool_input alone for early rejection."""
     if tool_name == "Write":
-        return count_lines(tool_input.get("content"))
+        return 0
     if tool_name == "MultiEdit":
         edits = tool_input.get("edits")
         if not isinstance(edits, list):
@@ -168,7 +173,7 @@ def _measure_real_lines(
                     return 0, deny(f"measurement error on {raw}: old_string not found in file")
                 occurrences = 1
                 temp_content = temp_content.replace(old_str, new_str, 1)
-            pair = max(count_lines(old_str), count_lines(new_str))
+            pair = _diff_lines(old_str, new_str)
             total += occurrences * pair
         return total, None
 
@@ -192,7 +197,7 @@ def _measure_real_lines(
         if old_str not in current_content:
             return 0, deny(f"measurement error on {raw}: old_string not found in file")
         occurrences = 1
-    pair = max(count_lines(old_str), count_lines(new_str))
+    pair = _diff_lines(old_str, new_str)
     lines = occurrences * pair
     return lines, None
 
@@ -219,7 +224,9 @@ def _run_git(directory: str, args: list[str]) -> subprocess.CompletedProcess[str
         return None
 
 
-def _is_git_tracked(path: Path) -> bool:
+def _is_git_tracked(path: Path | None) -> bool:
+    if path is None:
+        return False
     try:
         directory = str(path.parent) if path.parent.parts else "."
         target = path.name
@@ -244,12 +251,12 @@ def _parse_numstat(output: str) -> int:
     return total
 
 
-def _git_numstat(path: Path) -> int:
+def _git_numstat(path: Path | None) -> int:
     """Added+deleted versus HEAD via ``git -C <dir> diff --numstat HEAD -- <file>``.
 
     Untracked paths and any git failure are zero.
     """
-    if not _is_git_tracked(path):
+    if path is None or not _is_git_tracked(path):
         return 0
     try:
         directory = str(path.parent) if path.parent.parts else "."
@@ -262,6 +269,22 @@ def _git_numstat(path: Path) -> int:
     return _parse_numstat(diff.stdout)
 
 
+def _map_path(
+    payload: dict,
+    target_path: Path | None,
+    env: Mapping[str, str] | None,
+) -> Path | None:
+    if target_path is None:
+        return None
+    key = agent_key(payload)
+    norm = str(target_path).replace("\\", "/")
+    if sys.platform == "win32":
+        norm = norm.lower()
+    raw = f"{key}|{norm}"
+    hashed = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    return state_dir(env) / _PRESNAP_DIR / f"presnap-map-{hashed}.json"
+
+
 def _presnap_path(payload: dict, env: Mapping[str, str] | None) -> Path:
     tool_use_id = payload.get("tool_use_id")
     token = tool_use_id if isinstance(tool_use_id, str) and tool_use_id else "missing"
@@ -270,14 +293,64 @@ def _presnap_path(payload: dict, env: Mapping[str, str] | None) -> Path:
 
 
 def _write_presnap(payload: dict, path: Path, env: Mapping[str, str] | None) -> None:
-    dest = _presnap_path(payload, env)
-    body = {"numstat": _git_numstat(path), "path": str(path).replace("\\", "/")}
-    raw = json.dumps(body, separators=(",", ":")).encode("utf-8") + b"\n"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(raw)
+    try:
+        tool_use_id = payload.get("tool_use_id")
+        map_path: Path | None = None
+        if isinstance(tool_use_id, str) and tool_use_id.strip():
+            token = re.sub(r"[^A-Za-z0-9._-]+", "_", tool_use_id.strip())[:80] or "missing"
+        else:
+            token = f"{os.getpid()}_{os.urandom(6).hex()}"
+            map_path = _map_path(payload, path, env)
+
+        dest = state_dir(env) / _PRESNAP_DIR / f"presnap-{token}.json"
+        body = {"numstat": _git_numstat(path), "path": str(path).replace("\\", "/")}
+        raw = json.dumps(body, separators=(",", ":")).encode("utf-8") + b"\n"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(raw)
+
+        if map_path is not None:
+            map_body = {"presnap_id": token, "path": str(path).replace("\\", "/")}
+            map_raw = json.dumps(map_body, separators=(",", ":")).encode("utf-8") + b"\n"
+            map_path.parent.mkdir(parents=True, exist_ok=True)
+            map_path.write_bytes(map_raw)
+    except Exception:
+        return
 
 
-def _read_presnap(path: Path) -> int:
+def _resolve_presnap_paths(
+    payload: dict,
+    target_path: Path | None,
+    env: Mapping[str, str] | None,
+) -> tuple[Path | None, Path | None]:
+    tool_use_id = payload.get("tool_use_id")
+    map_path = _map_path(payload, target_path, env)
+
+    if isinstance(tool_use_id, str) and tool_use_id.strip():
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", tool_use_id.strip())[:80] or "missing"
+        presnap = state_dir(env) / _PRESNAP_DIR / f"presnap-{safe}.json"
+        if presnap.is_file():
+            return presnap, map_path
+
+    if map_path is not None and map_path.is_file():
+        try:
+            data = json.loads(map_path.read_text(encoding="utf-8"))
+            pid_id = data.get("presnap_id") if isinstance(data, dict) else None
+            if isinstance(pid_id, str) and pid_id.strip():
+                presnap = state_dir(env) / _PRESNAP_DIR / f"presnap-{pid_id.strip()}.json"
+                return presnap, map_path
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            pass
+
+    if isinstance(tool_use_id, str) and tool_use_id.strip():
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", tool_use_id.strip())[:80] or "missing"
+        return state_dir(env) / _PRESNAP_DIR / f"presnap-{safe}.json", map_path
+
+    return None, map_path
+
+
+def _read_presnap(path: Path | None) -> int:
+    if path is None:
+        return 0
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
@@ -288,7 +361,9 @@ def _read_presnap(path: Path) -> int:
     return value
 
 
-def _remove(path: Path) -> None:
+def _remove(path: Path | None) -> None:
+    if path is None:
+        return
     try:
         path.unlink()
     except OSError:
@@ -305,10 +380,16 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
 
     # Protected paths cannot be edited by anyone (supervisor or Tier-2),
     # checked BEFORE any source exemption or line cap.
+    target_path: Path | None = None
     if raw is not None:
         cwd = payload.get("cwd")
         cwd_str = cwd if isinstance(cwd, str) and cwd.strip() else None
-        if protected_path(raw, cwd=cwd_str, env=env):
+        target_path = _absolute_path(payload, raw)
+        if (
+            target_path is None
+            or protected_path(raw, cwd=cwd_str, env=env)
+            or protected_path(str(target_path), cwd=cwd_str, env=env)
+        ):
             return deny(f"cannot edit protected path: {raw}")
 
     # Non-source files (e.g. documentation, logs) are permitted.
@@ -331,13 +412,18 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
         return deny(_CAP_DENY)
 
     # Fast pre-check: if declared lines alone exceed cap, deny immediately.
+    # Write skips this declared-size check (E2).
     tool_name = payload.get("tool_name")
-    declared = _declared_lines(tool_name, tool_input)
-    if declared > TIER2_EDIT_LINE_CAP:
-        return deny(_CAP_DENY)
+    if tool_name != "Write":
+        declared = _declared_lines(tool_name, tool_input)
+        if declared > TIER2_EDIT_LINE_CAP:
+            return deny(_CAP_DENY)
 
     # Tier-2 line accounting must use the real file.
-    target_path = _absolute_path(payload, raw)
+    if target_path is None:
+        return deny(
+            f"source file not found: {raw}. Dispatch changes to `lane impl`"
+        )
     if not _is_git_tracked(target_path):
         return deny(
             f"cannot edit untracked source file: {raw}. Dispatch changes to `lane impl`"
@@ -367,28 +453,35 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
 
 def decide_post(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     """PostToolUse net-diff check. Tier-2 source only; git errors count as zero."""
+    tool_input = _tool_input(payload)
+    raw = _raw_path(tool_input)
+    target_path = _absolute_path(payload, raw) if raw is not None else None
+    presnap, map_path = _resolve_presnap_paths(payload, target_path, env)
+
+    def _cleanup() -> None:
+        _remove(presnap)
+        _remove(map_path)
+
     if override_active("hooks_off", env):
-        _remove(_presnap_path(payload, env))
+        _cleanup()
         return None
     if not is_tier2(payload, env):
         return None
     if override_active("workers", env):
-        _remove(_presnap_path(payload, env))
+        _cleanup()
         return None
-    tool_input = _tool_input(payload)
-    raw = _raw_path(tool_input)
-    presnap = _presnap_path(payload, env)
     if raw is None or not is_source_path(raw):
-        _remove(presnap)
+        _cleanup()
         return None
     if tier_state_corrupt(env):
-        _remove(presnap)
+        _cleanup()
         return None
+
     before = _read_presnap(presnap)
-    after = _git_numstat(_absolute_path(payload, raw))
+    after = _git_numstat(target_path)
     delta = max(0, after - before)
     total = bump_counter("net_diff_lines", agent_key(payload), delta, env)
-    _remove(presnap)
+    _cleanup()
     if total > TIER2_EDIT_LINE_CAP:
         set_flag("edit_cap_exceeded", agent_key(payload), env)
         return block(_POST_BLOCK)

@@ -511,11 +511,11 @@ def test_post_over_cap_says_stop_reading(tmp_path: Path) -> None:
     env = _env(tmp_path)
     key = "session:stop"
     dispatch_guard_common.bump_counter(
-        "read_bytes", key, dispatch_guard_common.SUPERVISOR_READ_CAP, env
+        "read_bytes", key, dispatch_guard_common.SUPERVISOR_READ_CAP + 1, env
     )
     payload = _hook(
-        "Bash",
-        {"command": "echo hi"},
+        "Read",
+        {"file_path": "notes.md"},
         event="PostToolUse",
         session_id="stop",
     )
@@ -588,18 +588,27 @@ def test_tier2_edit_of_15_lines_then_10_is_denied(tmp_path: Path) -> None:
     assert dispatch_edit_guard.decide(edit(15, "tu-15"), env) is None
     result = dispatch_edit_guard.decide(edit(10, "tu-10"), env)
     assert "Tier-2 edit cap" in _reason(result)
-    assert dispatch_guard_common.get_counter("edit_lines", "tier-edit", env) == 15
+    assert dispatch_guard_common.get_counter("edit_lines", "tier-edit", env) == 16
 
 
 def test_tier2_write_of_30_line_python_is_denied(tmp_path: Path) -> None:
     state = tmp_path / "state"
-    work = tmp_path / "work"
-    work.mkdir()
+    repo = tmp_path / "work"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "dispatch-test@example.com")
+    _git(repo, "config", "user.name", "Dispatch Test")
+    _git(repo, "config", "core.autocrlf", "false")
+    target = repo / "big.py"
+    target.write_text("old\n", encoding="utf-8")
+    _git(repo, "add", "big.py")
+    _git(repo, "commit", "-m", "init")
+
     env = _env(state)
     payload = _hook(
         "Write",
-        {"file_path": str(work / "big.py"), "content": _lines(30)},
-        cwd=str(work),
+        {"file_path": str(target), "content": _lines(30)},
+        cwd=str(repo),
         agent_id="writer",
     )
     result = dispatch_edit_guard.decide(payload, env)
@@ -637,7 +646,7 @@ def test_tier2_non_source_edits_are_not_counted(tmp_path: Path) -> None:
         tool_use_id="tu-src",
     )
     assert dispatch_edit_guard.decide(source, env) is None
-    assert dispatch_guard_common.get_counter("edit_lines", "tier-md", env) == 15
+    assert dispatch_guard_common.get_counter("edit_lines", "tier-md", env) == 16
 
 
 def test_post_hook_net_diff_over_20_lines_blocks_and_sets_flag(tmp_path: Path) -> None:
@@ -979,7 +988,7 @@ def test_mv_source_file_is_denied(tmp_path: Path) -> None:
 
 
 def test_sed_inplace_wildcard_source_is_denied(tmp_path: Path) -> None:
-    command = "sed -i s/foo/bar/ src/*"
+    command = "sed -i s/foo/bar/ src/*.py"
     result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
     assert "R3" in _reason(result)
 
@@ -1549,4 +1558,210 @@ def test_round6_dispatch_bash_guard_subprocess(
     body = _stdout_json(proc)
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- round 8 ---------------------------------------------------------------
+
+
+def test_round8_c1_read_of_state_dispatch_override_denied_for_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    override = state / "dispatch_override.json"
+    override.write_bytes(b"x" * (50 * 1024))
+    monkeypatch.setenv("DISPATCH_GUARD_STATE_DIR", str(state))
+    env = _env(state)
+    assert not dispatch_guard_common.is_allowlisted_read(str(override), env=env)
+    payload = _hook("Read", {"file_path": str(override)}, cwd=str(tmp_path))
+    result = dispatch_read_guard.decide(payload, env)
+    assert result is not None
+    assert "40 KB" in _reason(result)
+    proc = _run_hook("dispatch_read_guard.py", json.dumps(payload).encode(), state)
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "40 KB" in body["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_round8_c2_design_override_doc_not_protected(tmp_path: Path) -> None:
+    doc = "design/plans/dispatch_override_design.md"
+    assert not dispatch_guard_common.protected_path(doc)
+    assert dispatch_guard_common.is_allowlisted_read(doc)
+    docs_path = "docs/dispatch_override_design.md"
+    assert not dispatch_guard_common.protected_path(docs_path)
+
+
+def test_round8_c3_relative_settings_write_denied_with_cwd(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    payload = _hook(
+        "Write",
+        {"file_path": ".claude/settings.json", "content": "{}"},
+        cwd=str(repo),
+    )
+    result = dispatch_edit_guard.decide(payload, _env(tmp_path / "state"))
+    assert result is not None
+    assert "protected path" in _reason(result)
+
+
+def test_round8_c4_escaped_path_not_allowlisted(tmp_path: Path) -> None:
+    path = "design/plans/../../.claude/state/override.key"
+    assert not dispatch_guard_common.is_allowlisted_read(path)
+    assert not dispatch_guard_common.is_allowlisted_read(path, cwd=str(tmp_path))
+
+
+def test_round8_c6_counters_with_string_value_denies_fail_closed(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    counters = state / "dispatch_counters.json"
+    counters.write_text(json.dumps({"read_bytes": {"session:sess-c6": "corrupt"}}), encoding="utf-8")
+    payload = _hook("Glob", {"pattern": "*.md"}, session_id="sess-c6")
+    proc = _run_hook("dispatch_read_guard.py", json.dumps(payload).encode(), state)
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = body["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "ValueError" in reason
+    assert "dispatch_read_guard.py" in reason
+
+
+def test_round8_r1_grep_glob_md_without_path_allowed_for_supervisor(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    payload = _hook("Grep", {"pattern": "TODO", "glob": "*.md"}, session_id="sup")
+    assert dispatch_read_guard.decide(payload, _env(state)) is None
+    payload_deny = _hook("Grep", {"pattern": "TODO"}, session_id="sup")
+    res_deny = dispatch_read_guard.decide(payload_deny, _env(state))
+    assert res_deny is not None
+    assert "source reads go to `lane diagnose`" in _reason(res_deny)
+
+
+def test_round8_r2_bash_output_post_accounting_does_not_change_read_budget(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    env = _env(state)
+    key = "session:test-r2"
+    payload = _hook("Bash", {"command": "echo hi"}, event="PostToolUse", session_id="test-r2")
+    payload["tool_response"] = "x" * (dispatch_guard_common.BIG_OUTPUT_WARN + 100)
+    result = dispatch_read_guard.decide_post(payload, env)
+    assert result is not None
+    assert "Large output:" in result["hookSpecificOutput"]["additionalContext"]
+    assert "STOP reading" not in result["hookSpecificOutput"]["additionalContext"]
+    assert dispatch_guard_common.get_counter("read_bytes", key, env) == 0
+
+
+def test_round8_e1_edit_nouser_denied_not_crashed(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    env = _env(state)
+    payload_sup = _hook(
+        "Edit",
+        {"file_path": "~nouser/x.py", "old_string": "a", "new_string": "b"},
+        session_id="sup",
+    )
+    res_sup = dispatch_edit_guard.decide(payload_sup, env)
+    assert res_sup is not None
+    assert res_sup["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    payload_tier2 = _hook(
+        "Edit",
+        {"file_path": "~nouser/x.py", "old_string": "a", "new_string": "b"},
+        agent_id="worker",
+    )
+    res_tier2 = dispatch_edit_guard.decide(payload_tier2, env)
+    assert res_tier2 is not None
+    assert res_tier2["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_round8_e2_write_large_tracked_file_small_diff_allowed_and_edit_diff(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state = tmp_path / "state"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "dispatch-test@example.com")
+    _git(repo, "config", "user.name", "Dispatch Test")
+    _git(repo, "config", "core.autocrlf", "false")
+    f = repo / "big.py"
+    lines = [f"line {i}" for i in range(500)]
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _git(repo, "add", "big.py")
+    _git(repo, "commit", "-m", "init")
+
+    lines_mod = list(lines)
+    lines_mod[0] = "line zero"
+    new_content = "\n".join(lines_mod) + "\n"
+    env = _env(state)
+    payload_write = _hook(
+        "Write",
+        {"file_path": str(f), "content": new_content},
+        cwd=str(repo),
+        agent_id="w-e2",
+    )
+    assert dispatch_edit_guard.decide(payload_write, env) is None
+    assert dispatch_guard_common.get_counter("edit_lines", "w-e2", env) == 2
+    assert dispatch_edit_guard._pair_lines({"old_string": "a\nb\nc\n", "new_string": "a\nx\nc\n"}) == 2
+
+
+def test_round8_b2_python_inline_code_help_still_scanned(tmp_path: Path) -> None:
+    cmd = 'python -c "import subprocess; subprocess.Popen([\'codex\'])" --help'
+    result = dispatch_bash_guard.decide(_bash(cmd), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+
+
+def test_round8_b3_git_config_core_keys(tmp_path: Path) -> None:
+    cmd_allow = "git -c core.quotepath=off status"
+    assert dispatch_bash_guard.decide(_bash(cmd_allow), _env(tmp_path)) is None
+    cmd_deny = "git -c core.pager=x status"
+    res_deny = dispatch_bash_guard.decide(_bash(cmd_deny), _env(tmp_path))
+    assert res_deny is not None
+    assert "execution-bearing" in _reason(res_deny)
+
+
+def test_round8_b4_piped_rg_allowed(tmp_path: Path) -> None:
+    command = "python -m pytest -q 2>&1 | rg FAILED"
+    assert dispatch_bash_guard.decide(_bash(command), _env(tmp_path)) is None
+
+
+def test_round8_b5_git_restore_staged_allowed(tmp_path: Path) -> None:
+    assert dispatch_bash_guard.decide(_bash("git restore --staged src/a.py"), _env(tmp_path)) is None
+    assert dispatch_bash_guard.decide(_bash("git restore -S src/a.py"), _env(tmp_path)) is None
+    res_wt = dispatch_bash_guard.decide(_bash("git restore src/a.py"), _env(tmp_path))
+    assert res_wt is not None
+    assert "R3" in _reason(res_wt)
+
+
+def test_round8_b6_pytest_config_switch_allowed(tmp_path: Path) -> None:
+    command = "python -m pytest -c pytest.ini"
+    assert dispatch_bash_guard.decide(_bash(command), _env(tmp_path)) is None
+
+
+def test_round8_b7_git_redirects(tmp_path: Path) -> None:
+    cmd_deny = "git diff > .claude/settings.json"
+    res_deny = dispatch_bash_guard.decide(_bash(cmd_deny), _env(tmp_path))
+    assert res_deny is not None
+    assert "R3" in _reason(res_deny)
+    cmd_allow = "git show > notes.md"
+    assert dispatch_bash_guard.decide(_bash(cmd_allow), _env(tmp_path)) is None
+
+
+def test_round8_b8_cd_claude_settings_denied(tmp_path: Path) -> None:
+    command = "cd /repo/.claude && echo {} > settings.json"
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+    assert "R3" in _reason(result)
+
+
+def test_round8_b9_heredoc_with_commands_in_body_allowed(tmp_path: Path) -> None:
+    command = "cat << EOF > notes.md\ngit push\npython x.py\ncodex exec hi\nEOF"
+    assert dispatch_bash_guard.decide(_bash(command), _env(tmp_path)) is None
+
+
+def test_round8_b10_clobber_redirect_to_settings_denied(tmp_path: Path) -> None:
+    command = "echo x >| .claude/settings.json"
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+    assert "R3" in _reason(result)
+
+
+def test_round8_b11_non_source_wildcards_allowed(tmp_path: Path) -> None:
+    assert dispatch_bash_guard.decide(_bash("mv docs/* archive/"), _env(tmp_path)) is None
+    assert dispatch_bash_guard.decide(_bash("rm build/*"), _env(tmp_path)) is None
+
 
