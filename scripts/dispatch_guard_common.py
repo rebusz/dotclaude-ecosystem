@@ -31,11 +31,12 @@ BIG_OUTPUT_WARN = 30 * 1024
 STATE_ENV = "DISPATCH_GUARD_STATE_DIR"
 OVERRIDE_FILE = "dispatch_override.json"
 KEY_FILE_ENV = "DISPATCH_GUARD_KEY_FILE"
+ALLOW_PLAIN_KEY_ENV = "DISPATCH_GUARD_ALLOW_PLAIN_KEY_FILE"
 
-_TEST_KEY_ENV = "DISPATCH_GUARD_TEST_KEY"
 _TIER_ENV = "DISPATCH_GUARD_TIER"
 _COUNTERS_FILE = "dispatch_counters.json"
 _TIER2_FILE = "tier2_sessions.json"
+_TIER2_PENDING_DIR = "tier2_pending"
 _FLAGS_DIR = "dispatch_flags"
 _LANE_QUEUE_DIR = "lane_queue"
 _LOCK_STALE_S = 30.0
@@ -78,6 +79,12 @@ GUARDED_PATH_PATTERNS.append(
         r"dispatch_guard_common|dispatch_tier_marker)\.py",
         re.IGNORECASE,
     )
+)
+
+_ENFORCEMENT_SCRIPT_RE = re.compile(
+    r"^(dispatch_.*guard.*|claude_worker_guard|lane_authorize|"
+    r"dispatch_guard_common|dispatch_tier_marker)\.py$",
+    re.IGNORECASE,
 )
 
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -133,7 +140,10 @@ def run_guarded(
             "Operator emergency-off: python scripts/lane_authorize.py "
             "--interactive --scope hooks_off"
         )
-        result = block(reason) if event == "PostToolUse" else deny(reason, event)
+        if event in ("PostToolUse", "UserPromptSubmit"):
+            result = block(reason)
+        else:
+            result = deny(reason, event)
     if result is not None:
         hook_stdio.force_utf8_stdio()
         print(json.dumps(result), flush=True)
@@ -145,15 +155,32 @@ def agent_key(payload: dict) -> str:
         return str(agent_id)
     return "session:" + str(payload.get("session_id") or "")
 
-def _tier2_ids(env: Mapping[str, str] | None) -> set[str]:
+def _read_tier2_sessions(env: Mapping[str, str] | None) -> tuple[set[str], bool]:
     path = state_dir(env) / _TIER2_FILE
+    if not path.exists():
+        return set(), False
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
-        return set()
+        return set(), True
     if not isinstance(raw, list):
-        return set()
-    return {item for item in raw if isinstance(item, str) and item}
+        return set(), True
+    return {item for item in raw if isinstance(item, str) and item}, False
+
+def _tier2_ids(env: Mapping[str, str] | None) -> set[str]:
+    ids, _corrupt = _read_tier2_sessions(env)
+    return ids
+
+def _has_tier2_pending(session_id: str, env: Mapping[str, str] | None) -> bool:
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if "/" in session_id or "\\" in session_id or session_id in (".", ".."):
+        return False
+    try:
+        path = state_dir(env) / _TIER2_PENDING_DIR / session_id
+        return path.is_file()
+    except OSError:
+        return False
 
 def is_tier2(payload: dict, env: Mapping[str, str] | None = None) -> bool:
     forced = _env(env).get(_TIER_ENV)
@@ -164,9 +191,16 @@ def is_tier2(payload: dict, env: Mapping[str, str] | None = None) -> bool:
     if forced == "tier2":
         return True
     session_id = payload.get("session_id")
+    ids, corrupt = _read_tier2_sessions(env)
+    if corrupt:
+        return True
     if not isinstance(session_id, str) or not session_id:
         return False
-    return session_id in _tier2_ids(env)
+    if session_id in ids:
+        return True
+    if _has_tier2_pending(session_id, env):
+        return True
+    return False
 
 def mark_tier2_session(session_id: str, env: Mapping[str, str] | None = None) -> None:
     if not isinstance(session_id, str) or not session_id:
@@ -175,7 +209,7 @@ def mark_tier2_session(session_id: str, env: Mapping[str, str] | None = None) ->
     lock = _lock_for(path)
     fd, token = _acquire_lock(lock)
     try:
-        ids = _tier2_ids(env)
+        ids, _corrupt = _read_tier2_sessions(env)
         ids.add(session_id)
         body = json.dumps(sorted(ids), ensure_ascii=False).encode("utf-8") + b"\n"
         _atomic_replace(path, body)
@@ -193,6 +227,93 @@ def is_allowlisted_read(p: str) -> bool:
     if any(marker in normal for marker in _ALLOW_DIR_MARKERS):
         return True
     return Path(normal).suffix in _ALLOW_SUFFIXES
+
+def protected_path(
+    p: str,
+    cwd: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    if not isinstance(p, str) or not p.strip():
+        return False
+    cleaned_p = p.strip().strip("'\"")
+    if not cleaned_p:
+        return False
+
+    raw_norm = norm_path(cleaned_p)
+    raw_norm_lower = raw_norm.lower()
+
+    for pat in GUARDED_PATH_PATTERNS:
+        if pat.search(raw_norm):
+            return True
+
+    expanded = os.path.expanduser(os.path.expandvars(cleaned_p))
+    path_obj = Path(expanded)
+    if not path_obj.is_absolute() and cwd is not None:
+        expanded_cwd = os.path.expanduser(os.path.expandvars(str(cwd).strip().strip("'\"")))
+        if expanded_cwd:
+            path_obj = Path(expanded_cwd) / path_obj
+
+    try:
+        resolved = path_obj.resolve()
+    except Exception:
+        resolved = path_obj
+
+    norm = str(resolved).replace("\\", "/")
+    norm_lower = norm.lower()
+
+    for pat in GUARDED_PATH_PATTERNS:
+        if pat.search(norm):
+            return True
+
+    if _ENFORCEMENT_SCRIPT_RE.match(resolved.name) or _ENFORCEMENT_SCRIPT_RE.match(Path(cleaned_p).name):
+        return True
+
+    s_dir = state_dir(env).resolve()
+    s_dir_norm = str(s_dir).replace("\\", "/").rstrip("/").lower()
+    try:
+        resolved.relative_to(s_dir)
+        return True
+    except (ValueError, RuntimeError):
+        pass
+    if norm_lower == s_dir_norm or norm_lower.startswith(s_dir_norm + "/"):
+        return True
+
+    try:
+        k_file = _key_file(env).resolve()
+        k_file_norm = str(k_file).replace("\\", "/").lower()
+        if resolved == k_file or norm_lower == k_file_norm:
+            return True
+    except Exception:
+        pass
+
+    if (
+        (resolved.parent.name.lower() == ".claude" and re.match(r"^settings.*\.json$", resolved.name, re.IGNORECASE))
+        or re.search(r"(^|/)\.claude/settings[^/]*\.json$", norm_lower)
+        or re.search(r"(^|/)\.claude/settings[^/]*\.json$", raw_norm_lower)
+    ):
+        return True
+
+    home_state = (Path.home() / ".claude" / "state").resolve()
+    home_hooks = (Path.home() / ".claude" / "hooks").resolve()
+    if resolved == home_state or resolved == home_hooks:
+        return True
+
+    if (
+        resolved.name.lower() in ("hooks", "state")
+        and resolved.parent.name.lower() == ".claude"
+    ):
+        return True
+
+    if (
+        norm_lower.rstrip("/").endswith("/.claude/hooks")
+        or norm_lower.rstrip("/").endswith("/.claude/state")
+        or raw_norm_lower.rstrip("/").endswith("/.claude/hooks")
+        or raw_norm_lower.rstrip("/").endswith("/.claude/state")
+        or raw_norm_lower.rstrip("/") in (".claude/hooks", ".claude/state")
+    ):
+        return True
+
+    return False
 
 class _DATA_BLOB(ctypes.Structure):
     _fields_ = (
@@ -269,9 +390,26 @@ def load_or_create_key(
     create: bool = False, env: Mapping[str, str] | None = None,
 ) -> bytes | None:
     mapping = _env(env)
-    test_key = mapping.get(_TEST_KEY_ENV, "").strip()
-    if test_key:
-        return bytes.fromhex(test_key)
+    allow_plain = mapping.get(ALLOW_PLAIN_KEY_ENV) == "1"
+    key_file_val = mapping.get(KEY_FILE_ENV, "").strip()
+    if allow_plain and key_file_val:
+        path = Path(key_file_val)
+        if path.is_file():
+            return path.read_bytes()
+        if not create:
+            return None
+        key = secrets.token_bytes(32)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0))
+        except FileExistsError:
+            return path.read_bytes()
+        try:
+            os.write(fd, key)
+        finally:
+            os.close(fd)
+        return key
+
     path = _key_file(env)
     if path.is_file():
         return dpapi_unprotect(path.read_bytes())
@@ -459,6 +597,39 @@ def bump_counter(
         payload = json.dumps(data, separators=(",", ":")).encode("utf-8") + b"\n"
         _atomic_replace(path, payload)
         return total
+    finally:
+        _release_lock(fd, lock, token)
+
+def reserve_bytes(
+    name: str,
+    key: str,
+    delta: int,
+    cap: int,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    if isinstance(delta, bool) or not isinstance(delta, int):
+        raise TypeError("delta must be an int")
+    if isinstance(cap, bool) or not isinstance(cap, int):
+        raise TypeError("cap must be an int")
+    path = state_dir(env) / _COUNTERS_FILE
+    lock = _lock_for(path)
+    fd, token = _acquire_lock(lock)
+    try:
+        data = _read_object(path)
+        bucket = data.get(name)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        current = bucket.get(key, 0)
+        if type(current) is not int:
+            current = 0
+        if current + delta > cap:
+            return False
+        total = current + delta
+        bucket[key] = total
+        data[name] = bucket
+        payload = json.dumps(data, separators=(",", ":")).encode("utf-8") + b"\n"
+        _atomic_replace(path, payload)
+        return True
     finally:
         _release_lock(fd, lock, token)
 

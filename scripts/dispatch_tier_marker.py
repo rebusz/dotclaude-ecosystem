@@ -6,6 +6,7 @@ The first prompt carries the coordinator line. When the normalised prompt
 contains "tier-2 coordinator", the session id is recorded so later hooks treat
 that session as Tier-2. This hook never denies: it only adds a marker. A bad
 payload or a write failure is logged to stderr and the process exits 0.
+If marking fails, a fallback marker is written under tier2_pending/<session_id>.
 Importing this module creates no files.
 """
 
@@ -14,19 +15,26 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
-from dispatch_guard_common import mark_tier2_session, read_payload, run_guarded
+from dispatch_guard_common import (
+    mark_tier2_session,
+    read_payload,
+    run_guarded,
+    state_dir,
+)
 
 HOOK_FILE = "dispatch_tier_marker.py"
 _TIER2_MARK = re.compile(r"tier-2 coordinator", re.IGNORECASE)
 _WHITESPACE = re.compile(r"\s+")
+_TIER2_PENDING_DIR = "tier2_pending"
 
 
 def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     """Mark session_id when the normalised prompt contains the coordinator line.
 
     Normalisation collapses whitespace and matches case-insensitively. Always
-    returns None. Marker failures are logged to stderr.
+    returns None. Marker failures are logged to stderr and recorded as a fallback.
     """
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
@@ -41,7 +49,8 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     try:
         mark_tier2_session(session_id, env)
     except Exception as exc:
-        _log(exc)
+        _warn(f"warning: failed to mark tier-2 session {session_id}: {type(exc).__name__}: {exc}")
+        _write_fallback_marker(session_id, env)
     return None
 
 
@@ -58,8 +67,29 @@ def main() -> int:
     return run_guarded(HOOK_FILE, _from_stdin, "UserPromptSubmit")
 
 
+def _write_fallback_marker(
+    session_id: str, env: Mapping[str, str] | None = None,
+) -> None:
+    """Write fallback marker file in state_dir()/tier2_pending/<session_id>."""
+    if "/" in session_id or "\\" in session_id or session_id in (".", ".."):
+        _warn(f"warning: cannot write fallback marker for invalid session_id: {session_id!r}")
+        return
+    try:
+        pending_dir = state_dir(env) / _TIER2_PENDING_DIR
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        marker_file = pending_dir / session_id
+        marker_file.write_text("1\n", encoding="utf-8")
+    except Exception as exc:
+        _warn(f"warning: failed to write fallback marker for {session_id}: {type(exc).__name__}: {exc}")
+
+
+def _warn(msg: str) -> None:
+    single_line = " ".join(msg.splitlines()).strip()
+    print(f"{HOOK_FILE}: {single_line}", file=sys.stderr, flush=True)
+
+
 def _log(exc: BaseException) -> None:
-    print(f"{HOOK_FILE}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+    _warn(f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":

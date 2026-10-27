@@ -3,11 +3,15 @@
 
 PreToolUse covers Read, Grep, and Glob. The supervisor may not read or grep
 source files outside the allow-list, and a single Read over 40 KB without a
-limit is denied unless that path is allow-listed. Bytes are estimated on Read
-and charged against 150 KB (supervisor) or 400 KB (Tier-2).
+limit is denied unless that path is allow-listed. Bytes are measured for
+the selected slice (cap 2 MB, binary-safe) and charged against 150 KB
+(supervisor) or 400 KB (Tier-2) atomically.
+
+Supervisor Grep denies directory paths unless allowlisted or restricted to
+non-source extensions, and denies Grep with no path (cwd search).
 
 PostToolUse (``--post``) covers Read, Grep, Glob, Bash, and PowerShell. Real
-output size is added for every tool except Read (Read was estimated in Pre).
+output size is added for every tool except Read (Read was charged in Pre).
 A response over 30 KB, or a counter that passes the cap, adds context and
 does not block.
 
@@ -38,8 +42,10 @@ from dispatch_guard_common import (
     is_allowlisted_read,
     is_source_path,
     is_tier2,
+    norm_path,
     override_active,
     read_payload,
+    reserve_bytes,
     run_guarded,
 )
 
@@ -53,10 +59,32 @@ _LARGE_OUTPUT = (
     "send heavy reading to `lane diagnose`"
 )
 _STOP_READING = "STOP reading: send this to `lane diagnose`"
-_GREP_SOURCE_TYPES = frozenset({"py", "js", "ts", "tsx"})
+_GREP_SOURCE_TYPES = frozenset({
+    "py",
+    "python",
+    "js",
+    "javascript",
+    "ts",
+    "typescript",
+    "tsx",
+    "jsx",
+    "mjs",
+    "cjs",
+})
+_ALLOW_DIR_NAMES = frozenset({
+    "design",
+    "handoffs",
+    "memory",
+    "receipts",
+    "verdicts",
+    "lane_receipts",
+    "lane_queue",
+    "scratchpad",
+    "state",
+})
 _ACCOUNT_TOOLS = frozenset({"Grep", "Glob", "Bash", "PowerShell"})
 _POST_TOOLS = _ACCOUNT_TOOLS | {"Read"}
-_BYTES_PER_LINE = 120
+_SLICE_CAP = 2 * 1024 * 1024
 
 
 def _tool_input(payload: dict) -> dict:
@@ -83,23 +111,73 @@ def _limit(tool_input: dict) -> int | None:
     return None
 
 
-def _file_size(payload: dict, path: str) -> int:
-    """Byte size of path. Missing, unreadable, or empty paths count as zero."""
+def _offset(tool_input: dict) -> int | None:
+    """Read offset when it is a non-negative int. Absent or invalid means none."""
+    raw = tool_input.get("offset")
+    if type(raw) is int and raw >= 0:
+        return raw
+    return None
+
+
+def _resolve_path(payload: dict, path: str) -> Path | None:
     if not path:
-        return 0
+        return None
     try:
         candidate = Path(os.path.expandvars(path)).expanduser()
         if not candidate.is_absolute():
             cwd = payload.get("cwd")
             base = Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
             candidate = base / candidate
+        return candidate
+    except Exception:
+        return None
+
+
+def _file_size(payload: dict, path: str) -> int:
+    """Byte size of path. Missing, unreadable, or empty paths count as zero."""
+    candidate = _resolve_path(payload, path)
+    if candidate is None:
+        return 0
+    try:
         return candidate.stat().st_size
     except OSError:
         return 0
 
 
-def _allowlisted(path: str) -> bool:
-    return bool(path) and is_allowlisted_read(path)
+def _is_allowlisted_path_or_dir(payload: dict, path: str) -> bool:
+    if not path:
+        return False
+    if is_allowlisted_read(path):
+        return True
+    candidate = _resolve_path(payload, path)
+    if candidate is not None:
+        cand_str = str(candidate).replace("\\", "/")
+        if is_allowlisted_read(cand_str) or is_allowlisted_read(cand_str + "/"):
+            return True
+    normal = norm_path(path).strip("/").lower()
+    parts = normal.split("/")
+    if any(part in _ALLOW_DIR_NAMES for part in parts):
+        return True
+    return False
+
+
+def _is_directory(payload: dict, path: str) -> bool:
+    if not path:
+        return False
+    clean = path.strip()
+    if clean in (".", "..") or clean.endswith(("/", "\\")):
+        return True
+    candidate = _resolve_path(payload, clean)
+    if candidate is not None:
+        try:
+            if candidate.is_dir():
+                return True
+            if candidate.is_file():
+                return False
+        except OSError:
+            pass
+    suffix = Path(clean).suffix
+    return not suffix
 
 
 def _glob_targets_source(pattern: str) -> bool:
@@ -118,18 +196,108 @@ def _grep_targets_source(tool_input: dict) -> bool:
     return bool(path) and is_source_path(path)
 
 
+def _type_restricts_to_non_source(type_val: str) -> bool:
+    if not type_val:
+        return False
+    clean = type_val.strip().lower().lstrip(".")
+    if not clean or clean in ("all", "default"):
+        return False
+    if clean in _GREP_SOURCE_TYPES:
+        return False
+    if ("." + clean) in SOURCE_EXTS:
+        return False
+    return True
+
+
+def _glob_restricts_to_non_source(glob_val: str) -> bool:
+    if not glob_val:
+        return False
+    cleaned = glob_val.strip().lower()
+    if not cleaned:
+        return False
+    if any(cleaned.endswith(ext) for ext in SOURCE_EXTS):
+        return False
+    if "{" in cleaned and "}" in cleaned:
+        inside = cleaned[cleaned.find("{") + 1 : cleaned.find("}")]
+        pieces = [p.strip().lstrip(".") for p in inside.split(",") if p.strip()]
+        if pieces and all(
+            ("." + p) not in SOURCE_EXTS and p not in _GREP_SOURCE_TYPES
+            for p in pieces
+        ):
+            return True
+        return False
+    suffix = Path(cleaned).suffix
+    if suffix and not any(c in suffix for c in ("*", "?", "[", "]")):
+        if suffix not in SOURCE_EXTS:
+            return True
+    return False
+
+
+def _restricts_to_non_source(tool_input: dict) -> bool:
+    if _grep_targets_source(tool_input):
+        return False
+    type_val = _text(tool_input, "type")
+    if _type_restricts_to_non_source(type_val):
+        return True
+    glob_val = _text(tool_input, "glob")
+    if _glob_restricts_to_non_source(glob_val):
+        return True
+    return False
+
+
 def _charge(
     key: str,
-    estimate: int,
+    delta: int,
     cap: int,
     env: Mapping[str, str] | None,
 ) -> dict | None:
-    """Deny when estimate would pass the cap. Otherwise record the estimate."""
-    if get_counter(_COUNTER, key, env) + estimate > cap:
+    """Reserve delta bytes atomically. Deny when budget would be exceeded."""
+    if not reserve_bytes(_COUNTER, key, delta, cap, env):
         return deny(_BUDGET_DENY)
-    if estimate:
-        bump_counter(_COUNTER, key, estimate, env)
     return None
+
+
+def _read_slice_size(
+    payload: dict,
+    path: str,
+    offset: int | None,
+    limit: int | None,
+    size: int,
+) -> int:
+    """Read the requested slice in binary mode, capped at 2 MB."""
+    if not path or size <= 0:
+        return 0
+    candidate = _resolve_path(payload, path)
+    if candidate is None:
+        return 0
+    lines_to_skip = max(0, offset - 1) if offset is not None else 0
+    if lines_to_skip == 0 and limit is None:
+        return min(size, _SLICE_CAP)
+    if limit == 0:
+        return 0
+    try:
+        with open(candidate, "rb") as f:
+            while lines_to_skip > 0:
+                line = f.readline()
+                if not line:
+                    return 0
+                if line.endswith(b"\n"):
+                    lines_to_skip -= 1
+            if limit is None:
+                content = f.read(_SLICE_CAP)
+                return min(len(content), _SLICE_CAP)
+            accumulated = 0
+            lines_read = 0
+            while lines_read < limit and accumulated < _SLICE_CAP:
+                chunk = f.readline(_SLICE_CAP - accumulated)
+                if not chunk:
+                    break
+                accumulated += len(chunk)
+                if chunk.endswith(b"\n"):
+                    lines_read += 1
+            return min(accumulated, _SLICE_CAP)
+    except OSError:
+        return 0
 
 
 def _decide_read(
@@ -140,18 +308,16 @@ def _decide_read(
     env: Mapping[str, str] | None,
 ) -> dict | None:
     path = _text(tool_input, "file_path")
-    allow = _allowlisted(path)
+    allow = _is_allowlisted_path_or_dir(payload, path)
     if not is_tier2(payload, env) and path and is_source_path(path) and not allow:
         return deny(_SOURCE_DENY)
     size = _file_size(payload, path)
     limit = _limit(tool_input)
     if limit is None and size > SINGLE_READ_CAP and not allow:
         return deny(_SINGLE_DENY)
-    if limit is None:
-        estimate = size
-    else:
-        estimate = min(size, limit * _BYTES_PER_LINE)
-    return _charge(key, estimate, cap, env)
+    offset = _offset(tool_input)
+    slice_size = _read_slice_size(payload, path, offset, limit, size)
+    return _charge(key, slice_size, cap, env)
 
 
 def _decide_grep(
@@ -161,10 +327,16 @@ def _decide_grep(
     cap: int,
     env: Mapping[str, str] | None,
 ) -> dict | None:
-    path = _text(tool_input, "path")
     supervisor = not is_tier2(payload, env)
-    if supervisor and _grep_targets_source(tool_input) and not _allowlisted(path):
-        return deny(_SOURCE_DENY)
+    path = _text(tool_input, "path").strip()
+    if supervisor:
+        if not path:
+            return deny(_SOURCE_DENY)
+        allow = _is_allowlisted_path_or_dir(payload, path)
+        if _grep_targets_source(tool_input) and not allow:
+            return deny(_SOURCE_DENY)
+        if _is_directory(payload, path) and not allow and not _restricts_to_non_source(tool_input):
+            return deny(_SOURCE_DENY)
     return _charge(key, 0, cap, env)
 
 

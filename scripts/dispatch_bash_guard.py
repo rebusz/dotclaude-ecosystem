@@ -4,15 +4,25 @@
 Models are reachable only through ``python D:/APPS/_shared/dispatch/dispatch.py``.
 Direct launches of codex, glm, kimi, cursor-agent, agy, opencode, claude -p/--print,
 and the CDP/audit scripts are denied. Bash and PowerShell may not write guarded
-paths or source files. decide() is pure. main() prints one JSON object or nothing.
+paths or source files. The supervisor may not read source files or non-allowlisted
+source directories with shell utilities. Nested shells are unwrapped up to
+recursion depth 4.
 
+Honest boundary note: hooks stop accidental and rationalised bypass; they are
+not a security boundary against an agent that deliberately uses the operator OS
+credentials. Python inline/heredoc mutation checks provide a heuristic speed
+bump, not an airtight sandbox.
+
+decide() is pure. main() prints one JSON object or nothing.
 Importing this module creates no files.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -20,11 +30,15 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dispatch_guard_common import (  # noqa: E402 - sibling import, same pattern as other hooks
     GUARDED_PATH_PATTERNS,
+    SOURCE_EXTS,
     deny,
+    is_allowlisted_read,
     is_source_path,
+    is_tier2,
     lane_repair_job_exists,
     norm_path,
     override_active,
+    protected_path,
     read_payload,
     run_guarded,
 )
@@ -43,7 +57,9 @@ _INTROSPECTION = frozenset({
     "--help", "-h", "--version", "--probe", "--probe-models",
     "--check-slots", "--check-args", "--list-models",
 })
-_DEST_CMDS = frozenset({"cp", "mv", "copy", "move", "copy-item", "move-item"})
+_DEST_CMDS = frozenset({
+    "cp", "mv", "copy", "move", "copy-item", "move-item", "ren", "rename",
+})
 _WRITE_CMDS = frozenset({
     "tee", "rm", "del", "remove-item", "ni", "new-item",
     "set-content", "out-file", "add-content",
@@ -61,11 +77,41 @@ _VALUE_OPTS = _PATH_OPTS | _DEST_OPTS | frozenset({
 })
 _STRIP_EXT = (".exe", ".cmd", ".ps1", ".bat", ".js")
 _SCRIPT_RE = re.compile(
-    r"^(?:cdp_.*\.py|auditgpt\.py|coderpx\.py|perplexity_audit\.py)$",
+    r"^(?:cdp_.*(?:\.py)?|auditgpt(?:\.py)?|coderpx(?:\.py)?|perplexity_audit(?:\.py)?)$",
     re.IGNORECASE,
 )
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _REDIR_RE = re.compile(r"(\d*)(>>|>)")
+
+_MAX_RECURSION_DEPTH = 4
+_INTERPRETERS = frozenset({
+    "python", "python3", "py", "pythonw",
+    "bash", "sh", "zsh", "pwsh", "powershell",
+    "node", "perl", "ruby",
+})
+_READ_CMDS = frozenset({
+    "cat", "head", "tail", "type", "more", "less",
+    "get-content", "gc", "awk", "rg", "grep",
+    "select-string", "findstr",
+})
+_PYTHON_VALUE_OPTS = frozenset({"-w", "-x", "--check-hash-based-pycs"})
+_PY_EXEC_RE = re.compile(r"\b(?:subprocess|os\.system|Popen|spawn)\b")
+_PY_LAUNCHER_RE = re.compile(
+    r"\b(?:codex|glm|kimi|cursor-agent|cursor_agent|agy|opencode|cdp_[A-Za-z0-9_]*)\b",
+    re.IGNORECASE,
+)
+_PY_WRITE_RE = re.compile(
+    r"\b(?:write_text|write_bytes|shutil\.copy\w*|shutil\.move|os\.replace|os\.rename)\b|"
+    r"\bopen\s*\([^)]*['\"][wax\+]",
+    re.IGNORECASE,
+)
+_PY_SPECIAL_STRINGS_RE = re.compile(
+    r"\b(?:dispatch_guard_common|lane_authorize|write_override|load_or_create_key)\b"
+)
+_SOURCE_EXT_STR_RE = re.compile(
+    r"['\"][^'\"]*?\.(?:py|ts|tsx|js|jsx|mjs|cjs)['\"]",
+    re.IGNORECASE,
+)
 
 
 class _Cmd(NamedTuple):
@@ -73,14 +119,15 @@ class _Cmd(NamedTuple):
     args: list[str]
     words: list[str]
     redirs: list[str]
+    input_redirs: list[str] = []
 
 
 def split_statements(command: str) -> list[str]:
     """Split a Bash or PowerShell command into statements.
 
-    Heredoc bodies (``<<EOF``, ``<<'EOF'``, ``<<-EOF``) and PowerShell
-    here-strings (``@'...'@``, ``@"..."@``) are removed first. Separators are
-    newlines, ``;``, ``&&``, ``||``, ``|``, and a lone ``&``. A separator
+    Non-interpreter heredoc bodies and PowerShell here-string bodies are
+    removed first. Interpreter heredoc bodies are preserved intact. Separators
+    are newlines, ``;``, ``&&``, ``||``, ``|``, and a lone ``&``. A separator
     inside single or double quotes does not split. ``2>&1`` is not a separator.
     """
     text = _strip_bodies(command)
@@ -93,7 +140,7 @@ def split_statements(command: str) -> list[str]:
     escaped = False
 
     def flush() -> None:
-        piece = "".join(buf).strip()
+        piece = "".join(buf).replace("\x00", "\n").strip()
         buf.clear()
         if piece:
             parts.append(piece)
@@ -159,6 +206,11 @@ def split_statements(command: str) -> list[str]:
                 buf.append(ch)
                 i += 1
                 continue
+            # If buf is empty (or whitespace only), & is a leading operator (e.g. PowerShell call operator)
+            if not "".join(buf).strip():
+                buf.append(ch)
+                i += 1
+                continue
             flush()
             i += 1
             continue
@@ -190,10 +242,22 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     command = tool_input.get("command")
     if not isinstance(command, str) or not command.strip():
         return None
+
+    raw_cwd = payload.get("cwd")
+    effective_cwd = str(raw_cwd) if raw_cwd else os.getcwd()
+    tier2 = is_tier2(payload, env)
+
     for statement in split_statements(command):
-        reason = _statement_reason(statement, env)
+        reason = _statement_reason(
+            statement=statement,
+            env=env,
+            depth=0,
+            effective_cwd=effective_cwd,
+            is_tier2_caller=tier2,
+        )
         if reason is not None:
             return deny(reason)
+        effective_cwd = _update_cwd(effective_cwd, statement)
     return None
 
 
@@ -206,20 +270,369 @@ def main() -> int:
     return run_guarded(_HOOK_FILE, _from_stdin)
 
 
-def _statement_reason(statement: str, env: Mapping[str, str] | None) -> str | None:
+def _statement_reason(
+    statement: str,
+    env: Mapping[str, str] | None,
+    depth: int = 0,
+    effective_cwd: str = "",
+    is_tier2_caller: bool = False,
+) -> str | None:
+    if depth >= _MAX_RECURSION_DEPTH:
+        return _depth_exceeded_reason(statement)
+
     parsed = _parse(statement)
+
+    # 1. Check outer statement redirections
+    for path in parsed.redirs:
+        kind = _write_kind(path, effective_cwd, env)
+        if kind is not None:
+            return _mutate_reason(statement, kind)
+
+    # 2. Check wrapper unwrapping
+    err_reason, inner_cmd = _unwrap_statement(statement, parsed)
+    if err_reason is not None:
+        return err_reason
+    if inner_cmd is not None:
+        inner_stmts = split_statements(inner_cmd)
+        inner_cwd = effective_cwd
+        for inner_stmt in inner_stmts:
+            inner_reason = _statement_reason(
+                statement=inner_stmt,
+                env=env,
+                depth=depth + 1,
+                effective_cwd=inner_cwd,
+                is_tier2_caller=is_tier2_caller,
+            )
+            if inner_reason is not None:
+                return inner_reason
+            inner_cwd = _update_cwd(inner_cwd, inner_stmt)
+        return None
+
+    # 3. Python inline code / script inspection
+    if parsed.program in _PYTHON:
+        py_reason = _python_check(statement, parsed, effective_cwd, env)
+        if py_reason is not None:
+            return py_reason
+
+    # 4. Git execution-bearing config check
+    if parsed.program == "git":
+        git_reason = _git_check(statement, parsed)
+        if git_reason is not None:
+            return git_reason
+        return None
+
+    # 5. Direct launch check
     if not _is_router(parsed) and _is_direct(parsed) and not _introspects(parsed):
         job_id = _repair_job(parsed.args)
         if job_id is None:
             return _launch_reason(statement)
         if not lane_repair_job_exists(job_id, env):
             return _unknown_job_reason(statement, job_id)
-    if parsed.program == "git":
-        return None
-    for path in _write_paths(parsed):
-        kind = _write_kind(path)
+
+    # 6. Supervisor read rule
+    if not is_tier2_caller and _is_read_cmd(parsed):
+        read_reason = _supervisor_read_check(statement, parsed, effective_cwd)
+        if read_reason is not None:
+            return read_reason
+
+    # 7. Mutation checks for other commands (cp, mv, sed, tee, rm, set-content, etc.)
+    for path in _write_paths(parsed, effective_cwd):
+        kind = _write_kind(path, effective_cwd, env)
         if kind is not None:
             return _mutate_reason(statement, kind)
+
+    return None
+
+
+def _unwrap_statement(statement: str, parsed: _Cmd) -> tuple[str | None, str | None]:
+    """Return (error_reason, inner_command_text) if statement is an unwrappable wrapper."""
+    words = parsed.words
+    if not words:
+        return None, None
+
+    first_non_assign = 0
+    while first_non_assign < len(words) and _ASSIGN_RE.match(words[first_non_assign]):
+        first_non_assign += 1
+    if first_non_assign >= len(words):
+        return None, None
+
+    head_word = words[first_non_assign]
+    if head_word == "&":
+        if first_non_assign + 1 < len(words):
+            inner = " ".join(words[first_non_assign + 1:])
+            return None, inner
+        return None, None
+
+    head_low = _normalize_exe(head_word)
+
+    # Start-Process
+    if head_low == "start-process":
+        exe, arg_list = _start_process_info(words, first_non_assign + 1)
+        if exe:
+            inner = f"{exe} {arg_list}".strip()
+            return None, inner
+        return None, None
+
+    # cmd / cmd.exe
+    if head_low == "cmd":
+        idx = -1
+        for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
+            if w.lower() in {"/c", "-c"}:
+                idx = i
+                break
+        if idx >= 0 and idx + 1 < len(words):
+            inner = " ".join(words[idx + 1:])
+            if inner.strip():
+                return None, inner
+        return None, None
+
+    # bash, sh, zsh
+    if head_low in {"bash", "sh", "zsh"}:
+        idx = -1
+        for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
+            if w == "-c":
+                idx = i
+                break
+            if w.startswith("-c") and len(w) > 2:
+                return None, w[2:]
+        if idx >= 0 and idx + 1 < len(words):
+            return None, words[idx + 1]
+        return None, None
+
+    # powershell, pwsh
+    if head_low in {"powershell", "pwsh"}:
+        for w in words[first_non_assign + 1:]:
+            w_low = w.lower()
+            if w_low == "-encodedcommand" or w_low.startswith("-enc"):
+                return _encoded_ps_reason(statement), None
+        idx = -1
+        for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
+            w_low = w.lower()
+            if w_low in {"-c", "-command", "/c", "/command", "--command"}:
+                idx = i
+                break
+            if w_low.startswith("-c:") or w_low.startswith("-command:"):
+                return None, w.split(":", 1)[1]
+        if idx >= 0 and idx + 1 < len(words):
+            inner = " ".join(words[idx + 1:])
+            return None, inner
+        return None, None
+
+    # Invoke-Expression / iex
+    if head_low in {"invoke-expression", "iex"}:
+        args = words[first_non_assign + 1:]
+        if args:
+            for i, a in enumerate(args):
+                if a.lower() in {"-command", "-c"} and i + 1 < len(args):
+                    return None, " ".join(args[i + 1:])
+            return None, " ".join(args)
+        return None, None
+
+    # env
+    if head_low == "env":
+        args = words[first_non_assign + 1:]
+        for i, a in enumerate(args):
+            if a in {"-S", "--split-string"} and i + 1 < len(args):
+                return None, " ".join(args[i + 1:])
+        rem = _skip_wrapper(words, first_non_assign + 1, "env")
+        if rem < len(words):
+            return None, " ".join(words[rem:])
+        return None, None
+
+    # xargs
+    if head_low == "xargs":
+        args = words[first_non_assign + 1:]
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in {"-n", "-L", "-I", "-s", "-E", "-d", "-P", "-a"} and i + 1 < len(args):
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            break
+        if i < len(args):
+            return None, " ".join(args[i:])
+        return None, None
+
+    # time, nohup
+    if head_low in {"time", "nohup"}:
+        rem = _skip_wrapper(words, first_non_assign + 1, head_low)
+        if rem < len(words):
+            return None, " ".join(words[rem:])
+        return None, None
+
+    # sudo
+    if head_low == "sudo":
+        args = words[first_non_assign + 1:]
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in {"-u", "-g", "-p", "-h", "-c"} and i + 1 < len(args):
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            break
+        if i < len(args):
+            return None, " ".join(args[i:])
+        return None, None
+
+    return None, None
+
+
+def _start_process_info(words: list[str], start_index: int) -> tuple[str, str]:
+    """Return (executable, argument_string) from Start-Process tokens."""
+    index = start_index
+    total = len(words)
+    exe = ""
+    arg_list = ""
+    positional: list[str] = []
+
+    while index < total:
+        word = words[index]
+        name, inline = _opt(word)
+        if name in {"-filepath", "-filename", "-file", "-path"}:
+            if inline is not None:
+                exe = inline
+                index += 1
+                continue
+            if index + 1 < total:
+                exe = words[index + 1]
+                index += 2
+                continue
+            index += 1
+            continue
+        if name in {"-argumentlist", "-args", "-arguments"}:
+            if inline is not None:
+                arg_list = inline
+                index += 1
+                continue
+            if index + 1 < total:
+                arg_list = words[index + 1]
+                index += 2
+                continue
+            index += 1
+            continue
+        if name in {"-workingdirectory", "-wd"}:
+            if inline is None and index + 1 < total:
+                index += 2
+                continue
+            index += 1
+            continue
+        if name is not None:
+            if name in _VALUE_OPTS and inline is None and index + 1 < total:
+                index += 2
+                continue
+            index += 1
+            continue
+        positional.append(word)
+        index += 1
+
+    if not exe and positional:
+        exe = positional[0]
+        if len(positional) > 1 and not arg_list:
+            arg_list = " ".join(positional[1:])
+
+    return exe, arg_list
+
+
+def _python_check(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
+    code_pieces: list[str] = []
+
+    args = parsed.args
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-c":
+            if i + 1 < len(args):
+                code_pieces.append(args[i + 1])
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith("-c"):
+            code_pieces.append(arg[2:])
+            i += 1
+        else:
+            i += 1
+
+    if "<<" in statement:
+        code_pieces.append(statement)
+
+    for code in code_pieces:
+        if _PY_EXEC_RE.search(code) and _PY_LAUNCHER_RE.search(code):
+            return (
+                "R2 direct model launch via Python denied: "
+                f"\"{_snippet(statement)}\". "
+                f"Reach the model only through {_ROUTER}."
+            )
+        if _PY_WRITE_RE.search(code):
+            if _PY_SPECIAL_STRINGS_RE.search(code):
+                return (
+                    "R3 guarded-path mutation via Python denied (heuristic speed bump): "
+                    f"\"{_snippet(statement)}\". "
+                    f"Send the change through {_ROUTER}."
+                )
+            if _SOURCE_EXT_STR_RE.search(code):
+                return (
+                    "R3 source-file mutation via Python denied (heuristic speed bump): "
+                    f"\"{_snippet(statement)}\". "
+                    f"Send the change through {_ROUTER}."
+                )
+            for literal in re.findall(r"['\"]([^'\"]+)['\"]", code):
+                if _is_guarded(literal, effective_cwd, env):
+                    return (
+                        "R3 guarded-path mutation via Python denied (heuristic speed bump): "
+                        f"\"{_snippet(statement)}\". "
+                        f"Send the change through {_ROUTER}."
+                    )
+                if _is_source_target(literal, effective_cwd):
+                    return (
+                        "R3 source-file mutation via Python denied (heuristic speed bump): "
+                        f"\"{_snippet(statement)}\". "
+                        f"Send the change through {_ROUTER}."
+                    )
+
+    return None
+
+
+def _git_check(statement: str, parsed: _Cmd) -> str | None:
+    args = parsed.args
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        cfg: str | None = None
+        if arg == "-c":
+            if i + 1 < len(args):
+                cfg = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith("-c="):
+            cfg = arg[3:]
+            i += 1
+        elif arg.startswith("-c"):
+            cfg = arg[2:]
+            i += 1
+        else:
+            i += 1
+            continue
+
+        if cfg:
+            key, sep, val = cfg.partition("=")
+            key_low = key.strip().lower()
+            val_clean = val.strip()
+            if key_low.startswith("alias.") and val_clean.startswith("!"):
+                return _git_config_reason(statement)
+            if key_low.startswith("core."):
+                return _git_config_reason(statement)
     return None
 
 
@@ -240,11 +653,22 @@ def _is_router(parsed: _Cmd) -> bool:
 
 
 def _introspects(parsed: _Cmd) -> bool:
-    for word in parsed.words:
-        flag = word.split("=", 1)[0] if word.startswith("--") else word
-        if flag in _INTROSPECTION:
-            return True
-    return False
+    if not parsed.args:
+        return False
+    first = parsed.args[0]
+    if first == "--":
+        return False
+    if first.lower() == "exec":
+        if len(parsed.args) < 2:
+            return False
+        candidate = parsed.args[1]
+    else:
+        candidate = first
+
+    if candidate == "--":
+        return False
+    flag = candidate.split("=", 1)[0].lower() if candidate.startswith("--") else candidate.lower()
+    return flag in _INTROSPECTION
 
 
 def _repair_job(args: list[str]) -> str | None:
@@ -258,45 +682,227 @@ def _repair_job(args: list[str]) -> str | None:
     return None
 
 
-def _launch_reason(statement: str) -> str:
-    return (
-        "R2 direct model launch denied: "
-        f"\"{_snippet(statement)}\". "
-        f"Reach the model only through {_ROUTER}."
-    )
+def _is_read_cmd(parsed: _Cmd) -> bool:
+    if parsed.program in _READ_CMDS:
+        return True
+    if parsed.program == "sed":
+        return any(a in {"-n", "--quiet", "--silent"} for a in parsed.args)
+    return False
 
 
-def _unknown_job_reason(statement: str, job_id: str) -> str:
-    shown = job_id if job_id else "(missing)"
-    return (
-        f"R2 lane-repair job {shown} is unknown: "
-        f"\"{_snippet(statement)}\". "
-        f"Reach the model only through {_ROUTER}."
-    )
+def _supervisor_read_check(statement: str, parsed: _Cmd, effective_cwd: str) -> str | None:
+    # Check input redirections
+    for r in parsed.input_redirs:
+        if _is_non_allowlisted_source(r, effective_cwd) or _is_non_allowlisted_dir(r, effective_cwd):
+            return _supervisor_read_reason(statement)
 
+    targets: list[str] = []
+    args = parsed.args
+    prog = parsed.program
 
-def _mutate_reason(statement: str, kind: str) -> str:
-    if kind == "guarded":
-        name = "R3 guarded-path mutation denied"
-    else:
-        name = "R3 source-file mutation denied"
-    return f"{name}: \"{_snippet(statement)}\". Send the change through {_ROUTER}."
+    if prog in {"cat", "head", "tail", "type", "more", "less"}:
+        for a in args:
+            if not a.startswith("-") and not a.startswith("/"):
+                targets.append(a)
+    elif prog in {"get-content", "gc"}:
+        index = 0
+        while index < len(args):
+            a = args[index]
+            name, inline = _opt(a)
+            if name in {"-path", "-literalpath"}:
+                if inline is not None:
+                    targets.append(inline)
+                elif index + 1 < len(args):
+                    targets.append(args[index + 1])
+                    index += 1
+                index += 1
+                continue
+            if not a.startswith("-"):
+                targets.append(a)
+            index += 1
+    elif prog == "sed":
+        index = 0
+        saw_expr = False
+        while index < len(args):
+            a = args[index]
+            name, inline = _opt(a)
+            if name in {"-e", "-f", "--expression", "--file"}:
+                saw_expr = True
+                index += 1 if inline is not None else 2
+                continue
+            if name in {"-n", "--quiet", "--silent"}:
+                index += 1
+                continue
+            if name is not None:
+                index += 1
+                continue
+            if not saw_expr:
+                saw_expr = True
+            else:
+                targets.append(a)
+            index += 1
+    elif prog in {"grep", "rg"}:
+        index = 0
+        saw_pat = False
+        has_recursive = any(a in {"-r", "-R", "--recursive"} for a in args)
+        while index < len(args):
+            a = args[index]
+            name, inline = _opt(a)
+            if name in {"-e", "-f", "--regexp", "--file"}:
+                saw_pat = True
+                index += 1 if inline is not None else 2
+                continue
+            if a.startswith("-"):
+                index += 1
+                continue
+            if not saw_pat:
+                saw_pat = True
+            else:
+                targets.append(a)
+            index += 1
+        if not targets and (has_recursive or prog == "rg"):
+            targets.append(effective_cwd)
+    elif prog == "select-string":
+        index = 0
+        saw_pat = False
+        while index < len(args):
+            a = args[index]
+            name, inline = _opt(a)
+            if name in {"-pattern"}:
+                saw_pat = True
+                index += 1 if inline is not None else 2
+                continue
+            if name in {"-path", "-literalpath"}:
+                if inline is not None:
+                    targets.append(inline)
+                elif index + 1 < len(args):
+                    targets.append(args[index + 1])
+                    index += 1
+                index += 1
+                continue
+            if a.startswith("-"):
+                index += 1
+                continue
+            if not saw_pat:
+                saw_pat = True
+            else:
+                targets.append(a)
+            index += 1
+        if not targets and not parsed.input_redirs:
+            targets.append(effective_cwd)
+    elif prog == "findstr":
+        index = 0
+        saw_pat = False
+        has_recursive = any(a.lower() == "/s" for a in args)
+        while index < len(args):
+            a = args[index]
+            if a.lower().startswith("/c:") or a.lower().startswith("/r:"):
+                saw_pat = True
+                index += 1
+                continue
+            if a.startswith("/") or a.startswith("-"):
+                index += 1
+                continue
+            if not saw_pat:
+                saw_pat = True
+            else:
+                targets.append(a)
+            index += 1
+        if not targets and has_recursive:
+            targets.append(effective_cwd)
+    elif prog == "awk":
+        index = 0
+        saw_prog = False
+        while index < len(args):
+            a = args[index]
+            name, inline = _opt(a)
+            if name in {"-f", "--file"}:
+                saw_prog = True
+                index += 1 if inline is not None else 2
+                continue
+            if name in {"-f", "-v"}:
+                index += 1 if inline is not None else 2
+                continue
+            if a.startswith("-"):
+                index += 1
+                continue
+            if not saw_prog:
+                saw_prog = True
+            else:
+                targets.append(a)
+            index += 1
 
-
-def _snippet(statement: str) -> str:
-    flat = statement.strip().replace("\r\n", "\n").replace("\n", " ")
-    return flat[:160]
-
-
-def _write_kind(path: str) -> str | None:
-    if _is_guarded(path):
-        return "guarded"
-    if is_source_path(path) and not _under_scratch_or_tmp(path):
-        return "source"
+    for t in targets:
+        if _is_non_allowlisted_source(t, effective_cwd) or _is_non_allowlisted_dir(t, effective_cwd):
+            return _supervisor_read_reason(statement)
     return None
 
 
-def _is_guarded(path: str) -> bool:
+def _is_non_allowlisted_source(path: str, cwd: str) -> bool:
+    if is_allowlisted_read(path) or _under_scratch_or_tmp(path, cwd):
+        return False
+    try:
+        resolved = _canonical_path(path, cwd)
+        if is_allowlisted_read(str(resolved)) or _under_scratch_or_tmp(str(resolved), cwd):
+            return False
+        if is_source_path(str(resolved)) or is_source_path(path):
+            return True
+    except Exception:
+        if is_source_path(path):
+            return True
+    return False
+
+
+def _is_non_allowlisted_dir(path: str, cwd: str) -> bool:
+    if is_allowlisted_read(path) or _under_scratch_or_tmp(path, cwd):
+        return False
+    try:
+        resolved = _canonical_path(path, cwd)
+        if is_allowlisted_read(str(resolved)) or _under_scratch_or_tmp(str(resolved), cwd):
+            return False
+        if resolved.is_dir():
+            return True
+    except Exception:
+        pass
+    cleaned = path.strip().strip("'\"")
+    if cleaned.endswith("/") or cleaned.endswith("\\"):
+        return True
+    return False
+
+
+def _canonical_path(p: str, cwd: str) -> Path:
+    cleaned = p.strip().strip("'\"")
+    expanded = os.path.expanduser(os.path.expandvars(cleaned))
+    path_obj = Path(expanded)
+    if not path_obj.is_absolute():
+        path_obj = Path(cwd) / path_obj
+    try:
+        return path_obj.resolve()
+    except Exception:
+        return path_obj
+
+
+def _under_scratch_or_tmp(path: str, cwd: str) -> bool:
+    try:
+        resolved = _canonical_path(path, cwd)
+        parts_lower = [part.lower() for part in resolved.parts]
+        for part in parts_lower[:-1]:
+            if part in {"scratchpad", "tmp"}:
+                return True
+        tmp_dir = Path(tempfile.gettempdir()).resolve()
+        try:
+            resolved.relative_to(tmp_dir)
+            return True
+        except (ValueError, RuntimeError):
+            pass
+    except Exception:
+        pass
+    return False
+
+
+def _is_guarded(path: str, cwd: str, env: Mapping[str, str] | None) -> bool:
+    if protected_path(path, cwd=cwd, env=env):
+        return True
     try:
         normalized = norm_path(path)
     except (OSError, ValueError):
@@ -308,15 +914,56 @@ def _is_guarded(path: str) -> bool:
     return False
 
 
-def _under_scratch_or_tmp(path: str) -> bool:
-    try:
-        normal = norm_path(path).replace("\\", "/").lower()
-    except (OSError, ValueError):
-        normal = path.replace("\\", "/").lower()
-    return "/scratchpad/" in normal or "/tmp/" in normal
+def _is_source_target(path: str, cwd: str) -> bool:
+    cleaned = path.strip().strip("'\"")
+    if _under_scratch_or_tmp(cleaned, cwd):
+        return False
+    if is_source_path(cleaned):
+        return True
+    if "*" in cleaned or "?" in cleaned:
+        for ext in SOURCE_EXTS:
+            if cleaned.lower().endswith(ext):
+                return True
+        if cleaned.endswith("*") or cleaned.endswith("/*") or cleaned.endswith(r"\*"):
+            return True
+    return False
 
 
-def _write_paths(parsed: _Cmd) -> list[str]:
+def _write_kind(path: str, cwd: str, env: Mapping[str, str] | None) -> str | None:
+    if _is_guarded(path, cwd, env):
+        return "guarded"
+    if _is_source_target(path, cwd):
+        return "source"
+    return None
+
+
+def _update_cwd(current_cwd: str, statement: str) -> str:
+    parsed = _parse(statement)
+    words = parsed.words
+    first_non_assign = 0
+    while first_non_assign < len(words) and _ASSIGN_RE.match(words[first_non_assign]):
+        first_non_assign += 1
+    if first_non_assign < len(words):
+        cmd_name = _normalize_exe(words[first_non_assign])
+        if cmd_name in {"cd", "chdir", "pushd"}:
+            args = [
+                a for a in words[first_non_assign + 1:]
+                if not a.startswith("/") and not a.startswith("-")
+            ]
+            if args:
+                target = args[0].strip().strip("'\"")
+                try:
+                    expanded = os.path.expanduser(os.path.expandvars(target))
+                    p = Path(expanded)
+                    if not p.is_absolute():
+                        p = Path(current_cwd) / p
+                    return str(p.resolve())
+                except Exception:
+                    pass
+    return current_cwd
+
+
+def _write_paths(parsed: _Cmd, cwd: str) -> list[str]:
     if parsed.program == "git":
         return []
     paths = list(parsed.redirs)
@@ -324,11 +971,15 @@ def _write_paths(parsed: _Cmd) -> list[str]:
     if program == "sed":
         paths.extend(_sed_files(parsed.args))
     elif program == "tee":
-        paths.extend(_collect(parsed.args, "tee"))
-    elif program in _DEST_CMDS:
-        paths.extend(_collect(parsed.args, "dest"))
+        paths.extend(_collect_tee(parsed.args))
+    elif program in {"set-content", "add-content", "out-file"}:
+        paths.extend(_collect_powershell_content(parsed.args))
+    elif program in {"mv", "move", "move-item", "ren", "rename"}:
+        paths.extend(_collect_move_both(parsed.args, cwd))
+    elif program in {"cp", "copy", "copy-item"}:
+        paths.extend(_collect_copy(parsed.args, cwd))
     elif program in _WRITE_CMDS:
-        paths.extend(_collect(parsed.args, "all"))
+        paths.extend(_collect_general_write(parsed.args))
     return paths
 
 
@@ -363,8 +1014,7 @@ def _sed_inplace(arg: str) -> bool:
     return arg.startswith("-i") and not arg.startswith("--")
 
 
-def _collect(args: list[str], mode: str) -> list[str]:
-    found: list[str] = []
+def _collect_tee(args: list[str]) -> list[str]:
     positional: list[str] = []
     index = 0
     while index < len(args):
@@ -372,40 +1022,178 @@ def _collect(args: list[str], mode: str) -> list[str]:
         if arg == "--":
             positional.extend(args[index + 1:])
             break
-        name, inline = _opt(arg)
-        if name is not None:
-            takes_value = name in _VALUE_OPTS or name in _DEST_OPTS or name in _PATH_OPTS
-            value = inline
-            if takes_value and value is None and index + 1 < len(args):
-                value = args[index + 1]
-                index += 1
-            if value is not None and (
-                (mode == "dest" and name in _DEST_OPTS)
-                or (mode == "all" and name in _PATH_OPTS)
-            ):
-                found.append(value)
+        if arg.startswith("-"):
             index += 1
             continue
         positional.append(arg)
         index += 1
-    if mode == "dest":
-        if positional:
-            found.append(positional[-1])
-    elif mode in {"all", "tee"}:
-        found.extend(positional)
-    return found
+    return positional
+
+
+def _collect_powershell_content(args: list[str]) -> list[str]:
+    index = 0
+    positional: list[str] = []
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            positional.extend(args[index + 1:])
+            break
+        name, inline = _opt(arg)
+        if name in {"-path", "-filepath", "-literalpath"}:
+            if inline is not None:
+                return [inline]
+            if index + 1 < len(args):
+                return [args[index + 1]]
+            return []
+        if name is not None:
+            takes_val = name in _VALUE_OPTS
+            if takes_val and inline is None and index + 1 < len(args):
+                index += 1
+            index += 1
+            continue
+        positional.append(arg)
+        index += 1
+    if positional:
+        return [positional[0]]
+    return []
+
+
+def _parse_dest_args(args: list[str]) -> tuple[list[str], str | None]:
+    positional: list[str] = []
+    dest_opt: str | None = None
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            positional.extend(args[index + 1:])
+            break
+        name, inline = _opt(arg)
+        if name in _DEST_OPTS:
+            if inline is not None:
+                dest_opt = inline
+            elif index + 1 < len(args):
+                dest_opt = args[index + 1]
+                index += 1
+            index += 1
+            continue
+        if name in _PATH_OPTS:
+            val = inline
+            if val is None and index + 1 < len(args):
+                val = args[index + 1]
+                index += 1
+            if val is not None:
+                positional.append(val)
+            index += 1
+            continue
+        if name is not None:
+            takes_val = name in _VALUE_OPTS
+            if takes_val and inline is None and index + 1 < len(args):
+                index += 1
+            index += 1
+            continue
+        positional.append(arg)
+        index += 1
+    return positional, dest_opt
+
+
+def _collect_copy(args: list[str], cwd: str) -> list[str]:
+    positional, dest_opt = _parse_dest_args(args)
+    dest = dest_opt if dest_opt is not None else (positional[-1] if positional else None)
+    sources = positional[:-1] if (dest_opt is None and len(positional) > 1) else positional
+    if not dest:
+        return []
+
+    is_dir = False
+    cleaned_dest = dest.strip().strip("'\"")
+    if cleaned_dest.endswith("/") or cleaned_dest.endswith("\\"):
+        is_dir = True
+    else:
+        try:
+            cand = _canonical_path(cleaned_dest, cwd)
+            if cand.is_dir():
+                is_dir = True
+        except Exception:
+            pass
+
+    if is_dir and sources:
+        results = []
+        for src in sources:
+            src_name = Path(src.strip().strip("'\"")).name
+            results.append(f"{cleaned_dest.rstrip('/\\')}/{src_name}")
+        return results
+    return [dest]
+
+
+def _collect_move_both(args: list[str], cwd: str) -> list[str]:
+    positional, dest_opt = _parse_dest_args(args)
+    dest = dest_opt if dest_opt is not None else (positional[-1] if positional else None)
+    sources = positional[:-1] if (dest_opt is None and len(positional) > 1) else positional
+    paths_to_check: list[str] = []
+    for src in sources:
+        paths_to_check.append(src)
+    if dest:
+        is_dir = False
+        cleaned_dest = dest.strip().strip("'\"")
+        if cleaned_dest.endswith("/") or cleaned_dest.endswith("\\"):
+            is_dir = True
+        else:
+            try:
+                cand = _canonical_path(cleaned_dest, cwd)
+                if cand.is_dir():
+                    is_dir = True
+            except Exception:
+                pass
+        if is_dir and sources:
+            for src in sources:
+                src_name = Path(src.strip().strip("'\"")).name
+                paths_to_check.append(f"{cleaned_dest.rstrip('/\\')}/{src_name}")
+        else:
+            paths_to_check.append(dest)
+    return paths_to_check
+
+
+def _collect_general_write(args: list[str]) -> list[str]:
+    positional: list[str] = []
+    named: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            positional.extend(args[index + 1:])
+            break
+        name, inline = _opt(arg)
+        if name in _PATH_OPTS:
+            if inline is not None:
+                named.append(inline)
+            elif index + 1 < len(args):
+                named.append(args[index + 1])
+                index += 1
+            index += 1
+            continue
+        if name is not None:
+            takes_val = name in _VALUE_OPTS
+            if takes_val and inline is None and index + 1 < len(args):
+                index += 1
+            index += 1
+            continue
+        positional.append(arg)
+        index += 1
+    return named + positional
 
 
 def _parse(statement: str) -> _Cmd:
     words: list[str] = []
     redirs: list[str] = []
+    input_redirs: list[str] = []
     for kind, text in _lex(statement):
         if kind == "write":
             redirs.append(text)
+        elif kind == "read":
+            input_redirs.append(text)
         elif text:
             words.append(text)
     program, arg_at = _head(words)
-    return _Cmd(program, words[arg_at:], words, redirs)
+    return _Cmd(program, words[arg_at:], words, redirs, input_redirs)
 
 
 def _head(words: list[str]) -> tuple[str, int]:
@@ -420,22 +1208,54 @@ def _head(words: list[str]) -> tuple[str, int]:
             index += 1
             continue
         low = _normalize_exe(word)
-        if low in {"cd", "pushd"}:
+        if low in {"cd", "chdir", "pushd"}:
             return "", total
         if low == "start-process":
-            exe, index = _start_exe(words, index + 1)
+            exe, _ = _start_process_info(words, index + 1)
             if not exe:
                 return "", total
-            return _normalize_exe(exe), index
+            return _normalize_exe(exe), total
         if low in _WRAPPERS:
             index = _skip_wrapper(words, index + 1, low)
             continue
         if low in _PYTHON:
-            script_at = _first_positional(words, index + 1)
-            if script_at is None:
+            script_base, script_at = _first_python_script(words, index + 1)
+            if not script_base:
                 return low, index + 1
-            return _basename(words[script_at]), script_at + 1
+            return script_base, script_at
         return low, index + 1
+    return "", total
+
+
+def _first_python_script(words: list[str], index: int) -> tuple[str, int]:
+    total = len(words)
+    while index < total:
+        word = words[index]
+        if _ASSIGN_RE.match(word):
+            index += 1
+            continue
+        if word == "--":
+            index += 1
+            if index < total:
+                return _basename(words[index]), index + 1
+            return "", total
+        low = word.lower()
+        if low in {"-c", "-"}:
+            return "", total
+        if low == "-m":
+            if index + 1 < total:
+                return _basename(words[index + 1]), index + 2
+            return "", total
+        if low in _PYTHON_VALUE_OPTS:
+            index += 2
+            continue
+        if any(low.startswith(opt) for opt in ("-w", "-x")):
+            index += 1
+            continue
+        if word.startswith("-"):
+            index += 1
+            continue
+        return _basename(word), index + 1
     return "", total
 
 
@@ -457,42 +1277,11 @@ def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
     return index
 
 
-def _start_exe(words: list[str], index: int) -> tuple[str, int]:
-    while index < len(words):
-        name, inline = _opt(words[index])
-        if name in {"-filepath", "-filename"}:
-            if inline is not None:
-                return inline, index + 1
-            if index + 1 < len(words):
-                return words[index + 1], index + 2
-            return "", len(words)
-        if name is not None:
-            index += 1
-            continue
-        return words[index], index + 1
-    return "", len(words)
-
-
-def _first_positional(words: list[str], index: int) -> int | None:
-    while index < len(words):
-        word = words[index]
-        if _ASSIGN_RE.match(word):
-            index += 1
-            continue
-        if word == "--":
-            index += 1
-            return index if index < len(words) else None
-        if word.startswith("-"):
-            index += 1
-            continue
-        return index
-    return None
-
-
 def _normalize_exe(token: str) -> str:
-    if token == "&":
+    cleaned = token.strip().strip("'\"")
+    if cleaned == "&":
         return "&"
-    base = _basename(token)
+    base = _basename(cleaned)
     for ext in _STRIP_EXT:
         if base.endswith(ext):
             return base[: -len(ext)]
@@ -500,7 +1289,8 @@ def _normalize_exe(token: str) -> str:
 
 
 def _basename(token: str) -> str:
-    return token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    cleaned = token.strip().strip("'\"")
+    return cleaned.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
 
 def _opt(token: str) -> tuple[str | None, str | None]:
@@ -530,8 +1320,8 @@ def _lex(statement: str) -> list[tuple[str, str]]:
         redirect = _read_redirect(text, index)
         if redirect is not None:
             kind, value, index = redirect
-            if kind == "write" and value:
-                tokens.append(("write", value))
+            if kind in {"write", "read"} and value:
+                tokens.append((kind, value))
             continue
         if text.startswith("<<", index):
             parsed = _parse_heredoc_op(text, index)
@@ -585,8 +1375,9 @@ def _read_redirect(text: str, index: int) -> tuple[str, str, int] | None:
     if cursor >= len(text) or text[cursor] in "\r\n|;&":
         return ("skip", "", cursor)
     target, new_index = _read_word(text, cursor)
-    if write and target:
-        return ("write", target, new_index)
+    kind = "write" if write else "read"
+    if target:
+        return (kind, target, new_index)
     return ("skip", "", new_index)
 
 
@@ -617,8 +1408,13 @@ def _read_word(text: str, index: int) -> tuple[str, int]:
                 index += 1
             continue
         if ch == "\\" and index + 1 < length:
-            parts.append(text[index + 1])
-            index += 2
+            nxt = text[index + 1]
+            if nxt in " \t\r\n<>|&;'\"$":
+                parts.append(nxt)
+                index += 2
+            else:
+                parts.append("\\")
+                index += 1
             continue
         if ch in " \t\r\n<>|&;":
             break
@@ -628,14 +1424,15 @@ def _read_word(text: str, index: int) -> tuple[str, int]:
 
 
 def _strip_bodies(command: str) -> str:
-    """Drop heredoc and here-string bodies. Leave the operators in place."""
+    """Drop non-interpreter heredocs and here-strings. Keep interpreter heredocs."""
     out: list[str] = []
     index = 0
     length = len(command)
-    pending: list[tuple[str, bool]] = []
+    pending: list[tuple[str, bool, bool]] = []
     in_single = False
     in_double = False
     escaped = False
+
     while index < length:
         ch = command[index]
         if escaped:
@@ -658,8 +1455,21 @@ def _strip_bodies(command: str) -> str:
             index += 1
             continue
         if pending and ch == "\n":
-            index = _consume_heredoc(command, index, pending.pop(0))
-            out.append("\n")
+            delim, strip_tabs, is_interp = pending.pop(0)
+            index = _skip_newline(command, index)
+            body_lines: list[str] = []
+            while index < len(command):
+                line, nxt = _take_line(command, index)
+                check = line.lstrip("\t") if strip_tabs else line
+                if check == delim:
+                    index = nxt
+                    break
+                body_lines.append(line)
+                index = nxt
+            if is_interp:
+                out.append("\x00" + "\x00".join(body_lines) + "\x00" + delim)
+            else:
+                out.append("\n")
             continue
         if ch == "\r":
             index += 1
@@ -668,8 +1478,23 @@ def _strip_bodies(command: str) -> str:
             parsed = _parse_heredoc_op(command, index)
             if parsed is not None:
                 delim, strip_tabs, op_end = parsed
+                full_out = "".join(out)
+                last_sep = max(
+                    full_out.rfind("\n"),
+                    full_out.rfind(";"),
+                    full_out.rfind("&"),
+                    full_out.rfind("|"),
+                )
+                header = full_out[last_sep + 1:].strip()
+                hdr_words = [w for w in re.split(r"[ \t]+", header) if w]
+                prog = ""
+                for w in hdr_words:
+                    if not _ASSIGN_RE.match(w):
+                        prog = _normalize_exe(w)
+                        break
+                is_interp = prog in _INTERPRETERS
                 out.append(command[index:op_end])
-                pending.append((delim, strip_tabs))
+                pending.append((delim, strip_tabs, is_interp))
                 index = op_end
                 continue
         if ch == "@" and index + 1 < length and command[index + 1] in "'\"":
@@ -720,18 +1545,6 @@ def _parse_heredoc_op(text: str, index: int) -> tuple[str, bool, int] | None:
     return matched.group(0), strip_tabs, cursor + matched.end()
 
 
-def _consume_heredoc(text: str, index: int, spec: tuple[str, bool]) -> int:
-    delim, strip_tabs = spec
-    index = _skip_newline(text, index)
-    while index < len(text):
-        line, nxt = _take_line(text, index)
-        check = line.lstrip("\t") if strip_tabs else line
-        if check == delim:
-            return nxt
-        index = nxt
-    return len(text)
-
-
 def _herestring_end(text: str, index: int) -> int | None:
     quote = text[index + 1]
     cursor = index + 2
@@ -764,6 +1577,67 @@ def _skip_newline(text: str, index: int) -> int:
     if index < len(text) and text[index] in "\r\n":
         return index + 1
     return index
+
+
+def _launch_reason(statement: str) -> str:
+    return (
+        "R2 direct model launch denied: "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _unknown_job_reason(statement: str, job_id: str) -> str:
+    shown = job_id if job_id else "(missing)"
+    return (
+        f"R2 lane-repair job {shown} is unknown: "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _depth_exceeded_reason(statement: str) -> str:
+    return (
+        f"R2 nested shell recursion depth limit ({_MAX_RECURSION_DEPTH}) exceeded: "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _encoded_ps_reason(statement: str) -> str:
+    return (
+        "R2 encoded powershell commands are denied: "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _git_config_reason(statement: str) -> str:
+    return (
+        f"R2 execution-bearing git config denied: \"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _mutate_reason(statement: str, kind: str) -> str:
+    if kind == "guarded":
+        name = "R3 guarded-path mutation denied"
+    else:
+        name = "R3 source-file mutation denied"
+    return f"{name}: \"{_snippet(statement)}\". Send the change through {_ROUTER}."
+
+
+def _supervisor_read_reason(statement: str) -> str:
+    return (
+        "R4 supervisor source read denied: "
+        f"\"{_snippet(statement)}\". "
+        f"Send source reading to `python D:/APPS/_shared/dispatch/dispatch.py lane diagnose --brief FILE`."
+    )
+
+
+def _snippet(statement: str) -> str:
+    flat = statement.strip().replace("\r\n", "\n").replace("\n", " ")
+    return flat[:160]
 
 
 if __name__ == "__main__":
