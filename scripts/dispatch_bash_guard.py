@@ -25,7 +25,8 @@ directory, never to a bare path component.
 Honest boundary note: hooks stop accidental and rationalised bypass; they are
 not a security boundary against an agent that deliberately uses the operator OS
 credentials. Inline/heredoc mutation checks provide a heuristic speed bump, not
-an airtight sandbox.
+an airtight sandbox. Running python scripts that live in scratch/tmp directories
+stays allowed as an accepted limitation.
 
 decide() is pure. main() prints one JSON object or nothing.
 Importing this module creates no files.
@@ -665,6 +666,13 @@ def _is_ps_encoded_flag(token: str) -> bool:
     return False
 
 
+def _strip_surrounding_quotes(s: str) -> str:
+    s = s.strip()
+    while len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        s = s[1:-1].strip()
+    return s
+
+
 def _unwrap_statement(
     statement: str,
     parsed: _Cmd,
@@ -695,21 +703,41 @@ def _unwrap_statement(
     if head_low == "start-process":
         exe, arg_list = _start_process_info(words, first_non_assign + 1)
         if exe:
+            if _normalize_exe(exe) == "cmd":
+                clean_arg = arg_list.strip()
+                if clean_arg.startswith("@(") and clean_arg.endswith(")"):
+                    clean_arg = clean_arg[2:-1].strip()
+                clean_arg = _strip_surrounding_quotes(clean_arg)
+                if (
+                    len(clean_arg) > 2
+                    and clean_arg[:2].lower() in {"/c", "-c", "/k", "-k"}
+                ):
+                    inner = _strip_surrounding_quotes(clean_arg[2:])
+                    if inner:
+                        return None, inner
             inner = f"{exe} {arg_list}".strip()
             return None, inner
         return None, None
 
     # cmd / cmd.exe
     if head_low == "cmd":
-        idx = -1
         for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
-            if w.lower() in {"/c", "-c", "/k", "-k"}:
-                idx = i
-                break
-        if idx >= 0 and idx + 1 < len(words):
-            inner = " ".join(words[idx + 1:])
-            if inner.strip():
-                return None, inner
+            w_low = w.lower()
+            if w_low in {"/c", "-c", "/k", "-k"}:
+                if i + 1 < len(words):
+                    inner = " ".join(words[i + 1:]).strip()
+                    if inner:
+                        return None, inner
+                return None, None
+            if len(w) > 2 and w[:2].lower() in {"/c", "-c", "/k", "-k"}:
+                rem = _strip_surrounding_quotes(w[2:])
+                if i + 1 < len(words):
+                    inner = f"{rem} {' '.join(words[i + 1:])}".strip()
+                else:
+                    inner = rem
+                if inner:
+                    return None, inner
+                return None, None
         return None, None
 
     # bash, sh, zsh, dash

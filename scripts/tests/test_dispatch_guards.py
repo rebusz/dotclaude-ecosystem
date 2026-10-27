@@ -1359,3 +1359,48 @@ def test_round3_dispatch_bash_guard_subprocess(tmp_path: Path) -> None:
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
 
+
+# --- round 4 (Grok 4.7 review, partial) -----------------------------------
+
+
+def test_round4_glued_cmd_c_switch_is_denied(tmp_path: Path) -> None:
+    result = dispatch_bash_guard.decide(_bash('cmd /c"codex exec hi"'), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+    assert "codex" in _reason(result)
+
+
+def test_round4_glued_cmd_k_switch_is_denied(tmp_path: Path) -> None:
+    result = dispatch_bash_guard.decide(_bash('cmd /k"codex exec hi"'), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+    assert "codex" in _reason(result)
+
+
+def test_round4_start_process_glued_c_switch_is_denied(tmp_path: Path) -> None:
+    command = "Start-Process -FilePath cmd -ArgumentList '/c\"codex exec hi\"'"
+    result = dispatch_bash_guard.decide(_bash(command, "PowerShell"), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+    assert "codex" in _reason(result)
+
+
+def test_round4_cmd_c_dir_is_allowed(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = _hook("Bash", {"command": "cmd /c dir"}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None
+    payload_ps = _hook("PowerShell", {"command": "cmd /c dir"}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload_ps, _env(tmp_path / "state")) is None
+
+
+def test_round4_dispatch_bash_guard_subprocess(tmp_path: Path) -> None:
+    proc = _run_hook(
+        "dispatch_bash_guard.py",
+        json.dumps(_bash('cmd /c"codex exec hi"')).encode(),
+        tmp_path,
+    )
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
+
