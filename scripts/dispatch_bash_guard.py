@@ -12,15 +12,19 @@ blocks, and function-definition bodies (POSIX f() and PowerShell function f) are
 scanned as nested statements. Shells fed from stdin or pointed at a script
 outside a tracked git repository are denied. POSIX shell option clusters
 containing c (bash -lc, -ic, -xc) are treated as command strings. PowerShell
-EncodedCommand prefixes (-ec, -en, -enc, ...) are denied. Shell builtins
-command, builtin, exec, and eval are unwrapped; ANSI-C $'...' quoting is
-decoded. Inline code in python -c, node -e, perl -e, ruby -e, and php -r is
-scanned for launches and source/guarded-path mutations. git stays allowed by
-default except for execution-bearing config and alias/core writes (both tiers),
-source reads via show/grep/log -p/blame/cat-file -p (supervisor), and
-apply/am/restore/checkout -- source mutations (both tiers). Scratch and temp
-exemptions are anchored to the canonical scratch root and the system temp
-directory, never to a bare path component.
+EncodedCommand prefixes (-ec, -en, -enc, ...) are denied. PowerShell -Command
+unambiguous prefixes (-co, -com, -comm, ...) and / and -- forms are scanned as
+command strings. Interpreter option clusters containing inline-code flags
+(python -ic, -bc, perl -ne, ruby -ne) are scanned. Shell builtins command,
+builtin, exec, and eval, and process wrappers (timeout, nice, setsid, stdbuf,
+watch, flock, ionice, taskset, xargs, wsl, find -exec) are unwrapped; ANSI-C
+$'...' quoting is decoded. Inline code in python -c, node -e, perl -e, ruby -e,
+and php -r is scanned for launches and source/guarded-path mutations. git stays
+allowed by default except for execution-bearing config and alias/core writes
+(both tiers), source reads via show/grep/log -p/blame/cat-file -p (supervisor),
+and apply/am/restore/checkout mutations of source files, directories, or pathspec
+'.' (both tiers). Scratch and temp exemptions are anchored to the canonical
+scratch root and the system temp directory, never to a bare path component.
 
 Honest boundary note: hooks stop accidental and rationalised bypass; they are
 not a security boundary against an agent that deliberately uses the operator OS
@@ -67,7 +71,9 @@ _DIRECT = frozenset({"codex", "glm", "kimi", "cursor-agent", "agy", "opencode"})
 _PYTHON = frozenset({"python", "python3", "py", "pythonw"})
 _WRAPPERS = frozenset({
     "env", "time", "nohup", "call", "start",
-    "command", "builtin", "exec", "eval",
+    "command", "builtin", "exec", "eval", "sudo",
+    "timeout", "nice", "setsid", "stdbuf", "watch",
+    "flock", "ionice", "taskset", "xargs", "wsl", "find",
 })
 _ENV_VALUE_FLAGS = frozenset({"-u", "-C", "--unset", "--chdir"})
 _ROUTER_CMDS = frozenset({"lane", "plan", "ledger", "status"})
@@ -119,6 +125,18 @@ _INLINE_FLAGS: dict[str, tuple[str, ...]] = {
     "php": ("-r",),
 }
 _INLINE_INTERPRETERS = frozenset(_INLINE_FLAGS.keys())
+_INLINE_SHORT_CHARS: dict[str, tuple[str, ...]] = {
+    "python": ("c",),
+    "python3": ("c",),
+    "py": ("c",),
+    "pythonw": ("c",),
+    "node": ("e", "p"),
+    "nodejs": ("e", "p"),
+    "perl": ("e", "E"),
+    "ruby": ("e",),
+    "php": ("r",),
+}
+_PS_COMMAND_PREFIXES = frozenset({"c", "co", "com", "comm", "comma", "comman", "command"})
 _READ_CMDS = frozenset({
     "cat", "head", "tail", "type", "more", "less",
     "get-content", "gc", "awk", "rg", "grep",
@@ -640,15 +658,44 @@ def _head_word(text: str) -> str:
 
 
 def _raw_head_word(parsed: _Cmd) -> str | None:
+    if not parsed.program:
+        return None
     for word in parsed.words:
         if word == "&":
             continue
         if _ASSIGN_RE.match(word):
             continue
-        if _normalize_exe(word) in _WRAPPERS:
-            continue
-        return word
+        if _normalize_exe(word) == parsed.program:
+            return word
     return None
+
+
+def _ps_command_match(token: str) -> tuple[bool, str | None]:
+    """Check if token is an unambiguous PowerShell -Command prefix.
+
+    Matches -c, /c, --c, -co, -com, -comm, -comma, -comman, -command and the
+    / and -- forms. Does not match -configurationname, -custompipename, etc.
+    Returns (is_match, attached_value).
+    """
+    low = token.lower()
+    if low.startswith("--"):
+        opt = low[2:]
+    elif low.startswith("-") or low.startswith("/"):
+        opt = low[1:]
+    else:
+        return False, None
+
+    if ":" in opt:
+        name, val = opt.split(":", 1)
+        if name in _PS_COMMAND_PREFIXES:
+            return True, val
+    elif "=" in opt:
+        name, val = opt.split("=", 1)
+        if name in _PS_COMMAND_PREFIXES:
+            return True, val
+    elif opt in _PS_COMMAND_PREFIXES:
+        return True, None
+    return False, None
 
 
 def _is_ps_encoded_flag(token: str) -> bool:
@@ -743,6 +790,8 @@ def _unwrap_statement(
     # bash, sh, zsh, dash
     if head_low in _POSIX_SHELLS:
         args = words[first_non_assign + 1:]
+        if any(a in _INTROSPECTION for a in args):
+            return None, None
         c_set = False
         cmd_words: list[str] = []
         operand: str | None = None
@@ -793,17 +842,21 @@ def _unwrap_statement(
         for w in args:
             if _is_ps_encoded_flag(w):
                 return _encoded_ps_reason(statement), None
-        idx = -1
+        if any(a in _INTROSPECTION for a in args):
+            return None, None
         for i, w in enumerate(args):
-            w_low = w.lower()
-            if w_low in {"-c", "-command", "/c", "/command", "--command"}:
-                idx = i
-                break
-            if w_low.startswith("-c:") or w_low.startswith("-command:"):
-                return None, w.split(":", 1)[1]
-        if idx >= 0 and idx + 1 < len(args):
-            inner = " ".join(args[idx + 1:])
-            return None, inner
+            is_cmd, attached = _ps_command_match(w)
+            if is_cmd:
+                if attached is not None:
+                    if i + 1 < len(args):
+                        inner = f"{attached} {' '.join(args[i + 1:])}".strip()
+                    else:
+                        inner = attached.strip()
+                elif i + 1 < len(args):
+                    inner = " ".join(args[i + 1:]).strip()
+                else:
+                    inner = ""
+                return None, inner
         operand = _ps_shell_operand(args)
         if operand is None:
             return _stdin_shell_reason(statement), None
@@ -817,51 +870,16 @@ def _unwrap_statement(
         args = words[first_non_assign + 1:]
         if args:
             for i, a in enumerate(args):
-                if a.lower() in {"-command", "-c"} and i + 1 < len(args):
-                    return None, " ".join(args[i + 1:])
+                is_cmd, attached = _ps_command_match(a)
+                if is_cmd:
+                    if attached is not None:
+                        if i + 1 < len(args):
+                            return None, f"{attached} {' '.join(args[i + 1:])}".strip()
+                        return None, attached.strip()
+                    if i + 1 < len(args):
+                        return None, " ".join(args[i + 1:]).strip()
+                    return None, ""
             return None, " ".join(args)
-        return None, None
-
-    # env
-    if head_low == "env":
-        args = words[first_non_assign + 1:]
-        for i, a in enumerate(args):
-            if a in {"-S", "--split-string"} and i + 1 < len(args):
-                return None, " ".join(args[i + 1:])
-        rem = _skip_wrapper(words, first_non_assign + 1, "env")
-        if rem < len(words):
-            return None, " ".join(words[rem:])
-        return None, None
-
-    # xargs
-    if head_low == "xargs":
-        args = words[first_non_assign + 1:]
-        i = 0
-        while i < len(args):
-            a = args[i]
-            if a in {"-n", "-L", "-I", "-s", "-E", "-d", "-P", "-a"} and i + 1 < len(args):
-                i += 2
-                continue
-            if a.startswith("-"):
-                i += 1
-                continue
-            break
-        if i < len(args):
-            return None, " ".join(args[i:])
-        return None, None
-
-    # time, nohup
-    if head_low in {"time", "nohup"}:
-        rem = _skip_wrapper(words, first_non_assign + 1, head_low)
-        if rem < len(words):
-            return None, " ".join(words[rem:])
-        return None, None
-
-    # command, builtin, exec
-    if head_low in {"command", "builtin", "exec"}:
-        rem = _skip_wrapper(words, first_non_assign + 1, head_low)
-        if rem < len(words):
-            return None, " ".join(words[rem:])
         return None, None
 
     # eval
@@ -871,21 +889,17 @@ def _unwrap_statement(
             return None, " ".join(args)
         return None, None
 
-    # sudo
-    if head_low == "sudo":
-        args = words[first_non_assign + 1:]
-        i = 0
-        while i < len(args):
-            a = args[i]
-            if a in {"-u", "-g", "-p", "-h", "-c"} and i + 1 < len(args):
-                i += 2
-                continue
-            if a.startswith("-"):
-                i += 1
-                continue
-            break
-        if i < len(args):
-            return None, " ".join(args[i:])
+    # Wrappers: env, time, nohup, command, builtin, exec, sudo, timeout, nice,
+    # setsid, stdbuf, watch, flock, ionice, taskset, xargs, wsl, find
+    if head_low in _WRAPPERS:
+        if head_low == "env":
+            args = words[first_non_assign + 1:]
+            for i, a in enumerate(args):
+                if a in {"-S", "--split-string"} and i + 1 < len(args):
+                    return None, " ".join(args[i + 1:])
+        rem = _skip_wrapper(words, first_non_assign + 1, head_low)
+        if rem < len(words):
+            return None, " ".join(words[rem:])
         return None, None
 
     return None, None
@@ -955,26 +969,43 @@ def _inline_code_check(
 ) -> str | None:
     prog = parsed.program
     flags = _INLINE_FLAGS.get(prog, ("-c",))
+    short_chars = _INLINE_SHORT_CHARS.get(prog, ())
     code_pieces: list[str] = []
 
     args = parsed.args
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg in flags:
+        if arg in flags and arg.startswith("--"):
             if i + 1 < len(args):
-                code_pieces.append(args[i + 1])
+                code_pieces.append(_strip_surrounding_quotes(args[i + 1]))
                 i += 2
             else:
                 i += 1
-        elif any(arg.startswith(f) and len(arg) > len(f) for f in flags if len(f) == 2):
-            for f in flags:
-                if len(f) == 2 and arg.startswith(f) and len(arg) > len(f):
-                    code_pieces.append(arg[len(f):])
+            continue
+        if any(arg.startswith(f + "=") for f in flags if f.startswith("--")):
+            code_pieces.append(_strip_surrounding_quotes(arg.split("=", 1)[1]))
+            i += 1
+            continue
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            cluster = arg[1:]
+            matched_idx = -1
+            for idx, ch in enumerate(cluster):
+                if ch in short_chars:
+                    matched_idx = idx
                     break
-            i += 1
-        else:
-            i += 1
+            if matched_idx >= 0:
+                pos = matched_idx + 1
+                if pos < len(arg) - 1:
+                    code_pieces.append(_strip_surrounding_quotes(arg[pos + 1:]))
+                    i += 1
+                elif i + 1 < len(args):
+                    code_pieces.append(_strip_surrounding_quotes(args[i + 1]))
+                    i += 2
+                else:
+                    i += 1
+                continue
+        i += 1
 
     if "<<" in statement:
         code_pieces.append(statement)
@@ -1080,19 +1111,50 @@ def _git_check(
     return None
 
 
-def _git_subcommand(parsed: _Cmd) -> str | None:
+def _git_subcommand_and_args(parsed: _Cmd) -> tuple[str | None, list[str]]:
     i = 0
     args = parsed.args
     while i < len(args):
         arg = args[i]
-        if arg in _GIT_VALUE_FLAGS:
+        if arg in _GIT_VALUE_FLAGS and i + 1 < len(args):
             i += 2
             continue
         if arg.startswith("-"):
             i += 1
             continue
-        return arg.lower()
-    return None
+        return arg.lower(), args[i + 1:]
+    return None, []
+
+
+def _git_subcommand(parsed: _Cmd) -> str | None:
+    sub, _ = _git_subcommand_and_args(parsed)
+    return sub
+
+
+def _is_proven_non_source_file(target: str, effective_cwd: str) -> bool:
+    """Return True only if target is proven to be a single non-source file."""
+    if not target or not isinstance(target, str):
+        return False
+    t = target.strip()
+    if t in {".", "./", ".\\"} or t.startswith("./.") or t.startswith(".\\."):
+        return False
+    if t.endswith("/") or t.endswith("\\"):
+        return False
+    if any(ch in t for ch in "*?[]"):
+        return False
+    try:
+        resolved = _canonical_path(t, effective_cwd)
+        if resolved.is_dir():
+            return False
+    except (OSError, ValueError):
+        pass
+    p = Path(t)
+    suffix = p.suffix.lower()
+    if not suffix:
+        return False
+    if suffix in _DENIED_WRITE_EXTS:
+        return False
+    return True
 
 
 def _git_config_positionals(args: list[str]) -> list[str]:
@@ -1155,26 +1217,80 @@ def _git_mutation_check(
     effective_cwd: str,
     env: Mapping[str, str] | None,
 ) -> str | None:
-    sub = _git_subcommand(parsed)
+    sub, sub_args = _git_subcommand_and_args(parsed)
     if sub is None or sub not in _GIT_MUTATE_SUBS:
         return None
-    args = parsed.args
     if sub in {"apply", "am"}:
         # Patches can rewrite any source file wholesale; the argv cannot prove
         # otherwise, so fail closed for both tiers.
         return _git_mutation_reason(statement)
-    if "--" in args:
-        targets = args[args.index("--") + 1:]
-    elif sub == "checkout":
-        # Only the "checkout -- <path>" form carries paths.
-        return None
-    else:
-        targets = args
-    for target in targets:
-        if not isinstance(target, str) or target.startswith("-"):
-            continue
-        if _is_source_target(target, effective_cwd, env):
+
+    if sub == "restore":
+        if "--" in sub_args:
+            targets = sub_args[sub_args.index("--") + 1:]
+        else:
+            targets = []
+            i = 0
+            while i < len(sub_args):
+                arg = sub_args[i]
+                if arg in {"-s", "--source"} and i + 1 < len(sub_args):
+                    i += 2
+                    continue
+                if arg.startswith("-"):
+                    i += 1
+                    continue
+                targets.append(arg)
+                i += 1
+        if not targets:
             return _git_mutation_reason(statement)
+        for target in targets:
+            if not _is_proven_non_source_file(target, effective_cwd):
+                return _git_mutation_reason(statement)
+        return None
+
+    if sub == "checkout":
+        if "--" in sub_args:
+            targets = sub_args[sub_args.index("--") + 1:]
+            if not targets:
+                return _git_mutation_reason(statement)
+            for target in targets:
+                if not _is_proven_non_source_file(target, effective_cwd):
+                    return _git_mutation_reason(statement)
+            return None
+
+        # checkout without "--"
+        positionals: list[str] = []
+        i = 0
+        while i < len(sub_args):
+            arg = sub_args[i]
+            low = arg.lower()
+            if low in {"-b", "--orphan"} and i + 1 < len(sub_args):
+                i += 2
+                continue
+            if arg.startswith("-"):
+                i += 1
+                continue
+            positionals.append(arg)
+            i += 1
+
+        for idx, pos in enumerate(positionals):
+            clean_pos = pos.strip()
+            if clean_pos in {".", "./", ".\\"} or clean_pos.startswith("./.") or clean_pos.startswith(".\\."):
+                return _git_mutation_reason(statement)
+            if clean_pos.endswith("/") or clean_pos.endswith("\\"):
+                return _git_mutation_reason(statement)
+            if is_source_path(clean_pos) or _has_denied_write_ext(clean_pos):
+                return _git_mutation_reason(statement)
+            try:
+                resolved = _canonical_path(clean_pos, effective_cwd)
+                if resolved.is_file() and (is_source_path(str(resolved)) or _has_denied_write_ext(str(resolved))):
+                    return _git_mutation_reason(statement)
+                if len(positionals) >= 2 and idx > 0 and resolved.is_dir():
+                    return _git_mutation_reason(statement)
+            except (OSError, ValueError):
+                pass
+        return None
+
     return None
 
 
@@ -1860,8 +1976,11 @@ def _head(words: list[str]) -> tuple[str, int]:
                 return "", total
             return _normalize_exe(exe), total
         if low in _WRAPPERS:
-            index = _skip_wrapper(words, index + 1, low)
-            continue
+            wrapped_at = _skip_wrapper(words, index + 1, low)
+            if wrapped_at < total:
+                index = wrapped_at
+                continue
+            return low, index + 1
         if low in _PYTHON:
             script_base, script_at = _first_python_script(words, index + 1)
             if not script_base:
@@ -1884,7 +2003,7 @@ def _first_python_script(words: list[str], index: int) -> tuple[str, int]:
                 return _basename(words[index]), index + 1
             return "", total
         low = word.lower()
-        if low in {"-c", "-"}:
+        if low == "-" or (low.startswith("-") and not low.startswith("--") and "c" in low[1:]):
             return "", total
         if low == "-m":
             if index + 1 < total:
@@ -1904,19 +2023,262 @@ def _first_python_script(words: list[str], index: int) -> tuple[str, int]:
 
 
 def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
-    while index < len(words):
+    total = len(words)
+    w_low = wrapper.lower()
+
+    if w_low == "env":
+        while index < total:
+            word = words[index]
+            if _ASSIGN_RE.match(word):
+                index += 1
+                continue
+            if word in _ENV_VALUE_FLAGS and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low in {"time", "nohup"}:
+        while index < total:
+            word = words[index]
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low in {"exec", "command"}:
+        while index < total:
+            word = words[index]
+            if word in {"-a"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low in {"start", "call"}:
+        while index < total:
+            word = words[index]
+            if word.startswith("/"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "sudo":
+        while index < total:
+            word = words[index]
+            if word in {"-u", "-g", "-p", "-h", "-c"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "timeout":
+        while index < total:
+            word = words[index]
+            if word in {"-k", "--kill-after", "-s", "--signal"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("--kill-after=") or word.startswith("--signal="):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        if index < total:
+            index += 1
+        return index
+
+    if w_low == "nice":
+        while index < total:
+            word = words[index]
+            if word == "-n" and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("-n") and len(word) > 2:
+                index += 1
+                continue
+            if word.startswith("--adjustment"):
+                index += 1
+                continue
+            if re.match(r"^[-+][0-9]+$", word):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "setsid":
+        while index < total:
+            word = words[index]
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "stdbuf":
+        while index < total:
+            word = words[index]
+            if word in {"-i", "-o", "-e", "--input", "--output", "--error"} and index + 1 < total:
+                index += 2
+                continue
+            if (
+                (word.startswith("-i") or word.startswith("-o") or word.startswith("-e"))
+                and len(word) > 2
+            ):
+                index += 1
+                continue
+            if (
+                word.startswith("--input=")
+                or word.startswith("--output=")
+                or word.startswith("--error=")
+            ):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "watch":
+        while index < total:
+            word = words[index]
+            if word in {"-n", "--interval"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("-n") and len(word) > 2:
+                index += 1
+                continue
+            if word.startswith("--interval="):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "flock":
+        while index < total:
+            word = words[index]
+            if word in {"-w", "-W", "--wait", "--timeout", "-E", "--conflict-exit-code"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("--wait=") or word.startswith("--timeout="):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        if index < total:
+            index += 1
+        if index < total and words[index] in {"-c", "-C", "--command"}:
+            index += 1
+        return index
+
+    if w_low == "ionice":
+        while index < total:
+            word = words[index]
+            if word in {"-c", "-n", "--class", "--classdata"} and index + 1 < total:
+                index += 2
+                continue
+            if (word.startswith("-c") or word.startswith("-n")) and len(word) > 2:
+                index += 1
+                continue
+            if word.startswith("--class=") or word.startswith("--classdata="):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "taskset":
+        has_c = False
+        while index < total:
+            word = words[index]
+            if word in {"-c", "--cpu-list"}:
+                has_c = True
+                index += 1
+                if index < total:
+                    index += 1
+                continue
+            if word.startswith("-c") and len(word) > 2:
+                has_c = True
+                index += 1
+                continue
+            if word.startswith("--cpu-list="):
+                has_c = True
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        if not has_c and index < total:
+            index += 1
+        return index
+
+    if w_low == "xargs":
+        while index < total:
+            word = words[index]
+            if word in {"-n", "-L", "-I", "-s", "-E", "-d", "-P", "-a"} and index + 1 < total:
+                index += 2
+                continue
+            if any(word.startswith(opt) for opt in ("-I", "-n", "-s", "-L", "-d", "-E", "-P", "-a")) and len(word) > 2:
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "wsl":
+        while index < total:
+            word = words[index]
+            if word in {"-e", "--exec", "--"}:
+                return index + 1
+            if word in {"-d", "--distribution", "-u", "--user"} and index + 1 < total:
+                index += 2
+                continue
+            if word.startswith("--distribution=") or word.startswith("--user="):
+                index += 1
+                continue
+            if word.startswith("-"):
+                index += 1
+                continue
+            break
+        return index
+
+    if w_low == "find":
+        i = index
+        while i < total:
+            if words[i] in {"-exec", "-execdir"}:
+                return i + 1
+            i += 1
+        return total
+
+    while index < total:
         word = words[index]
         if _ASSIGN_RE.match(word):
             index += 1
             continue
         if word.startswith("-"):
-            index += 1
-            if wrapper == "env" and word in _ENV_VALUE_FLAGS and index < len(words):
-                index += 1
-            if wrapper in {"exec", "command"} and word in {"-a"} and index < len(words):
-                index += 1
-            continue
-        if wrapper in {"start", "call"} and word.startswith("/"):
             index += 1
             continue
         break

@@ -1404,3 +1404,75 @@ def test_round4_dispatch_bash_guard_subprocess(tmp_path: Path) -> None:
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
 
+
+# --- round 5 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_rule"),
+    [
+        ("powershell -co codex exec hi", "R2"),
+        ("pwsh -com codex.exe", "R2"),
+        ('python -ic "import os; os.system(\'codex\')"', "R2"),
+        ("timeout 5 codex exec hi", "R2"),
+        ("nice -n 5 codex exec hi", "R2"),
+        ("setsid codex exec hi", "R2"),
+        ("git checkout HEAD foo.py", "R3"),
+        ("git checkout -- .", "R3"),
+        ("git restore .", "R3"),
+    ],
+)
+def test_round5_bypasses_and_mutations_are_denied(
+    tmp_path: Path, command: str, expected_rule: str
+) -> None:
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+    assert expected_rule in _reason(result)
+    result_ps = dispatch_bash_guard.decide(_bash(command, "PowerShell"), _env(tmp_path))
+    assert result_ps is not None
+    assert expected_rule in _reason(result_ps)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git checkout main",
+        "git switch main",
+        "bash --version",
+        "timeout 5 python -m pytest -q",
+    ],
+)
+def test_round5_legitimate_commands_remain_allowed(tmp_path: Path, command: str) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = _hook("Bash", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None
+    payload_ps = _hook("PowerShell", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload_ps, _env(tmp_path / "state")) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_rule"),
+    [
+        ("powershell -co codex exec hi", "R2"),
+        ("pwsh -com codex.exe", "R2"),
+        ('python -ic "import os; os.system(\'codex\')"', "R2"),
+        ("timeout 5 codex exec hi", "R2"),
+        ("nice -n 5 codex exec hi", "R2"),
+        ("setsid codex exec hi", "R2"),
+        ("git checkout HEAD foo.py", "R3"),
+        ("git checkout -- .", "R3"),
+        ("git restore .", "R3"),
+    ],
+)
+def test_round5_dispatch_bash_guard_subprocess(
+    tmp_path: Path, command: str, expected_rule: str
+) -> None:
+    proc = _run_hook(
+        "dispatch_bash_guard.py",
+        json.dumps(_bash(command)).encode(),
+        tmp_path,
+    )
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert expected_rule in body["hookSpecificOutput"]["permissionDecisionReason"]
