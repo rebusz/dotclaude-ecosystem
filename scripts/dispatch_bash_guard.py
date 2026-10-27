@@ -4,9 +4,17 @@
 Models are reachable only through ``python D:/APPS/_shared/dispatch/dispatch.py``.
 Direct launches of codex, glm, kimi, cursor-agent, agy, opencode, claude -p/--print,
 and the CDP/audit scripts are denied. Bash and PowerShell may not write guarded
-paths or source files. The supervisor may not read source files or non-allowlisted
-source directories with shell utilities. Nested shells are unwrapped up to
-recursion depth 4.
+paths, source files, or script files (.sh .cmd .bat .ps1 .psm1 .vbs). The
+supervisor may not read source files or non-allowlisted source directories with
+shell utilities. Nested shells are unwrapped up to recursion depth 4; command
+substitutions $(...)/backticks, subshell and group wrappers, PowerShell script
+blocks and function-definition bodies are scanned as nested statements. Shells
+fed from stdin or pointed at a script outside a tracked git repository are
+denied. git stays allowed by default except for execution-bearing config and
+alias/core writes (both tiers), source reads via show/grep/log -p/blame/
+cat-file -p (supervisor), and apply/am/restore/checkout -- source mutations
+(both tiers). Scratch and temp exemptions are anchored to the canonical
+scratch root and the system temp directory, never to a bare path component.
 
 Honest boundary note: hooks stop accidental and rationalised bypass; they are
 not a security boundary against an agent that deliberately uses the operator OS
@@ -22,7 +30,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -33,6 +40,7 @@ from dispatch_guard_common import (  # noqa: E402 - sibling import, same pattern
     SOURCE_EXTS,
     deny,
     is_allowlisted_read,
+    is_scratch_root_path,
     is_source_path,
     is_tier2,
     lane_repair_job_exists,
@@ -86,7 +94,7 @@ _REDIR_RE = re.compile(r"(\d*)(>>|>)")
 _MAX_RECURSION_DEPTH = 4
 _INTERPRETERS = frozenset({
     "python", "python3", "py", "pythonw",
-    "bash", "sh", "zsh", "pwsh", "powershell",
+    "bash", "sh", "zsh", "dash", "pwsh", "powershell",
     "node", "perl", "ruby",
 })
 _READ_CMDS = frozenset({
@@ -106,12 +114,31 @@ _PY_WRITE_RE = re.compile(
     re.IGNORECASE,
 )
 _PY_SPECIAL_STRINGS_RE = re.compile(
-    r"\b(?:dispatch_guard_common|lane_authorize|write_override|load_or_create_key)\b"
+    r"\b(?:dispatch_guard_common|lane_authorize|write_override|"
+    r"load_or_create_key|dispatch_override)\b"
 )
 _SOURCE_EXT_STR_RE = re.compile(
     r"['\"][^'\"]*?\.(?:py|ts|tsx|js|jsx|mjs|cjs)['\"]",
     re.IGNORECASE,
 )
+_SCRIPT_FILE_EXTS = (".sh", ".cmd", ".bat", ".ps1", ".psm1", ".vbs")
+_DENIED_WRITE_EXTS = SOURCE_EXTS + _SCRIPT_FILE_EXTS
+_POSIX_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+_PS_SHELLS = frozenset({"powershell", "pwsh"})
+_POSIX_SHELL_VALUE_FLAGS = frozenset({"--rcfile", "--init-file", "-o", "-O"})
+_PS_SHELL_VALUE_FLAGS = frozenset({
+    "-executionpolicy", "-outputformat", "-o", "-inputformat",
+    "-windowstyle", "-workingdirectory", "-custompipename",
+    "-configurationname", "-settingsfile",
+})
+_GIT_VALUE_FLAGS = frozenset({
+    "-c", "-C", "--git-dir", "--work-tree", "--namespace",
+    "--exec-path", "--super-prefix",
+})
+_GIT_READ_SUBS = frozenset({"show", "grep", "log", "blame", "cat-file"})
+_GIT_MUTATE_SUBS = frozenset({"apply", "am", "restore", "checkout"})
+_FUNC_DEF_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{")
+_ROUTER_CANONICAL = "d:/apps/_shared/dispatch/dispatch.py"
 
 
 class _Cmd(NamedTuple):
@@ -247,17 +274,9 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     effective_cwd = str(raw_cwd) if raw_cwd else os.getcwd()
     tier2 = is_tier2(payload, env)
 
-    for statement in split_statements(command):
-        reason = _statement_reason(
-            statement=statement,
-            env=env,
-            depth=0,
-            effective_cwd=effective_cwd,
-            is_tier2_caller=tier2,
-        )
-        if reason is not None:
-            return deny(reason)
-        effective_cwd = _update_cwd(effective_cwd, statement)
+    reason = _command_text_reason(command, env, 0, effective_cwd, tier2, set())
+    if reason is not None:
+        return deny(reason)
     return None
 
 
@@ -270,72 +289,125 @@ def main() -> int:
     return run_guarded(_HOOK_FILE, _from_stdin)
 
 
+def _command_text_reason(
+    text: str,
+    env: Mapping[str, str] | None,
+    depth: int,
+    effective_cwd: str,
+    is_tier2_caller: bool,
+    banned_git_aliases: set[str] | None,
+) -> str | None:
+    cwd = effective_cwd
+    for stmt in split_statements(text):
+        reason = _statement_reason(
+            statement=stmt,
+            env=env,
+            depth=depth,
+            effective_cwd=cwd,
+            is_tier2_caller=is_tier2_caller,
+            banned_git_aliases=banned_git_aliases,
+        )
+        if reason is not None:
+            return reason
+        cwd = _update_cwd(cwd, stmt)
+    return None
+
+
 def _statement_reason(
     statement: str,
     env: Mapping[str, str] | None,
     depth: int = 0,
     effective_cwd: str = "",
     is_tier2_caller: bool = False,
+    banned_git_aliases: set[str] | None = None,
 ) -> str | None:
     if depth >= _MAX_RECURSION_DEPTH:
         return _depth_exceeded_reason(statement)
+    if banned_git_aliases is None:
+        banned_git_aliases = set()
+
+    # 1. Inspect substitutions before stripping group suffixes: an assignment
+    # such as RESULT=$(codex exec hi) also ends in ")" but is not a group.
+    pieces, rewritten = _extract_command_substitutions(statement)
+    for piece in pieces:
+        piece_reason = _command_text_reason(
+            piece, env, depth + 1, effective_cwd, is_tier2_caller, banned_git_aliases,
+        )
+        if piece_reason is not None:
+            return piece_reason
+    head = _head_word(rewritten)
+    if "$(" in head or "`" in head:
+        return _substitution_reason(statement)
+
+    # 2. Subshell / group / function-definition wrappers must not hide the program
+    inner = _ungroup(statement)
+    if inner != statement:
+        return _command_text_reason(
+            inner, env, depth + 1, effective_cwd, is_tier2_caller, banned_git_aliases,
+        )
 
     parsed = _parse(statement)
 
-    # 1. Check outer statement redirections
+    # 3. Check outer statement redirections
     for path in parsed.redirs:
         kind = _write_kind(path, effective_cwd, env)
         if kind is not None:
             return _mutate_reason(statement, kind)
 
-    # 2. Check wrapper unwrapping
-    err_reason, inner_cmd = _unwrap_statement(statement, parsed)
+    # 4. Check wrapper unwrapping
+    err_reason, inner_cmd = _unwrap_statement(statement, parsed, effective_cwd, env)
     if err_reason is not None:
         return err_reason
     if inner_cmd is not None:
-        inner_stmts = split_statements(inner_cmd)
-        inner_cwd = effective_cwd
-        for inner_stmt in inner_stmts:
-            inner_reason = _statement_reason(
-                statement=inner_stmt,
-                env=env,
-                depth=depth + 1,
-                effective_cwd=inner_cwd,
-                is_tier2_caller=is_tier2_caller,
-            )
-            if inner_reason is not None:
-                return inner_reason
-            inner_cwd = _update_cwd(inner_cwd, inner_stmt)
-        return None
+        return _command_text_reason(
+            inner_cmd, env, depth + 1, effective_cwd, is_tier2_caller, banned_git_aliases,
+        )
 
-    # 3. Python inline code / script inspection
+    # 5. Python inline code / script inspection
     if parsed.program in _PYTHON:
         py_reason = _python_check(statement, parsed, effective_cwd, env)
         if py_reason is not None:
             return py_reason
 
-    # 4. Git execution-bearing config check
+    # 6. Git: allowed by default with specific denies
     if parsed.program == "git":
-        git_reason = _git_check(statement, parsed)
+        git_reason = _git_check(statement, parsed, banned_git_aliases)
         if git_reason is not None:
             return git_reason
+        sub = _git_subcommand(parsed)
+        if sub is not None and sub in banned_git_aliases:
+            return _git_alias_reason(statement)
+        if not is_tier2_caller:
+            read_reason = _git_supervisor_read_check(statement, parsed, effective_cwd, env)
+            if read_reason is not None:
+                return read_reason
+        mut_reason = _git_mutation_check(statement, parsed, effective_cwd, env)
+        if mut_reason is not None:
+            return mut_reason
         return None
 
-    # 5. Direct launch check
-    if not _is_router(parsed) and _is_direct(parsed) and not _introspects(parsed):
+    # 7. Direct launch check
+    if not _is_router(parsed, effective_cwd) and _is_direct(parsed) and not _introspects(parsed):
         job_id = _repair_job(parsed.args)
         if job_id is None:
             return _launch_reason(statement)
         if not lane_repair_job_exists(job_id, env):
             return _unknown_job_reason(statement, job_id)
 
-    # 6. Supervisor read rule
+    # 8. Shell script operands and direct script runs
+    raw_head = _raw_head_word(parsed)
+    if raw_head is not None and raw_head.lower().endswith(_SCRIPT_FILE_EXTS):
+        script_reason = _script_operand_reason(raw_head, statement, effective_cwd, env)
+        if script_reason is not None:
+            return script_reason
+
+    # 9. Supervisor read rule
     if not is_tier2_caller and _is_read_cmd(parsed):
-        read_reason = _supervisor_read_check(statement, parsed, effective_cwd)
+        read_reason = _supervisor_read_check(statement, parsed, effective_cwd, env)
         if read_reason is not None:
             return read_reason
 
-    # 7. Mutation checks for other commands (cp, mv, sed, tee, rm, set-content, etc.)
+    # 10. Mutation checks for other commands (cp, mv, sed, tee, rm, set-content, etc.)
     for path in _write_paths(parsed, effective_cwd):
         kind = _write_kind(path, effective_cwd, env)
         if kind is not None:
@@ -344,7 +416,180 @@ def _statement_reason(
     return None
 
 
-def _unwrap_statement(statement: str, parsed: _Cmd) -> tuple[str | None, str | None]:
+def _ungroup(statement: str) -> str:
+    """Strip subshell/group wrappers and function-definition prefixes.
+
+    Removes leading "(" / "{" (including the PowerShell "& {" call form and
+    "name(){ ... }" function definitions) and trailing ")" / "}" so wrappers
+    cannot hide the program word. Returns the original statement when nothing
+    was stripped.
+    """
+    s = statement.strip()
+    changed = s != statement
+    while s:
+        if s.startswith("&"):
+            tail = s[1:].lstrip()
+            if tail.startswith("{"):
+                s = tail
+                changed = True
+                continue
+            break
+        m = _FUNC_DEF_PREFIX_RE.match(s)
+        if m:
+            s = s[m.end():].lstrip()
+            changed = True
+            continue
+        if s[0] in "({":
+            s = s[1:].lstrip()
+            changed = True
+            continue
+        if s[-1] in ")}":
+            s = s[:-1].rstrip()
+            changed = True
+            continue
+        break
+    return s if changed else statement
+
+
+def _extract_command_substitutions(text: str) -> tuple[list[str], str]:
+    """Extract $(...) and backtick command substitutions outside single quotes.
+
+    Returns the inner texts and the statement with each substitution span
+    replaced by a placeholder, so an unbalanced "$(" or backtick left in the
+    program word can be detected. Arithmetic $((...)) spans are skipped.
+    """
+    pieces: list[str] = []
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_single = False
+    in_double = False
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and not in_single:
+            out.append(ch)
+            if i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            i += 1
+            continue
+        if ch == "'" and not in_double:
+            out.append(ch)
+            in_single = not in_single
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            out.append(ch)
+            in_double = not in_double
+            i += 1
+            continue
+        if ch == "$" and not in_single and i + 1 < n and text[i + 1] == "(":
+            if i + 2 < n and text[i + 2] == "(":
+                end = _skip_arithmetic(text, i + 2)
+                out.append(text[i:end])
+                i = end
+                continue
+            inner, end = _match_paren(text, i + 2)
+            if inner is None:
+                out.append(ch)
+                i += 1
+                continue
+            pieces.append(inner)
+            out.append("X")
+            i = end
+            continue
+        if ch == "`" and not in_single:
+            close = text.find("`", i + 1)
+            if close < 0:
+                out.append(ch)
+                i += 1
+                continue
+            pieces.append(text[i + 1:close])
+            out.append("X")
+            i = close + 1
+            continue
+        out.append(ch)
+        i += 1
+    return pieces, "".join(out)
+
+
+def _match_paren(text: str, start: int) -> tuple[str | None, int]:
+    depth = 1
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "'":
+            j = text.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            i = n if j >= n else j + 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i], i + 1
+        i += 1
+    return None, start
+
+
+def _skip_arithmetic(text: str, start: int) -> int:
+    depth = 2
+    i = start
+    n = len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _head_word(text: str) -> str:
+    for token in text.split():
+        if token == "&":
+            continue
+        if _ASSIGN_RE.match(token):
+            continue
+        return token
+    return ""
+
+
+def _raw_head_word(parsed: _Cmd) -> str | None:
+    for word in parsed.words:
+        if word == "&":
+            continue
+        if _ASSIGN_RE.match(word):
+            continue
+        if _normalize_exe(word) in _WRAPPERS:
+            continue
+        return word
+    return None
+
+
+def _unwrap_statement(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> tuple[str | None, str | None]:
     """Return (error_reason, inner_command_text) if statement is an unwrappable wrapper."""
     words = parsed.words
     if not words:
@@ -377,7 +622,7 @@ def _unwrap_statement(statement: str, parsed: _Cmd) -> tuple[str | None, str | N
     if head_low == "cmd":
         idx = -1
         for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
-            if w.lower() in {"/c", "-c"}:
+            if w.lower() in {"/c", "-c", "/k", "-k"}:
                 idx = i
                 break
         if idx >= 0 and idx + 1 < len(words):
@@ -386,36 +631,50 @@ def _unwrap_statement(statement: str, parsed: _Cmd) -> tuple[str | None, str | N
                 return None, inner
         return None, None
 
-    # bash, sh, zsh
-    if head_low in {"bash", "sh", "zsh"}:
+    # bash, sh, zsh, dash
+    if head_low in _POSIX_SHELLS:
+        args = words[first_non_assign + 1:]
         idx = -1
-        for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
+        for i, w in enumerate(args):
             if w == "-c":
                 idx = i
                 break
             if w.startswith("-c") and len(w) > 2:
                 return None, w[2:]
-        if idx >= 0 and idx + 1 < len(words):
-            return None, words[idx + 1]
+        if idx >= 0 and idx + 1 < len(args):
+            return None, args[idx + 1]
+        operand = _posix_shell_operand(args)
+        if operand is None:
+            return _stdin_shell_reason(statement), None
+        bad = _script_operand_reason(operand, statement, effective_cwd, env)
+        if bad is not None:
+            return bad, None
         return None, None
 
     # powershell, pwsh
-    if head_low in {"powershell", "pwsh"}:
-        for w in words[first_non_assign + 1:]:
+    if head_low in _PS_SHELLS:
+        args = words[first_non_assign + 1:]
+        for w in args:
             w_low = w.lower()
             if w_low == "-encodedcommand" or w_low.startswith("-enc"):
                 return _encoded_ps_reason(statement), None
         idx = -1
-        for i, w in enumerate(words[first_non_assign + 1:], start=first_non_assign + 1):
+        for i, w in enumerate(args):
             w_low = w.lower()
             if w_low in {"-c", "-command", "/c", "/command", "--command"}:
                 idx = i
                 break
             if w_low.startswith("-c:") or w_low.startswith("-command:"):
                 return None, w.split(":", 1)[1]
-        if idx >= 0 and idx + 1 < len(words):
-            inner = " ".join(words[idx + 1:])
+        if idx >= 0 and idx + 1 < len(args):
+            inner = " ".join(args[idx + 1:])
             return None, inner
+        operand = _ps_shell_operand(args)
+        if operand is None:
+            return _stdin_shell_reason(statement), None
+        bad = _script_operand_reason(operand, statement, effective_cwd, env)
+        if bad is not None:
+            return bad, None
         return None, None
 
     # Invoke-Expression / iex
@@ -573,13 +832,15 @@ def _python_check(
                 f"\"{_snippet(statement)}\". "
                 f"Reach the model only through {_ROUTER}."
             )
+        # Mentioning the override/guard machinery is denied on its own: inline
+        # code that even references it is presumed tampering (R2-1).
+        if _PY_SPECIAL_STRINGS_RE.search(code):
+            return (
+                "R3 guarded-path mutation via Python denied (heuristic speed bump): "
+                f"\"{_snippet(statement)}\". "
+                f"Send the change through {_ROUTER}."
+            )
         if _PY_WRITE_RE.search(code):
-            if _PY_SPECIAL_STRINGS_RE.search(code):
-                return (
-                    "R3 guarded-path mutation via Python denied (heuristic speed bump): "
-                    f"\"{_snippet(statement)}\". "
-                    f"Send the change through {_ROUTER}."
-                )
             if _SOURCE_EXT_STR_RE.search(code):
                 return (
                     "R3 source-file mutation via Python denied (heuristic speed bump): "
@@ -593,7 +854,7 @@ def _python_check(
                         f"\"{_snippet(statement)}\". "
                         f"Send the change through {_ROUTER}."
                     )
-                if _is_source_target(literal, effective_cwd):
+                if _is_source_target(literal, effective_cwd, env):
                     return (
                         "R3 source-file mutation via Python denied (heuristic speed bump): "
                         f"\"{_snippet(statement)}\". "
@@ -603,7 +864,13 @@ def _python_check(
     return None
 
 
-def _git_check(statement: str, parsed: _Cmd) -> str | None:
+def _git_check(
+    statement: str,
+    parsed: _Cmd,
+    banned_git_aliases: set[str] | None = None,
+) -> str | None:
+    if banned_git_aliases is None:
+        banned_git_aliases = set()
     args = parsed.args
     i = 0
     while i < len(args):
@@ -633,6 +900,116 @@ def _git_check(statement: str, parsed: _Cmd) -> str | None:
                 return _git_config_reason(statement)
             if key_low.startswith("core."):
                 return _git_config_reason(statement)
+
+    # "git config" writing alias.* or core.* is denied; aliases registered in
+    # this command are remembered so later "git <alias>" statements are denied.
+    if _git_subcommand(parsed) == "config":
+        positionals = _git_config_positionals(args)
+        if positionals:
+            key = positionals[0].lower()
+            if key.startswith("alias.") or key.startswith("core."):
+                if len(positionals) >= 2:
+                    if key.startswith("alias."):
+                        banned_git_aliases.add(key[len("alias."):].strip())
+                    return _git_config_reason(statement)
+    return None
+
+
+def _git_subcommand(parsed: _Cmd) -> str | None:
+    i = 0
+    args = parsed.args
+    while i < len(args):
+        arg = args[i]
+        if arg in _GIT_VALUE_FLAGS:
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return arg.lower()
+    return None
+
+
+def _git_config_positionals(args: list[str]) -> list[str]:
+    start = -1
+    for i, arg in enumerate(args):
+        if arg.lower() == "config":
+            start = i + 1
+            break
+    if start < 0:
+        return []
+    positionals: list[str] = []
+    i = start
+    while i < len(args):
+        arg = args[i]
+        if arg in {"-f", "--file"}:
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        positionals.append(arg)
+        i += 1
+    return positionals
+
+
+def _git_supervisor_read_check(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
+    sub = _git_subcommand(parsed)
+    if sub is None or sub not in _GIT_READ_SUBS:
+        return None
+    args = parsed.args
+    if sub == "log":
+        patchlike = any(
+            a in {"-p", "-u", "--patch"} or a.lower().startswith("--patch")
+            for a in args
+        )
+        if not patchlike:
+            return None
+    if sub == "cat-file" and "-p" not in args:
+        return None
+    for target in args:
+        if not isinstance(target, str) or target.startswith("-"):
+            continue
+        candidates = [target]
+        if ":" in target:
+            candidates.append(target.split(":", 1)[1])
+        for cand in candidates:
+            if _is_non_allowlisted_source(cand, effective_cwd, env):
+                return _supervisor_read_reason(statement)
+    return None
+
+
+def _git_mutation_check(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
+    sub = _git_subcommand(parsed)
+    if sub is None or sub not in _GIT_MUTATE_SUBS:
+        return None
+    args = parsed.args
+    if sub in {"apply", "am"}:
+        # Patches can rewrite any source file wholesale; the argv cannot prove
+        # otherwise, so fail closed for both tiers.
+        return _git_mutation_reason(statement)
+    if "--" in args:
+        targets = args[args.index("--") + 1:]
+    elif sub == "checkout":
+        # Only the "checkout -- <path>" form carries paths.
+        return None
+    else:
+        targets = args
+    for target in targets:
+        if not isinstance(target, str) or target.startswith("-"):
+            continue
+        if _is_source_target(target, effective_cwd, env):
+            return _git_mutation_reason(statement)
     return None
 
 
@@ -645,11 +1022,27 @@ def _is_direct(parsed: _Cmd) -> bool:
     return _SCRIPT_RE.fullmatch(program) is not None
 
 
-def _is_router(parsed: _Cmd) -> bool:
+def _is_router(parsed: _Cmd, cwd: str = "") -> bool:
     if parsed.program != "dispatch.py" or not parsed.args:
         return False
     first = parsed.args[0].lower()
-    return first in _ROUTER_CMDS or first.endswith(".md")
+    if not (first in _ROUTER_CMDS or first.endswith(".md")):
+        return False
+    raw = next((w for w in parsed.words if _basename(w) == "dispatch.py"), None)
+    if raw is None:
+        return False
+    folded = raw.replace("\\", "/").lower()
+    if folded == _ROUTER_CANONICAL or "/_shared/dispatch/" in folded:
+        return True
+    if not folded.endswith("/dispatch/dispatch.py"):
+        return False
+    # Worktree form: only a dispatch.py inside a "dispatch/" directory of a
+    # tracked git repository is the router, never a scratch path.
+    try:
+        resolved = _canonical_path(raw, cwd or os.getcwd())
+    except Exception:
+        return False
+    return _in_tracked_repo(resolved)
 
 
 def _introspects(parsed: _Cmd) -> bool:
@@ -690,10 +1083,15 @@ def _is_read_cmd(parsed: _Cmd) -> bool:
     return False
 
 
-def _supervisor_read_check(statement: str, parsed: _Cmd, effective_cwd: str) -> str | None:
+def _supervisor_read_check(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
     # Check input redirections
     for r in parsed.input_redirs:
-        if _is_non_allowlisted_source(r, effective_cwd) or _is_non_allowlisted_dir(r, effective_cwd):
+        if _is_non_allowlisted_source(r, effective_cwd, env) or _is_non_allowlisted_dir(r, effective_cwd, env):
             return _supervisor_read_reason(statement)
 
     targets: list[str] = []
@@ -833,17 +1231,23 @@ def _supervisor_read_check(statement: str, parsed: _Cmd, effective_cwd: str) -> 
             index += 1
 
     for t in targets:
-        if _is_non_allowlisted_source(t, effective_cwd) or _is_non_allowlisted_dir(t, effective_cwd):
+        if _is_non_allowlisted_source(t, effective_cwd, env) or _is_non_allowlisted_dir(t, effective_cwd, env):
             return _supervisor_read_reason(statement)
     return None
 
 
-def _is_non_allowlisted_source(path: str, cwd: str) -> bool:
-    if is_allowlisted_read(path) or _under_scratch_or_tmp(path, cwd):
+def _is_non_allowlisted_source(
+    path: str, cwd: str, env: Mapping[str, str] | None,
+) -> bool:
+    if is_allowlisted_read(path, env=env, cwd=cwd):
+        return False
+    if is_scratch_root_path(path, env=env, cwd=cwd):
         return False
     try:
         resolved = _canonical_path(path, cwd)
-        if is_allowlisted_read(str(resolved)) or _under_scratch_or_tmp(str(resolved), cwd):
+        if is_allowlisted_read(str(resolved), env=env, cwd=cwd):
+            return False
+        if is_scratch_root_path(str(resolved), env=env, cwd=cwd):
             return False
         if is_source_path(str(resolved)) or is_source_path(path):
             return True
@@ -853,12 +1257,18 @@ def _is_non_allowlisted_source(path: str, cwd: str) -> bool:
     return False
 
 
-def _is_non_allowlisted_dir(path: str, cwd: str) -> bool:
-    if is_allowlisted_read(path) or _under_scratch_or_tmp(path, cwd):
+def _is_non_allowlisted_dir(
+    path: str, cwd: str, env: Mapping[str, str] | None,
+) -> bool:
+    if is_allowlisted_read(path, env=env, cwd=cwd):
+        return False
+    if is_scratch_root_path(path, env=env, cwd=cwd):
         return False
     try:
         resolved = _canonical_path(path, cwd)
-        if is_allowlisted_read(str(resolved)) or _under_scratch_or_tmp(str(resolved), cwd):
+        if is_allowlisted_read(str(resolved), env=env, cwd=cwd):
+            return False
+        if is_scratch_root_path(str(resolved), env=env, cwd=cwd):
             return False
         if resolved.is_dir():
             return True
@@ -882,22 +1292,73 @@ def _canonical_path(p: str, cwd: str) -> Path:
         return path_obj
 
 
-def _under_scratch_or_tmp(path: str, cwd: str) -> bool:
+def _in_tracked_repo(resolved: Path) -> bool:
     try:
-        resolved = _canonical_path(path, cwd)
-        parts_lower = [part.lower() for part in resolved.parts]
-        for part in parts_lower[:-1]:
-            if part in {"scratchpad", "tmp"}:
+        for parent in resolved.parents:
+            if (parent / ".git").exists():
                 return True
-        tmp_dir = Path(tempfile.gettempdir()).resolve()
-        try:
-            resolved.relative_to(tmp_dir)
-            return True
-        except (ValueError, RuntimeError):
-            pass
-    except Exception:
-        pass
+    except OSError:
+        return False
     return False
+
+
+def _script_operand_reason(
+    operand: str,
+    statement: str,
+    cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
+    cleaned = operand.strip().strip("'\"")
+    if not cleaned:
+        return None
+    if "*" in cleaned or "?" in cleaned:
+        return _script_operand_deny(statement, operand)
+    if is_scratch_root_path(cleaned, env=env, cwd=cwd):
+        return _script_operand_deny(statement, operand)
+    try:
+        resolved = _canonical_path(cleaned, cwd)
+    except Exception:
+        return _script_operand_deny(statement, operand)
+    if not _in_tracked_repo(resolved):
+        return _script_operand_deny(statement, operand)
+    return None
+
+
+def _posix_shell_operand(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return args[i + 1] if i + 1 < len(args) else None
+        if arg in _POSIX_SHELL_VALUE_FLAGS:
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return arg
+    return None
+
+
+def _ps_shell_operand(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        low = arg.lower()
+        if low == "--":
+            return args[i + 1] if i + 1 < len(args) else None
+        if low in {"-file", "-f", "--file"}:
+            return args[i + 1] if i + 1 < len(args) else None
+        if low.startswith("-file:") or low.startswith("-f:"):
+            return arg.split(":", 1)[1]
+        if low in _PS_SHELL_VALUE_FLAGS:
+            i += 2
+            continue
+        if low.startswith("-"):
+            i += 1
+            continue
+        return arg
+    return None
 
 
 def _is_guarded(path: str, cwd: str, env: Mapping[str, str] | None) -> bool:
@@ -914,25 +1375,32 @@ def _is_guarded(path: str, cwd: str, env: Mapping[str, str] | None) -> bool:
     return False
 
 
-def _is_source_target(path: str, cwd: str) -> bool:
+def _is_source_target(
+    path: str, cwd: str, env: Mapping[str, str] | None,
+) -> bool:
     cleaned = path.strip().strip("'\"")
-    if _under_scratch_or_tmp(cleaned, cwd):
+    if is_scratch_root_path(cleaned, env=env, cwd=cwd):
         return False
-    if is_source_path(cleaned):
+    if _has_denied_write_ext(cleaned):
         return True
     if "*" in cleaned or "?" in cleaned:
-        for ext in SOURCE_EXTS:
-            if cleaned.lower().endswith(ext):
-                return True
+        folded = cleaned.lower()
+        if any(folded.endswith(ext) for ext in _DENIED_WRITE_EXTS):
+            return True
         if cleaned.endswith("*") or cleaned.endswith("/*") or cleaned.endswith(r"\*"):
             return True
     return False
 
 
+def _has_denied_write_ext(path: str) -> bool:
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name.endswith(_DENIED_WRITE_EXTS)
+
+
 def _write_kind(path: str, cwd: str, env: Mapping[str, str] | None) -> str | None:
     if _is_guarded(path, cwd, env):
         return "guarded"
-    if _is_source_target(path, cwd):
+    if _is_source_target(path, cwd, env):
         return "source"
     return None
 
@@ -1616,6 +2084,44 @@ def _git_config_reason(statement: str) -> str:
     return (
         f"R2 execution-bearing git config denied: \"{_snippet(statement)}\". "
         f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _git_alias_reason(statement: str) -> str:
+    return (
+        f"R2 git alias registered in this command denied: \"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _git_mutation_reason(statement: str) -> str:
+    return (
+        f"R3 source mutation via git denied: \"{_snippet(statement)}\". "
+        f"Send the change through {_ROUTER}."
+    )
+
+
+def _substitution_reason(statement: str) -> str:
+    return (
+        "R2 unbalanced command substitution in the program word denied: "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _stdin_shell_reason(statement: str) -> str:
+    return (
+        "R2 stdin-fed shell denied (no -c/-Command and no tracked script operand): "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _script_operand_deny(statement: str, operand: str) -> str:
+    return (
+        "R2 shell script execution denied: scripts must live in a tracked git "
+        f"repository outside scratch/tmp roots: \"{_snippet(operand)}\" in "
+        f"\"{_snippet(statement)}\". Reach the model only through {_ROUTER}."
     )
 
 

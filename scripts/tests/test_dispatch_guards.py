@@ -1152,7 +1152,8 @@ def test_user_prompt_submit_crash_emits_decision_block(capsys: pytest.CaptureFix
 def test_corrupt_tier2_sessions_json_treats_caller_as_tier2(tmp_path: Path) -> None:
     env = _env(tmp_path)
     (tmp_path / "tier2_sessions.json").write_text("{corrupt: json", encoding="utf-8")
-    assert dispatch_guard_common.is_tier2({"session_id": "sess-unknown"}, env) is True
+    # Corrupt registry state must fail closed without granting Tier-2 powers.
+    assert dispatch_guard_common.is_tier2({"session_id": "sess-unknown"}, env) is False
 
 
 def test_tier_marker_failure_writes_tier2_pending_marker(
@@ -1192,3 +1193,99 @@ def test_legitimate_commands_are_allowed(tmp_path: Path, cmd: str) -> None:
     agent_id = "tier2_worker" if "rg " in cmd else None
     payload = _hook(tool_name, {"command": cmd}, cwd=str(work), agent_id=agent_id)
     assert dispatch_bash_guard.decide(payload, _env(state)) is None
+
+
+# --- Review Round 2 bypass regressions ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -c \"import dispatch_guard_common; dispatch_guard_common.write_override('workers', 60)\"",
+        'RESULT=$(codex exec hi)',
+        'X=`codex exec hi`',
+        '(codex exec hi)',
+        'printf x; bash run.sh',
+        'echo codex exec hi | bash',
+        'pwsh -File r.ps1',
+        'f(){ codex exec hi; }; f',
+    ],
+)
+def test_round2_shell_bypasses_are_denied(tmp_path: Path, command: str) -> None:
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+
+
+def test_powershell_group_codex_is_denied(tmp_path: Path) -> None:
+    result = dispatch_bash_guard.decide(
+        _bash("& { codex exec hi }", "PowerShell"), _env(tmp_path)
+    )
+    assert "R2" in _reason(result)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git config alias.ck "!codex exec hi"',
+        "git checkout -- src/main.py",
+        "git show HEAD:src/app.py",
+        "git grep codex -- src/main.py",
+    ],
+)
+def test_round2_git_execution_or_source_access_is_denied(
+    tmp_path: Path, command: str,
+) -> None:
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+
+
+def test_source_script_mutation_and_scratch_escape_are_denied(tmp_path: Path) -> None:
+    result = dispatch_bash_guard.decide(_bash("echo x > tmp/app.py"), _env(tmp_path))
+    assert "R3" in _reason(result)
+
+
+def test_round2_read_allowlist_is_anchored(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    env = _env(state)
+    source = "D:/APPS/Tsignal/src/state/engine.py"
+    result = dispatch_read_guard.decide(
+        _hook("Read", {"file_path": source}, session_id="supervisor"), env
+    )
+    assert "source reads go to `lane diagnose`" in _reason(result)
+
+    allowed = dispatch_read_guard.decide(
+        _hook("Read", {"file_path": "D:/state-dir/readme.md"}, session_id="supervisor"), env
+    )
+    assert allowed is None
+
+
+def test_corrupt_tier_registry_does_not_grant_tier2(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "tier2_sessions.json").write_text("{corrupt", encoding="utf-8")
+    env = _env(state)
+    supervisor = {"session_id": "sess-corrupt"}
+    assert dispatch_guard_common.is_tier2(supervisor, env) is False
+
+    read = dispatch_read_guard.decide(
+        _hook("Read", {"file_path": "src/main.py"}, session_id="sess-corrupt"), env
+    )
+    assert "tier registry corrupt" in _reason(read)
+    edit = dispatch_edit_guard.decide(
+        _hook("Edit", {"file_path": "src/main.py", "old_string": "a", "new_string": "b"},
+              session_id="sess-corrupt"), env
+    )
+    assert "tier registry corrupt" in _reason(edit)
+    spawn = claude_worker_guard.decide(_agent("sonnet", _COORDINATOR, session_id="sess-corrupt"), env)
+    assert "tier registry corrupt" in _reason(spawn)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git status", "git diff", "git commit -m ok", "rg codex .", "pytest -q", "echo x > notes.md"],
+)
+def test_round2_legitimate_commands_remain_allowed(tmp_path: Path, command: str) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = _hook("Bash", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None

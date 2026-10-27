@@ -7,6 +7,10 @@ and does not print. main() reads one UTF-8 JSON payload from stdin (via
 dispatch_guard_common.read_payload, which uses hook_stdio) and prints either
 that one object or nothing.
 
+Honest boundary note: hooks stop accidental and rationalised bypass; they are
+not a security boundary against an agent that deliberately uses the operator OS
+credentials.
+
 Checks, in order:
 
 1. override_active("workers") allows the call. A hooks_off token counts,
@@ -15,9 +19,11 @@ Checks, in order:
 2. is_tier2 denies. A subagent (non-empty agent_id), a session marked by
    dispatch_tier_marker, or DISPATCH_GUARD_TIER=tier2 cannot spawn further
    agents or sessions. DISPATCH_GUARD_TIER=supervisor forces the supervisor
-   path. Max depth is 1.
-3. tool_input.model must be a non-empty string. Lowercased, it must not
-   contain "opus" or "fable", and it must contain "sonnet" or "haiku".
+   path. Max depth is 1. When the tier registry is corrupt or unreadable,
+   spawning is denied for both tiers with an operator guidance message.
+3. tool_input.model must be a canonical sonnet or haiku model ID
+   (optionally prefixed by claude- and suffixed by version/date tokens).
+   Lowercased, it must not contain "opus" or "fable".
 4. The brief must contain both "tier-2 coordinator" and a lane/lanes word.
    The brief is tool_input.prompt, plus tool_input.background when the tool
    is mcp__ccd_session__start_session. Matching is case-insensitive after
@@ -46,6 +52,7 @@ from dispatch_guard_common import (  # noqa: E402 - sibling import, same pattern
     override_active,
     read_payload,
     run_guarded,
+    tier_state_corrupt,
 )
 
 HOOK_FILE = "claude_worker_guard.py"
@@ -54,9 +61,16 @@ _DEPTH_REASON = (
     "max agent depth is 1: a Tier-2 coordinator cannot spawn agents or sessions; "
     "send the work to `python D:/APPS/_shared/dispatch/dispatch.py lane <role> --brief FILE`"
 )
+_CORRUPT_DENY = (
+    "tier registry corrupt: repair or delete state_dir()/tier2_sessions.json (operator)"
+)
 _TIER2_MARK = re.compile(r"tier-2 coordinator", re.IGNORECASE)
 _LANE_MARK = re.compile(r"\blanes?\b", re.IGNORECASE)
 _WHITESPACE = re.compile(r"\s+")
+_MODEL_PATTERN = re.compile(
+    r"^(?:claude(?:-(?:v[0-9]+|[0-9]+(?:[.-][0-9]+)*))?-)?(?:sonnet|haiku)(?:-(?:[0-9]+(?:[.-][0-9]+)*|v[0-9]+|latest|preview))*$",
+    re.IGNORECASE,
+)
 
 
 def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
@@ -66,6 +80,8 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     tool_input = _tool_input(payload)
     if is_tier2(payload, env):
         return _deny(_DEPTH_REASON, tool_input)
+    if tier_state_corrupt(env):
+        return _deny(_CORRUPT_DENY, tool_input)
     model_reason = _model_reason(tool_input.get("model"))
     if model_reason is not None:
         return _deny(model_reason, tool_input)
@@ -97,11 +113,14 @@ def _tool_input(payload: dict) -> dict:
 def _model_reason(model: object) -> str | None:
     if not isinstance(model, str) or not model.strip():
         return "model is missing or empty; an explicit sonnet or haiku model is required"
-    folded = model.lower()
+    folded = model.strip().lower()
     if "opus" in folded or "fable" in folded:
         return f"model {model!r} is denied; opus and fable are not allowed"
-    if "sonnet" not in folded and "haiku" not in folded:
-        return f"model {model!r} is denied; the model must contain sonnet or haiku"
+    if _MODEL_PATTERN.match(folded) is None:
+        return (
+            f"model {model!r} is denied; the model must be a canonical sonnet or "
+            "haiku model ID"
+        )
     return None
 
 

@@ -3,6 +3,8 @@
 
 PreToolUse measures the tool input against the real file and reserves lines atomically.
 PostToolUse (``--post``) measures the real ``git diff --numstat`` delta versus HEAD.
+When the tier registry is corrupt or unreadable, source edits and writes are
+denied for both tiers with an operator guidance message.
 Importing this module creates no files.
 """
 
@@ -34,6 +36,7 @@ from dispatch_guard_common import (
     run_guarded,
     set_flag,
     state_dir,
+    tier_state_corrupt,
 )
 
 _HOOK_FILE = "scripts/dispatch_edit_guard.py"
@@ -46,6 +49,9 @@ _CAP_DENY = (
 )
 _POST_BLOCK = (
     "net source diff over 20 lines: stop editing, dispatch the rest to `lane impl`"
+)
+_CORRUPT_DENY = (
+    "tier registry corrupt: repair or delete state_dir()/tier2_sessions.json (operator)"
 )
 _PATH_KEYS = ("file_path", "notebook_path")
 
@@ -309,6 +315,9 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     if raw is None or not is_source_path(raw):
         return None
 
+    if tier_state_corrupt(env):
+        return deny(_CORRUPT_DENY)
+
     # Supervisor cannot edit source files.
     if not is_tier2(payload, env):
         return deny(_SUPERVISOR_DENY)
@@ -370,6 +379,9 @@ def decide_post(payload: dict, env: Mapping[str, str] | None = None) -> dict | N
     raw = _raw_path(tool_input)
     presnap = _presnap_path(payload, env)
     if raw is None or not is_source_path(raw):
+        _remove(presnap)
+        return None
+    if tier_state_corrupt(env):
         _remove(presnap)
         return None
     before = _read_presnap(presnap)

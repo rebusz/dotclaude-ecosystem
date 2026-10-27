@@ -10,6 +10,9 @@ the selected slice (cap 2 MB, binary-safe) and charged against 150 KB
 Supervisor Grep denies directory paths unless allowlisted or restricted to
 non-source extensions, and denies Grep with no path (cwd search).
 
+When the tier registry is corrupt or unreadable, source reads and counted
+actions are denied with an operator guidance message for both tiers.
+
 PostToolUse (``--post``) covers Read, Grep, Glob, Bash, and PowerShell. Real
 output size is added for every tool except Read (Read was charged in Pre).
 A response over 30 KB, or a counter that passes the cap, adds context and
@@ -42,11 +45,11 @@ from dispatch_guard_common import (
     is_allowlisted_read,
     is_source_path,
     is_tier2,
-    norm_path,
     override_active,
     read_payload,
     reserve_bytes,
     run_guarded,
+    tier_state_corrupt,
 )
 
 _HOOK_FILE = "scripts/dispatch_read_guard.py"
@@ -54,6 +57,9 @@ _COUNTER = "read_bytes"
 _SOURCE_DENY = "source reads go to `lane diagnose`"
 _BUDGET_DENY = "read budget exhausted"
 _SINGLE_DENY = "a single Read over 40 KB is denied unless allow-listed"
+_CORRUPT_DENY = (
+    "tier registry corrupt: repair or delete state_dir()/tier2_sessions.json (operator)"
+)
 _LARGE_OUTPUT = (
     "Large output: redirect output to a file and read only the tail; "
     "send heavy reading to `lane diagnose`"
@@ -70,17 +76,6 @@ _GREP_SOURCE_TYPES = frozenset({
     "jsx",
     "mjs",
     "cjs",
-})
-_ALLOW_DIR_NAMES = frozenset({
-    "design",
-    "handoffs",
-    "memory",
-    "receipts",
-    "verdicts",
-    "lane_receipts",
-    "lane_queue",
-    "scratchpad",
-    "state",
 })
 _ACCOUNT_TOOLS = frozenset({"Grep", "Glob", "Bash", "PowerShell"})
 _POST_TOOLS = _ACCOUNT_TOOLS | {"Read"}
@@ -145,19 +140,19 @@ def _file_size(payload: dict, path: str) -> int:
 
 
 def _is_allowlisted_path_or_dir(payload: dict, path: str) -> bool:
-    if not path:
+    if not path or not path.strip():
         return False
-    if is_allowlisted_read(path):
+    cwd = payload.get("cwd")
+    cwd_str = cwd if isinstance(cwd, str) and cwd.strip() else None
+    if is_allowlisted_read(path, cwd=cwd_str):
         return True
     candidate = _resolve_path(payload, path)
     if candidate is not None:
         cand_str = str(candidate).replace("\\", "/")
-        if is_allowlisted_read(cand_str) or is_allowlisted_read(cand_str + "/"):
+        if is_allowlisted_read(cand_str, cwd=cwd_str) or is_allowlisted_read(
+            cand_str + "/", cwd=cwd_str
+        ):
             return True
-    normal = norm_path(path).strip("/").lower()
-    parts = normal.split("/")
-    if any(part in _ALLOW_DIR_NAMES for part in parts):
-        return True
     return False
 
 
@@ -252,6 +247,8 @@ def _charge(
     env: Mapping[str, str] | None,
 ) -> dict | None:
     """Reserve delta bytes atomically. Deny when budget would be exceeded."""
+    if tier_state_corrupt(env):
+        return deny(_CORRUPT_DENY)
     if not reserve_bytes(_COUNTER, key, delta, cap, env):
         return deny(_BUDGET_DENY)
     return None
@@ -307,6 +304,8 @@ def _decide_read(
     cap: int,
     env: Mapping[str, str] | None,
 ) -> dict | None:
+    if tier_state_corrupt(env):
+        return deny(_CORRUPT_DENY)
     path = _text(tool_input, "file_path")
     allow = _is_allowlisted_path_or_dir(payload, path)
     if not is_tier2(payload, env) and path and is_source_path(path) and not allow:
@@ -327,6 +326,8 @@ def _decide_grep(
     cap: int,
     env: Mapping[str, str] | None,
 ) -> dict | None:
+    if tier_state_corrupt(env):
+        return deny(_CORRUPT_DENY)
     supervisor = not is_tier2(payload, env)
     path = _text(tool_input, "path").strip()
     if supervisor:
@@ -344,10 +345,14 @@ def decide(payload: dict, env: Mapping[str, str] | None = None) -> dict | None:
     """PreToolUse for Read, Grep, and Glob. None allows the call."""
     if override_active("hooks_off", env):
         return None
+    tool = payload.get("tool_name")
+    if tool not in ("Read", "Grep", "Glob"):
+        return None
+    if tier_state_corrupt(env):
+        return deny(_CORRUPT_DENY)
     tool_input = _tool_input(payload)
     key = agent_key(payload)
     cap = _cap(payload, env)
-    tool = payload.get("tool_name")
     if tool == "Read":
         return _decide_read(payload, tool_input, key, cap, env)
     if tool == "Grep":

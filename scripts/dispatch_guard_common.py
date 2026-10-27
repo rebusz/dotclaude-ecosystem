@@ -46,19 +46,8 @@ _TTL_MAX_S = 28800
 _CRYPTPROTECT_UI_FORBIDDEN = 0x01
 _OVERRIDE_SCOPES = frozenset({"workers", "hooks_off"})
 _DONE_JOB_STATUSES = frozenset({"done", "cancelled"})
-_ALLOW_SUFFIXES = (".log", ".md", ".json")
-_ALLOW_DIR_MARKERS = (
-    "/design/",
-    "/handoffs/",
-    "/memory/",
-    "/receipts/",
-    "/verdicts/",
-    "/lane_receipts/",
-    "/lane_queue/",
-    "/scratchpad/",
-    "/.claude/state/",
-    "/.claude/projects/",
-)
+_ALLOW_SUFFIXES = (".log", ".md", ".json", ".jsonl")
+_DESIGN_SUBDIRS = frozenset({"plans", "handoffs", "audits", "visions"})
 _DPAPI: tuple[ctypes.WinDLL, ctypes.WinDLL] | None = None
 
 GUARDED_PATH_PATTERNS = [
@@ -167,6 +156,10 @@ def _read_tier2_sessions(env: Mapping[str, str] | None) -> tuple[set[str], bool]
         return set(), True
     return {item for item in raw if isinstance(item, str) and item}, False
 
+def tier_state_corrupt(env: Mapping[str, str] | None = None) -> bool:
+    _ids, corrupt = _read_tier2_sessions(env)
+    return corrupt
+
 def _tier2_ids(env: Mapping[str, str] | None) -> set[str]:
     ids, _corrupt = _read_tier2_sessions(env)
     return ids
@@ -191,11 +184,9 @@ def is_tier2(payload: dict, env: Mapping[str, str] | None = None) -> bool:
     if forced == "tier2":
         return True
     session_id = payload.get("session_id")
-    ids, corrupt = _read_tier2_sessions(env)
-    if corrupt:
-        return True
     if not isinstance(session_id, str) or not session_id:
         return False
+    ids, _corrupt = _read_tier2_sessions(env)
     if session_id in ids:
         return True
     if _has_tier2_pending(session_id, env):
@@ -222,11 +213,185 @@ def norm_path(p: str) -> str:
 def is_source_path(p: str) -> bool:
     return Path(p).suffix.lower() in SOURCE_EXTS
 
-def is_allowlisted_read(p: str) -> bool:
-    normal = norm_path(p).lower()
-    if any(marker in normal for marker in _ALLOW_DIR_MARKERS):
+def is_scratch_root_path(
+    p: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | None = None,
+) -> bool:
+    if not isinstance(p, str) or not p.strip():
+        return False
+    cleaned = p.strip().strip("'\"")
+    if not cleaned:
+        return False
+
+    expanded = os.path.expanduser(os.path.expandvars(cleaned))
+    path_obj = Path(expanded)
+    if not path_obj.is_absolute() and cwd is not None:
+        expanded_cwd = os.path.expanduser(os.path.expandvars(str(cwd).strip().strip("'\"")))
+        if expanded_cwd:
+            path_obj = Path(expanded_cwd) / path_obj
+
+    try:
+        resolved = path_obj.resolve()
+    except Exception:
+        resolved = path_obj.absolute()
+
+    norm = str(resolved).replace("\\", "/")
+    norm_lower = norm.lower()
+
+    scratch_env = _env(env).get("CLAUDE_SCRATCHPAD_DIR")
+    if scratch_env:
+        try:
+            s_dir = Path(os.path.expanduser(os.path.expandvars(scratch_env))).resolve()
+            s_norm = str(s_dir).replace("\\", "/").rstrip("/").lower()
+            if norm_lower == s_norm or norm_lower.startswith(s_norm + "/"):
+                return True
+        except Exception:
+            pass
+    else:
+        if "/appdata/local/temp/claude/" in norm_lower or norm_lower.endswith("/appdata/local/temp/claude"):
+            return True
+
+    try:
+        tmp_dir = Path(tempfile.gettempdir()).resolve()
+        tmp_norm = str(tmp_dir).replace("\\", "/").rstrip("/").lower()
+        if norm_lower == tmp_norm or norm_lower.startswith(tmp_norm + "/"):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+def _is_repo_root(d: Path, cwd: str | Path | None = None) -> bool:
+    try:
+        resolved = d.resolve()
+    except Exception:
+        resolved = d
+    if (resolved / ".git").exists():
         return True
-    return Path(normal).suffix in _ALLOW_SUFFIXES
+    if cwd is not None:
+        try:
+            if resolved == Path(cwd).resolve():
+                return True
+        except Exception:
+            pass
+    try:
+        if resolved == Path.cwd().resolve():
+            return True
+    except Exception:
+        pass
+    if (resolved / ".gitignore").exists() or (resolved / "pyproject.toml").exists():
+        return True
+    return False
+
+def _is_anchored_design_path(
+    resolved: Path,
+    path_obj: Path,
+    cwd: str | Path | None = None,
+) -> bool:
+    if not path_obj.is_absolute():
+        rel_parts = [p.lower() for p in path_obj.parts if p and p != "."]
+        if len(rel_parts) >= 2 and rel_parts[0] == "design" and rel_parts[1] in _DESIGN_SUBDIRS:
+            return True
+
+    parts = resolved.parts
+    parts_lower = [part.lower() for part in parts]
+    for i in range(len(parts_lower) - 1):
+        if parts_lower[i] == "design" and parts_lower[i + 1] in _DESIGN_SUBDIRS:
+            parent_dir = Path(*parts[:i])
+            if _is_repo_root(parent_dir, cwd=cwd):
+                return True
+
+    return False
+
+def _is_claude_project_memory(resolved: Path, norm_lower: str) -> bool:
+    try:
+        projects_dir = (Path.home() / ".claude" / "projects").resolve()
+        rel = resolved.relative_to(projects_dir)
+        if len(rel.parts) >= 2 and rel.parts[1].lower() == "memory":
+            return True
+    except (ValueError, RuntimeError):
+        pass
+    return bool(re.search(r"(^|/)\.claude/projects/[^/]+/memory(/|$)", norm_lower))
+
+def _is_under_state_dir(resolved: Path, norm_lower: str, env: Mapping[str, str] | None) -> bool:
+    s_dir = state_dir(env).resolve()
+    s_dir_norm = str(s_dir).replace("\\", "/").rstrip("/").lower()
+    if norm_lower == s_dir_norm or norm_lower.startswith(s_dir_norm + "/"):
+        return True
+    try:
+        resolved.relative_to(s_dir)
+        return True
+    except (ValueError, RuntimeError):
+        return False
+
+def _is_scratchpad_read_root(
+    resolved: Path,
+    norm_lower: str,
+    env: Mapping[str, str] | None,
+) -> bool:
+    scratch_env = _env(env).get("CLAUDE_SCRATCHPAD_DIR")
+    if scratch_env:
+        try:
+            s_dir = Path(os.path.expanduser(os.path.expandvars(scratch_env))).resolve()
+            s_norm = str(s_dir).replace("\\", "/").rstrip("/").lower()
+            if norm_lower == s_norm or norm_lower.startswith(s_norm + "/"):
+                return True
+        except Exception:
+            pass
+    else:
+        if "/appdata/local/temp/claude/" in norm_lower or norm_lower.endswith("/appdata/local/temp/claude"):
+            return True
+        try:
+            tmp_dir = Path(tempfile.gettempdir()).resolve()
+            if resolved.is_relative_to(tmp_dir) and ("/claude/" in norm_lower or "/scratchpad/" in norm_lower):
+                return True
+        except Exception:
+            pass
+    return False
+
+def is_allowlisted_read(
+    p: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | None = None,
+) -> bool:
+    if not isinstance(p, str) or not p.strip():
+        return False
+    cleaned = p.strip().strip("'\"")
+    if not cleaned:
+        return False
+
+    if not is_source_path(cleaned) and Path(cleaned).suffix.lower() in _ALLOW_SUFFIXES:
+        return True
+
+    expanded = os.path.expanduser(os.path.expandvars(cleaned))
+    path_obj = Path(expanded)
+    if not path_obj.is_absolute() and cwd is not None:
+        expanded_cwd = os.path.expanduser(os.path.expandvars(str(cwd).strip().strip("'\"")))
+        if expanded_cwd:
+            path_obj = Path(expanded_cwd) / path_obj
+
+    try:
+        resolved = path_obj.resolve()
+    except Exception:
+        resolved = path_obj.absolute()
+
+    norm = str(resolved).replace("\\", "/")
+    norm_lower = norm.lower()
+
+    if not is_source_path(cleaned) and _is_under_state_dir(resolved, norm_lower, env):
+        return True
+
+    if _is_claude_project_memory(resolved, norm_lower):
+        return True
+
+    if _is_anchored_design_path(resolved, path_obj, cwd=cwd):
+        return True
+
+    if _is_scratchpad_read_root(resolved, norm_lower, env):
+        return True
+
+    return False
 
 def protected_path(
     p: str,
