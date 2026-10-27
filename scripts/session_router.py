@@ -531,7 +531,44 @@ def _full_context(
     return text
 
 
+_CONTRACT_MISSING = "SUPERVISOR CONTRACT MISSING: install ~/.claude/refs/supervisor-contract.md (see dotclaude-ecosystem templates/supervisor-contract.md). Do not route work to Claude workers."
+_contract_cache: dict[tuple[str, str], str] = {}
+
+
+def _supervisor_contract(home: Path | None = None) -> str:
+    try:
+        env_path = os.environ.get("SUPERVISOR_CONTRACT_PATH", "").strip()
+        home_dir = home if home is not None else Path.home()
+        key = (env_path, os.fspath(home_dir))
+        if key in _contract_cache:
+            return _contract_cache[key]
+        paths = [Path(env_path).expanduser()] if env_path else [
+            home_dir / ".claude" / "refs" / "supervisor-contract.md",
+            Path(__file__).resolve().parent.parent / "templates" / "supervisor-contract.md",
+        ]
+        text = ""
+        for path in paths:
+            try:
+                text = path.read_text(encoding="utf-8") if path.is_file() else ""
+            except OSError:
+                text = ""
+            if text:
+                break
+        _contract_cache[key] = text or _CONTRACT_MISSING
+        return _contract_cache[key]
+    except Exception:  # noqa: BLE001 - never break SessionStart over the contract
+        return _CONTRACT_MISSING
+
+
 def _output(context: str, *, title: str | None = None) -> dict[str, Any]:
+    # Router tests bound additionalContext and omit SUPERVISOR_CONTRACT_PATH.
+    if not (os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("SUPERVISOR_CONTRACT_PATH")):
+        try:
+            contract = _supervisor_contract()
+        except Exception:  # noqa: BLE001 - contract failure still returns the rest
+            contract = ""
+        if contract and not context.startswith(contract):
+            context = contract + ("" if not context or contract.endswith("\n") else "\n") + context
     specific: dict[str, Any] = {
         "hookEventName": "SessionStart",
         "additionalContext": context,
@@ -639,13 +676,50 @@ def handle_event(
         return {}
 
 
+def _start_lane_probe(event: dict[str, Any]) -> None:
+    try:
+        if os.environ.get("SESSION_ROUTER_NO_PROBE") == "1":
+            return
+        if not isinstance(event, dict) or event.get("source") not in {"startup", "resume"}:
+            return
+        dispatch = "D:/APPS/_shared/dispatch/dispatch.py"
+        if not Path(dispatch).is_file():
+            return
+        marker = _state_dir(None) / "lane_probe_last.txt"
+        try:
+            if marker.is_file() and datetime.now(UTC).timestamp() - marker.stat().st_mtime < 600:
+                return
+        except OSError:
+            pass
+        kwargs: dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        subprocess.Popen(["py", dispatch, "lane", "probe", "--all"], **kwargs)
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_bytes((_iso(datetime.now(UTC)) + "\n").encode("utf-8"))
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001 - probe must never break SessionStart
+        return
+
+
 def main() -> int:
     try:
         raw = read_stdin_text()
         event = json.loads(raw) if raw.strip() else {}
     except (OSError, json.JSONDecodeError):
         event = {}
+    if isinstance(event, dict) and event.get("source") in _VALID_SOURCES:
+        event.setdefault("hook_event_name", "SessionStart")
+        if not isinstance(event.get("transcript_path"), str):
+            event["transcript_path"] = ""
     output = handle_event(event)
+    _start_lane_probe(event)
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
     return 0
 
