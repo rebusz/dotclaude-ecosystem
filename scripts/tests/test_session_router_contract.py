@@ -366,3 +366,85 @@ class TestSessionRouterContract(unittest.TestCase):
         json.loads(stdout.getvalue())
         self.assertGreater(seen["size"], 0)
         _assert_probe_spawn(self, popen)
+
+    def test_main_startup_error_path_injects_contract_and_empty_event_prints_empty(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            contract_path = Path(tmp) / "supervisor-contract.md"
+            contract_path.write_bytes(_CONTRACT_TEXT.encode("utf-8"))
+            env = {
+                "SUPERVISOR_CONTRACT_PATH": str(contract_path),
+                "SESSION_ROUTER_NO_PROBE": "1",
+            }
+
+            # Startup payload that makes handle_event raise internally (bad transcript_path / missing fields)
+            bad_event = {"source": "startup", "transcript_path": 123}
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(
+                    router, "read_stdin_text", return_value=json.dumps(bad_event)
+                ),
+                redirect_stdout(stdout),
+            ):
+                router._contract_cache.clear()
+                code = router.main()
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            self.assertTrue(_context(output).startswith(_CONTRACT_TEXT))
+
+            # Startup payload where resolve_repository raises inside handle_event
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            event = _event(source="startup", cwd=root)
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(
+                    router,
+                    "resolve_repository",
+                    side_effect=RuntimeError("resolve failed"),
+                ),
+                mock.patch.object(
+                    router, "read_stdin_text", return_value=json.dumps(event)
+                ),
+                redirect_stdout(stdout),
+            ):
+                router._contract_cache.clear()
+                code = router.main()
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            self.assertTrue(_context(output).startswith(_CONTRACT_TEXT))
+
+            # Startup payload with handle_event monkeypatched to return empty output
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(router, "handle_event", return_value={}),
+                mock.patch.object(
+                    router,
+                    "read_stdin_text",
+                    return_value=json.dumps({"source": "startup"}),
+                ),
+                redirect_stdout(stdout),
+            ):
+                router._contract_cache.clear()
+                code = router.main()
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            self.assertTrue(_context(output).startswith(_CONTRACT_TEXT))
+
+            # Empty event still prints {}
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(router, "read_stdin_text", return_value="{}"),
+                redirect_stdout(stdout),
+            ):
+                router._contract_cache.clear()
+                code = router.main()
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout.getvalue()), {})
+            self.assertEqual(stdout.getvalue().strip(), "{}")
+
