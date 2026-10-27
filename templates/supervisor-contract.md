@@ -7,7 +7,7 @@ Tier 3 = roster lanes.
 Single door: `python D:/APPS/_shared/dispatch/dispatch.py lane <impl|review|grill|plan|diagnose> --brief FILE [--repo R --ref SHA --pr N --worktree PATH --author-family F --risk R0..R3 --verify-cmd CMD]`. Other lane subcommands: probe --all, status, drain, repair, authorize. Exit codes: 0 DONE, 3 QUEUED, 4 FAILED, 2 usage. Direct model CLIs / CDP scripts are denied by hooks.
 
 Roles, fixed order:
-- impl = AGY gemini-3.8-flash-high -> Cursor -> GLM -> Kimi -> Codex luna (last)
+- impl = AGY gemini-3.8-flash-high -> Cursor -> GLM -> Kimi -> Codex terra (luna fallback; last)
 - review = ChatGPT Chat GPT-6 Pro -> Argon CDP -> Perplexity (Grok/Kimi K3/GLM) -> Kimi -> GLM -> Astra (R3 only)
 - grill = Perplexity (strongest other-family model) -> Argon
 - plan / top decision = Astra on Work + Argon (Sol if Astra is out)
