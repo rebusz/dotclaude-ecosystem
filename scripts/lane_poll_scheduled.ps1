@@ -9,11 +9,14 @@
   The status text is appended to ~\.claude\state\lane_poll.log (last 200 lines kept).
 
   Single-instance mutex. The script makes no network calls of its own, never
-  opens a window, never plays a sound, and always exits 0.
+  opens a window, and never plays a sound. A normal poll run always exits 0.
+  -Register and -Unregister exit 1 when they fail.
 
   -Register creates or replaces the current-user task (no admin, hidden
-  window, runs whether or not a logon session is open). A second -Register
-  leaves one task. -Unregister removes it. With neither switch, run once.
+  window). It tries an S4U logon (no stored password; runs with or without
+  an interactive session) and, if that fails, an Interactive logon principal.
+  A second -Register leaves one task. -Unregister removes it. With neither
+  switch, run once.
 
   Rollback:
       powershell -NoProfile -File lane_poll_scheduled.ps1 -Unregister
@@ -236,20 +239,26 @@ function Register-LanePollTask {
     $trigger = New-ScheduledTaskTrigger -Once -At $startAt -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 9999)
     $trigger.Repetition.StopAtDurationEnd = $false
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -DontStopOnIdleEnd
-    # S4U: current user, no stored password, RunLevel Limited (no elevation).
-    # Runs whether or not a logon session is open. Hidden window via -WindowStyle Hidden.
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -Description 'Probe lanes, drain queued jobs, append lane status. Hidden window, no elevation.' | Out-Null
+    $description = 'Probe lanes, drain queued jobs, append lane status. Hidden window, no elevation.'
+    try {
+        # S4U: current user, no stored password, RunLevel Limited (no elevation).
+        # Runs whether or not a logon session is open. Hidden window via -WindowStyle Hidden.
+        $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited -ErrorAction Stop
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -Description $description -ErrorAction Stop | Out-Null
+    } catch {
+        $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited -ErrorAction Stop
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -Description $description -ErrorAction Stop | Out-Null
+    }
 }
 
 function Unregister-LanePollTask {
-    $existing = @(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
-    if ($existing.Length -gt 0) {
-        Unregister-ScheduledTask -InputObject $existing -Confirm:$false
-        Write-Output 'unregistered scheduled task TsignalLanePoll'
-    } else {
+    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $existing) {
         Write-Output 'no scheduled task TsignalLanePoll'
+        return
     }
+    $existing | Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop
+    Write-Output 'unregistered scheduled task TsignalLanePoll'
 }
 
 try {
@@ -258,6 +267,7 @@ try {
             Unregister-LanePollTask
         } catch {
             Write-Output ('unregister failed: {0}' -f $_.Exception.Message)
+            exit 1
         }
         exit 0
     }
@@ -267,6 +277,7 @@ try {
             Write-Output 'registered scheduled task TsignalLanePoll'
         } catch {
             Write-Output ('register failed: {0}' -f $_.Exception.Message)
+            exit 1
         }
         exit 0
     }

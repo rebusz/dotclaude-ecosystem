@@ -151,10 +151,12 @@ def _assert_probe_spawn(testcase: unittest.TestCase, popen: mock.MagicMock) -> N
     testcase.assertIs(kwargs["stdin"], subprocess.DEVNULL)
     testcase.assertIs(kwargs["stdout"], subprocess.DEVNULL)
     testcase.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+    testcase.assertTrue(kwargs["close_fds"])
     if sys.platform == "win32":
-        flags = kwargs["creationflags"]
-        testcase.assertEqual(flags & subprocess.CREATE_NO_WINDOW, subprocess.CREATE_NO_WINDOW)
-        testcase.assertEqual(flags & subprocess.DETACHED_PROCESS, subprocess.DETACHED_PROCESS)
+        testcase.assertEqual(
+            kwargs["creationflags"],
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
     popen.return_value.wait.assert_not_called()
 
 
@@ -317,3 +319,50 @@ class TestSessionRouterContract(unittest.TestCase):
                         run_maintenance=False,
                     )
         self.assertEqual(popen.call_count, 0)
+
+    def test_unset_contract_path_with_empty_home_resolves_template(self) -> None:
+        template = (_SCRIPTS.parent / "templates" / "supervisor-contract.md").read_text(
+            encoding="utf-8"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            ref = home / ".claude" / "refs" / "supervisor-contract.md"
+            self.assertFalse(ref.exists())
+            with mock.patch.dict(os.environ):
+                os.environ.pop("SUPERVISOR_CONTRACT_PATH", None)
+                router._contract_cache.clear()
+                self.assertNotIn("SUPERVISOR_CONTRACT_PATH", os.environ)
+                resolved = router._supervisor_contract(home=home)
+            self.assertFalse(ref.exists())
+            self.assertEqual(resolved, template)
+
+    def test_debounce_marker_is_written_before_popen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "state"
+            marker = state_dir / "lane_probe_last.txt"
+            self.assertFalse(marker.exists())
+            seen: dict[str, int] = {}
+
+            def tracking_popen(*_args: object, **_kwargs: object) -> mock.MagicMock:
+                # Recorded here and asserted after main(); the probe swallows exceptions.
+                seen["size"] = marker.stat().st_size if marker.exists() else 0
+                return mock.MagicMock()
+
+            root = state_dir.parent
+            event = _event(source="startup", cwd=root)
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, _probe_env(state_dir), clear=False),
+                mock.patch.object(router, "resolve_repository", return_value=None),
+                mock.patch.object(router, "read_stdin_text", return_value=json.dumps(event)),
+                _dispatch_present(),
+                mock.patch.object(
+                    router.subprocess, "Popen", side_effect=tracking_popen
+                ) as popen,
+                redirect_stdout(stdout),
+            ):
+                code = router.main()
+        self.assertEqual(code, 0)
+        json.loads(stdout.getvalue())
+        self.assertGreater(seen["size"], 0)
+        _assert_probe_spawn(self, popen)

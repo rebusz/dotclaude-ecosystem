@@ -561,14 +561,12 @@ def _supervisor_contract(home: Path | None = None) -> str:
 
 
 def _output(context: str, *, title: str | None = None) -> dict[str, Any]:
-    # Router tests bound additionalContext and omit SUPERVISOR_CONTRACT_PATH.
-    if not (os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("SUPERVISOR_CONTRACT_PATH")):
-        try:
-            contract = _supervisor_contract()
-        except Exception:  # noqa: BLE001 - contract failure still returns the rest
-            contract = ""
-        if contract and not context.startswith(contract):
-            context = contract + ("" if not context or contract.endswith("\n") else "\n") + context
+    try:
+        contract = _supervisor_contract()
+    except Exception:  # noqa: BLE001 - contract failure still returns the rest
+        contract = ""
+    if contract and not context.startswith(contract):
+        context = contract + ("" if not context or contract.endswith("\n") else "\n") + context
     specific: dict[str, Any] = {
         "hookEventName": "SessionStart",
         "additionalContext": context,
@@ -695,15 +693,18 @@ def _start_lane_probe(event: dict[str, Any]) -> None:
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
+            "close_fds": True,
         }
         if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-        subprocess.Popen(["py", dispatch, "lane", "probe", "--all"], **kwargs)
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_bytes((_iso(datetime.now(UTC)) + "\n").encode("utf-8"))
         except OSError:
             pass
+        subprocess.Popen(["py", dispatch, "lane", "probe", "--all"], **kwargs)
     except Exception:  # noqa: BLE001 - probe must never break SessionStart
         return
 
