@@ -1476,3 +1476,77 @@ def test_round5_dispatch_bash_guard_subprocess(
     body = _stdout_json(proc)
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert expected_rule in body["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- round 6 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash --version -c "codex exec hi"',
+        'pwsh --help -co "codex exec hi"',
+        'flock -c "codex exec hi"',
+        'flock /tmp/l -c "codex exec hi"',
+        "%COMSPEC% /c codex exec hi",
+        "cmd /c c^odex exec hi",
+        'cmd /c "for /f %i in (\'codex exec hi\') do echo %i"',
+        "echo x | php",
+        "python -",
+    ],
+)
+def test_round6_bypasses_and_interpreters_are_denied(
+    tmp_path: Path, command: str
+) -> None:
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+    result_ps = dispatch_bash_guard.decide(_bash(command, "PowerShell"), _env(tmp_path))
+    assert result_ps is not None
+    assert "R2" in _reason(result_ps)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash --version",
+        "python --version",
+        "python -m pytest -q",
+        "flock /tmp/l python -m pytest -q",
+    ],
+)
+def test_round6_legitimate_commands_remain_allowed(tmp_path: Path, command: str) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = _hook("Bash", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None
+    payload_ps = _hook("PowerShell", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload_ps, _env(tmp_path / "state")) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash --version -c "codex exec hi"',
+        'pwsh --help -co "codex exec hi"',
+        'flock -c "codex exec hi"',
+        'flock /tmp/l -c "codex exec hi"',
+        "%COMSPEC% /c codex exec hi",
+        "cmd /c c^odex exec hi",
+        'cmd /c "for /f %i in (\'codex exec hi\') do echo %i"',
+        "echo x | php",
+        "python -",
+    ],
+)
+def test_round6_dispatch_bash_guard_subprocess(
+    tmp_path: Path, command: str
+) -> None:
+    proc = _run_hook(
+        "dispatch_bash_guard.py",
+        json.dumps(_bash(command)).encode(),
+        tmp_path,
+    )
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
+

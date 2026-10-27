@@ -17,8 +17,14 @@ unambiguous prefixes (-co, -com, -comm, ...) and / and -- forms are scanned as
 command strings. Interpreter option clusters containing inline-code flags
 (python -ic, -bc, perl -ne, ruby -ne) are scanned. Shell builtins command,
 builtin, exec, and eval, and process wrappers (timeout, nice, setsid, stdbuf,
-watch, flock, ionice, taskset, xargs, wsl, find -exec) are unwrapped; ANSI-C
-$'...' quoting is decoded. Inline code in python -c, node -e, perl -e, ruby -e,
+watch, flock (with -c and --command scanned as command strings), ionice,
+taskset, xargs, wsl, find -exec) are unwrapped; ANSI-C $'...' quoting is decoded.
+Windows cmd normalisation expands %COMSPEC% to cmd, drops caret ^ escapes in
+program words and arguments, and scans cmd 'for /f ... in (\'X\')' substitutions.
+Introspection short-circuiting never skips inline-command scanning when -c or
+-Command is present. Interpreters (python, node, perl, ruby, php) fed from stdin
+with no script operand or inline code flag are denied unless read-only introspection
+(--version, -V, --help). Inline code in python -c, node -e, perl -e, ruby -e,
 and php -r is scanned for launches and source/guarded-path mutations. git stays
 allowed by default except for execution-bearing config and alias/core writes
 (both tiers), source reads via show/grep/log -p/blame/cat-file -p (supervisor),
@@ -190,6 +196,17 @@ _FUNC_DEF_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _ROUTER_CANONICAL = "d:/apps/_shared/dispatch/dispatch.py"
+_CMD_FOR_F_RE = re.compile(
+    r"\bfor\s+/f\b[^()]*?\bin\s*\(\s*'([^']+)'\s*\)",
+    re.IGNORECASE,
+)
+_VALUE_OPTS_BY_PROG: dict[str, frozenset[str]] = {
+    "node": frozenset({"-r", "--require", "--loader", "--title", "--inspect", "--inspect-brk"}),
+    "nodejs": frozenset({"-r", "--require", "--loader", "--title", "--inspect", "--inspect-brk"}),
+    "perl": frozenset({"-I", "-M", "-m", "-x", "-C"}),
+    "ruby": frozenset({"-I", "-r", "-C"}),
+    "php": frozenset({"-d", "-c", "-b"}),
+}
 
 
 class _Cmd(NamedTuple):
@@ -436,6 +453,11 @@ def _statement_reason(
         inline_reason = _inline_code_check(statement, parsed, effective_cwd, env)
         if inline_reason is not None:
             return inline_reason
+        if not _has_inline_code(parsed.program, parsed.args, statement):
+            if not _is_interp_introspection(parsed.program, parsed.args):
+                script_op = None if parsed.program in _PYTHON else _first_script_operand(parsed.program, parsed.args)
+                if script_op is None:
+                    return _stdin_interpreter_reason(statement, parsed.program)
 
     # 6. Git: allowed by default with specific denies
     if parsed.program == "git":
@@ -527,6 +549,12 @@ def _extract_command_substitutions(text: str) -> tuple[list[str], str]:
     program word can be detected. Arithmetic $((...)) spans are skipped.
     """
     pieces: list[str] = []
+    for m in _CMD_FOR_F_RE.finditer(text):
+        cmd_inner = m.group(1).strip()
+        if cmd_inner:
+            pieces.append(cmd_inner)
+    if _CMD_FOR_F_RE.search(text):
+        text = _CMD_FOR_F_RE.sub(r"for /f in ('X')", text)
     out: list[str] = []
     i = 0
     n = len(text)
@@ -790,8 +818,6 @@ def _unwrap_statement(
     # bash, sh, zsh, dash
     if head_low in _POSIX_SHELLS:
         args = words[first_non_assign + 1:]
-        if any(a in _INTROSPECTION for a in args):
-            return None, None
         c_set = False
         cmd_words: list[str] = []
         operand: str | None = None
@@ -829,6 +855,9 @@ def _unwrap_statement(
                 return None, inner
             return None, ""
 
+        if any(a in _INTROSPECTION for a in args):
+            return None, None
+
         if operand is None:
             return _stdin_shell_reason(statement), None
         bad = _script_operand_reason(operand, statement, effective_cwd, env)
@@ -842,8 +871,6 @@ def _unwrap_statement(
         for w in args:
             if _is_ps_encoded_flag(w):
                 return _encoded_ps_reason(statement), None
-        if any(a in _INTROSPECTION for a in args):
-            return None, None
         for i, w in enumerate(args):
             is_cmd, attached = _ps_command_match(w)
             if is_cmd:
@@ -857,6 +884,8 @@ def _unwrap_statement(
                 else:
                     inner = ""
                 return None, inner
+        if any(a in _INTROSPECTION for a in args):
+            return None, None
         operand = _ps_shell_operand(args)
         if operand is None:
             return _stdin_shell_reason(statement), None
@@ -897,6 +926,29 @@ def _unwrap_statement(
             for i, a in enumerate(args):
                 if a in {"-S", "--split-string"} and i + 1 < len(args):
                     return None, " ".join(args[i + 1:])
+        if head_low == "flock":
+            args = words[first_non_assign + 1:]
+            i = 0
+            while i < len(args):
+                a = args[i]
+                if a in {"-c", "-C", "--command"}:
+                    if i + 1 < len(args):
+                        return None, _strip_surrounding_quotes(args[i + 1])
+                    return None, ""
+                if a.startswith("--command="):
+                    return None, _strip_surrounding_quotes(a.split("=", 1)[1])
+                if a.startswith("-") and not a.startswith("--") and len(a) > 1 and ("c" in a[1:] or "C" in a[1:]):
+                    idx = a.find("c") if "c" in a else a.find("C")
+                    attached = a[idx + 1:]
+                    if attached:
+                        return None, _strip_surrounding_quotes(attached)
+                    if i + 1 < len(args):
+                        return None, _strip_surrounding_quotes(args[i + 1])
+                    return None, ""
+                if a in {"-w", "-W", "--wait", "--timeout", "-E", "--conflict-exit-code"} and i + 1 < len(args):
+                    i += 2
+                    continue
+                i += 1
         rem = _skip_wrapper(words, first_non_assign + 1, head_low)
         if rem < len(words):
             return None, " ".join(words[rem:])
@@ -1058,6 +1110,66 @@ def _python_check(
     env: Mapping[str, str] | None,
 ) -> str | None:
     return _inline_code_check(statement, parsed, effective_cwd, env)
+
+
+def _has_inline_code(prog: str, args: list[str], statement: str) -> bool:
+    if "<<" in statement:
+        return True
+    flags = _INLINE_FLAGS.get(prog, ("-c",))
+    short_chars = _INLINE_SHORT_CHARS.get(prog, ())
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in flags and arg.startswith("--"):
+            return True
+        if any(arg.startswith(f + "=") for f in flags if f.startswith("--")):
+            return True
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            cluster = arg[1:]
+            for ch in cluster:
+                if ch in short_chars:
+                    return True
+        i += 1
+    return False
+
+
+def _is_interp_introspection(prog: str, args: list[str]) -> bool:
+    is_py = prog in _PYTHON
+    for a in args:
+        low = a.lower()
+        if low in {"--help", "-h"} or low.startswith("--help"):
+            return True
+        if low in {"--version"} or low.startswith("--version"):
+            return True
+        if is_py:
+            if a in {"-V", "-VV"}:
+                return True
+        else:
+            if a in {"-v", "-V"}:
+                return True
+    return False
+
+
+def _first_script_operand(prog: str, args: list[str]) -> str | None:
+    val_opts = _VALUE_OPTS_BY_PROG.get(prog, frozenset())
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            if i + 1 < len(args):
+                cand = args[i + 1]
+                return None if cand == "-" else cand
+            return None
+        if arg == "-":
+            return None
+        if arg in val_opts and i + 1 < len(args):
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return arg
+    return None
 
 
 def _git_check(
@@ -2171,22 +2283,36 @@ def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
         return index
 
     if w_low == "flock":
+        lockfile_seen = False
         while index < total:
             word = words[index]
+            if word in {"-c", "-C", "--command"}:
+                if index + 1 < total:
+                    return index + 1
+                return total
+            if word.startswith("--command="):
+                return index
+            if word.startswith("-") and not word.startswith("--") and len(word) > 1 and ("c" in word[1:] or "C" in word[1:]):
+                idx = word.find("c") if "c" in word else word.find("C")
+                if idx + 1 < len(word):
+                    return index
+                if index + 1 < total:
+                    return index + 1
+                return total
             if word in {"-w", "-W", "--wait", "--timeout", "-E", "--conflict-exit-code"} and index + 1 < total:
                 index += 2
                 continue
-            if word.startswith("--wait=") or word.startswith("--timeout="):
+            if word.startswith("--wait=") or word.startswith("--timeout=") or word.startswith("--conflict-exit-code="):
                 index += 1
                 continue
             if word.startswith("-"):
                 index += 1
                 continue
+            if not lockfile_seen:
+                lockfile_seen = True
+                index += 1
+                continue
             break
-        if index < total:
-            index += 1
-        if index < total and words[index] in {"-c", "-C", "--command"}:
-            index += 1
         return index
 
     if w_low == "ionice":
@@ -2285,13 +2411,36 @@ def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
     return index
 
 
+def _drop_caret_escapes(s: str) -> str:
+    """Drop cmd.exe caret (^) escapes: ^X -> X, trailing ^ -> ''."""
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i] == "^":
+            if i + 1 < n:
+                out.append(s[i + 1])
+                i += 2
+            else:
+                i += 1
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def _normalize_exe(token: str) -> str:
     cleaned = token.strip().strip("'\"")
     if cleaned.startswith("$'") and cleaned.endswith("'"):
         cleaned = cleaned[2:-1]
     if cleaned == "&":
         return "&"
+    cleaned = _drop_caret_escapes(cleaned)
+    if cleaned.lower() == "%comspec%":
+        return "cmd"
     base = _basename(cleaned)
+    if base == "%comspec%":
+        return "cmd"
     for ext in _STRIP_EXT:
         if base.endswith(ext):
             return base[: -len(ext)]
@@ -2300,6 +2449,7 @@ def _normalize_exe(token: str) -> str:
 
 def _basename(token: str) -> str:
     cleaned = token.strip().strip("'\"")
+    cleaned = _drop_caret_escapes(cleaned)
     return cleaned.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
 
@@ -2483,11 +2633,25 @@ def _read_word(text: str, index: int) -> tuple[str, int]:
                 parts.append("\\")
                 index += 1
             continue
+        if ch == "^":
+            if index + 1 < length:
+                nxt = text[index + 1]
+                if nxt in "\r\n":
+                    index += 2 if nxt == "\r" and index + 2 < length and text[index + 2] == "\n" else 1
+                else:
+                    parts.append(nxt)
+                    index += 2
+            else:
+                index += 1
+            continue
         if ch in " \t\r\n<>|&;":
             break
         parts.append(ch)
         index += 1
-    return "".join(parts), index
+    word = "".join(parts)
+    if word.lower() == "%comspec%":
+        word = "cmd"
+    return word, index
 
 
 def _strip_bodies(command: str) -> str:
@@ -2728,6 +2892,15 @@ def _substitution_reason(statement: str) -> str:
 def _stdin_shell_reason(statement: str) -> str:
     return (
         "R2 stdin-fed shell denied (no -c/-Command and no tracked script operand): "
+        f"\"{_snippet(statement)}\". "
+        f"Reach the model only through {_ROUTER}."
+    )
+
+
+def _stdin_interpreter_reason(statement: str, program: str) -> str:
+    prog_name = "Python" if program in _PYTHON else program
+    return (
+        f"R2 stdin-fed interpreter denied ({prog_name}: no inline code flag and no script operand): "
         f"\"{_snippet(statement)}\". "
         f"Reach the model only through {_ROUTER}."
     )
