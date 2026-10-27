@@ -8,18 +8,24 @@ paths, source files, or script files (.sh .cmd .bat .ps1 .psm1 .vbs). The
 supervisor may not read source files or non-allowlisted source directories with
 shell utilities. Nested shells are unwrapped up to recursion depth 4; command
 substitutions $(...)/backticks, subshell and group wrappers, PowerShell script
-blocks and function-definition bodies are scanned as nested statements. Shells
-fed from stdin or pointed at a script outside a tracked git repository are
-denied. git stays allowed by default except for execution-bearing config and
-alias/core writes (both tiers), source reads via show/grep/log -p/blame/
-cat-file -p (supervisor), and apply/am/restore/checkout -- source mutations
-(both tiers). Scratch and temp exemptions are anchored to the canonical
-scratch root and the system temp directory, never to a bare path component.
+blocks, and function-definition bodies (POSIX f() and PowerShell function f) are
+scanned as nested statements. Shells fed from stdin or pointed at a script
+outside a tracked git repository are denied. POSIX shell option clusters
+containing c (bash -lc, -ic, -xc) are treated as command strings. PowerShell
+EncodedCommand prefixes (-ec, -en, -enc, ...) are denied. Shell builtins
+command, builtin, exec, and eval are unwrapped; ANSI-C $'...' quoting is
+decoded. Inline code in python -c, node -e, perl -e, ruby -e, and php -r is
+scanned for launches and source/guarded-path mutations. git stays allowed by
+default except for execution-bearing config and alias/core writes (both tiers),
+source reads via show/grep/log -p/blame/cat-file -p (supervisor), and
+apply/am/restore/checkout -- source mutations (both tiers). Scratch and temp
+exemptions are anchored to the canonical scratch root and the system temp
+directory, never to a bare path component.
 
 Honest boundary note: hooks stop accidental and rationalised bypass; they are
 not a security boundary against an agent that deliberately uses the operator OS
-credentials. Python inline/heredoc mutation checks provide a heuristic speed
-bump, not an airtight sandbox.
+credentials. Inline/heredoc mutation checks provide a heuristic speed bump, not
+an airtight sandbox.
 
 decide() is pure. main() prints one JSON object or nothing.
 Importing this module creates no files.
@@ -58,7 +64,10 @@ _ROUTER = (
 )
 _DIRECT = frozenset({"codex", "glm", "kimi", "cursor-agent", "agy", "opencode"})
 _PYTHON = frozenset({"python", "python3", "py", "pythonw"})
-_WRAPPERS = frozenset({"env", "time", "nohup", "call", "start"})
+_WRAPPERS = frozenset({
+    "env", "time", "nohup", "call", "start",
+    "command", "builtin", "exec", "eval",
+})
 _ENV_VALUE_FLAGS = frozenset({"-u", "-C", "--unset", "--chdir"})
 _ROUTER_CMDS = frozenset({"lane", "plan", "ledger", "status"})
 _INTROSPECTION = frozenset({
@@ -95,24 +104,43 @@ _MAX_RECURSION_DEPTH = 4
 _INTERPRETERS = frozenset({
     "python", "python3", "py", "pythonw",
     "bash", "sh", "zsh", "dash", "pwsh", "powershell",
-    "node", "perl", "ruby",
+    "node", "nodejs", "perl", "ruby", "php",
 })
+_INLINE_FLAGS: dict[str, tuple[str, ...]] = {
+    "python": ("-c",),
+    "python3": ("-c",),
+    "py": ("-c",),
+    "pythonw": ("-c",),
+    "node": ("-e", "--eval", "-p", "--print"),
+    "nodejs": ("-e", "--eval", "-p", "--print"),
+    "perl": ("-e", "-E"),
+    "ruby": ("-e",),
+    "php": ("-r",),
+}
+_INLINE_INTERPRETERS = frozenset(_INLINE_FLAGS.keys())
 _READ_CMDS = frozenset({
     "cat", "head", "tail", "type", "more", "less",
     "get-content", "gc", "awk", "rg", "grep",
     "select-string", "findstr",
 })
 _PYTHON_VALUE_OPTS = frozenset({"-w", "-x", "--check-hash-based-pycs"})
-_PY_EXEC_RE = re.compile(r"\b(?:subprocess|os\.system|Popen|spawn)\b")
+_INLINE_EXEC_RE = re.compile(
+    r"\b(?:subprocess|os\.system|Popen|spawn|spawnSync|"
+    r"child_process|exec|execSync|system|passthru|shell_exec|proc_open)\b|`"
+)
+_PY_EXEC_RE = _INLINE_EXEC_RE
 _PY_LAUNCHER_RE = re.compile(
     r"\b(?:codex|glm|kimi|cursor-agent|cursor_agent|agy|opencode|cdp_[A-Za-z0-9_]*)\b",
     re.IGNORECASE,
 )
-_PY_WRITE_RE = re.compile(
-    r"\b(?:write_text|write_bytes|shutil\.copy\w*|shutil\.move|os\.replace|os\.rename)\b|"
-    r"\bopen\s*\([^)]*['\"][wax\+]",
+_INLINE_WRITE_RE = re.compile(
+    r"\b(?:write_text|write_bytes|shutil\.copy\w*|shutil\.move|os\.replace|os\.rename|"
+    r"writeFile|writeFileSync|createWriteStream|copyFile|copyFileSync|"
+    r"file_put_contents|fwrite)\b|"
+    r"\b(?:open|fopen|File\.open|File\.write|IO\.write)\s*\([^)]*['\"][wax\+>]",
     re.IGNORECASE,
 )
+_PY_WRITE_RE = _INLINE_WRITE_RE
 _PY_SPECIAL_STRINGS_RE = re.compile(
     r"\b(?:dispatch_guard_common|lane_authorize|write_override|"
     r"load_or_create_key|dispatch_override)\b"
@@ -137,7 +165,11 @@ _GIT_VALUE_FLAGS = frozenset({
 })
 _GIT_READ_SUBS = frozenset({"show", "grep", "log", "blame", "cat-file"})
 _GIT_MUTATE_SUBS = frozenset({"apply", "am", "restore", "checkout"})
-_FUNC_DEF_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{")
+_FUNC_DEF_PREFIX_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{|"
+    r"(?:function|filter)\s+[A-Za-z_][A-Za-z0-9_:\-]*\s*(?:\([^)]*\)\s*)?\{)",
+    re.IGNORECASE,
+)
 _ROUTER_CANONICAL = "d:/apps/_shared/dispatch/dispatch.py"
 
 
@@ -164,6 +196,7 @@ def split_statements(command: str) -> list[str]:
     n = len(text)
     in_single = False
     in_double = False
+    in_ansi = False
     escaped = False
 
     def flush() -> None:
@@ -177,6 +210,16 @@ def split_statements(command: str) -> list[str]:
         if escaped:
             buf.append(ch)
             escaped = False
+            i += 1
+            continue
+        if in_ansi:
+            buf.append(ch)
+            if ch == "\\" and i + 1 < n:
+                buf.append(text[i + 1])
+                i += 2
+                continue
+            if ch == "'":
+                in_ansi = False
             i += 1
             continue
         if in_single:
@@ -200,6 +243,12 @@ def split_statements(command: str) -> list[str]:
             escaped = True
             buf.append(ch)
             i += 1
+            continue
+        if ch == "$" and i + 1 < n and text[i + 1] == "'":
+            in_ansi = True
+            buf.append(ch)
+            buf.append("'")
+            i += 2
             continue
         if ch == "'":
             in_single = True
@@ -363,11 +412,11 @@ def _statement_reason(
             inner_cmd, env, depth + 1, effective_cwd, is_tier2_caller, banned_git_aliases,
         )
 
-    # 5. Python inline code / script inspection
-    if parsed.program in _PYTHON:
-        py_reason = _python_check(statement, parsed, effective_cwd, env)
-        if py_reason is not None:
-            return py_reason
+    # 5. Inline code / script inspection (python, node, perl, ruby, php)
+    if parsed.program in _INLINE_INTERPRETERS:
+        inline_reason = _inline_code_check(statement, parsed, effective_cwd, env)
+        if inline_reason is not None:
+            return inline_reason
 
     # 6. Git: allowed by default with specific denies
     if parsed.program == "git":
@@ -464,13 +513,24 @@ def _extract_command_substitutions(text: str) -> tuple[list[str], str]:
     n = len(text)
     in_single = False
     in_double = False
+    in_ansi = False
     while i < n:
         ch = text[i]
-        if ch == "\\" and not in_single:
+        if ch == "\\" and not in_single and not in_ansi:
             out.append(ch)
             if i + 1 < n:
                 out.append(text[i + 1])
                 i += 1
+            i += 1
+            continue
+        if in_ansi:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == "'":
+                in_ansi = False
             i += 1
             continue
         if ch == "'" and not in_double:
@@ -482,6 +542,12 @@ def _extract_command_substitutions(text: str) -> tuple[list[str], str]:
             out.append(ch)
             in_double = not in_double
             i += 1
+            continue
+        if ch == "$" and not in_single and not in_double and i + 1 < n and text[i + 1] == "'":
+            in_ansi = True
+            out.append(ch)
+            out.append("'")
+            i += 2
             continue
         if ch == "$" and not in_single and i + 1 < n and text[i + 1] == "(":
             if i + 2 < n and text[i + 2] == "(":
@@ -584,6 +650,21 @@ def _raw_head_word(parsed: _Cmd) -> str | None:
     return None
 
 
+def _is_ps_encoded_flag(token: str) -> bool:
+    low = token.lower()
+    if not (low.startswith("-") or low.startswith("/")):
+        return False
+    opt = low.lstrip("-/")
+    opt_name = opt.split(":", 1)[0].split("=", 1)[0]
+    if opt_name in {"ec", "e"}:
+        return True
+    if opt_name.startswith("ec"):
+        return True
+    if len(opt_name) >= 2 and "encodedcommand".startswith(opt_name):
+        return True
+    return False
+
+
 def _unwrap_statement(
     statement: str,
     parsed: _Cmd,
@@ -634,16 +715,43 @@ def _unwrap_statement(
     # bash, sh, zsh, dash
     if head_low in _POSIX_SHELLS:
         args = words[first_non_assign + 1:]
-        idx = -1
-        for i, w in enumerate(args):
-            if w == "-c":
-                idx = i
+        c_set = False
+        cmd_words: list[str] = []
+        operand: str | None = None
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == "--":
+                if i + 1 < len(args):
+                    operand = args[i + 1]
                 break
-            if w.startswith("-c") and len(w) > 2:
-                return None, w[2:]
-        if idx >= 0 and idx + 1 < len(args):
-            return None, args[idx + 1]
-        operand = _posix_shell_operand(args)
+            if arg in _POSIX_SHELL_VALUE_FLAGS:
+                i += 2
+                continue
+            if arg.startswith("--"):
+                i += 1
+                continue
+            if arg.startswith("-") and len(arg) > 1:
+                cluster = arg[1:]
+                if "c" in cluster:
+                    c_set = True
+                    idx = cluster.find("c")
+                    attached = cluster[idx + 1:]
+                    if attached:
+                        cmd_words.append(attached)
+                    cmd_words.extend(args[i + 1:])
+                    break
+                i += 1
+                continue
+            operand = arg
+            break
+
+        if c_set:
+            inner = " ".join(cmd_words).strip()
+            if inner:
+                return None, inner
+            return None, ""
+
         if operand is None:
             return _stdin_shell_reason(statement), None
         bad = _script_operand_reason(operand, statement, effective_cwd, env)
@@ -655,8 +763,7 @@ def _unwrap_statement(
     if head_low in _PS_SHELLS:
         args = words[first_non_assign + 1:]
         for w in args:
-            w_low = w.lower()
-            if w_low == "-encodedcommand" or w_low.startswith("-enc"):
+            if _is_ps_encoded_flag(w):
                 return _encoded_ps_reason(statement), None
         idx = -1
         for i, w in enumerate(args):
@@ -720,6 +827,20 @@ def _unwrap_statement(
         rem = _skip_wrapper(words, first_non_assign + 1, head_low)
         if rem < len(words):
             return None, " ".join(words[rem:])
+        return None, None
+
+    # command, builtin, exec
+    if head_low in {"command", "builtin", "exec"}:
+        rem = _skip_wrapper(words, first_non_assign + 1, head_low)
+        if rem < len(words):
+            return None, " ".join(words[rem:])
+        return None, None
+
+    # eval
+    if head_low == "eval":
+        args = words[first_non_assign + 1:]
+        if args:
+            return None, " ".join(args)
         return None, None
 
     # sudo
@@ -798,26 +919,31 @@ def _start_process_info(words: list[str], start_index: int) -> tuple[str, str]:
     return exe, arg_list
 
 
-def _python_check(
+def _inline_code_check(
     statement: str,
     parsed: _Cmd,
     effective_cwd: str,
     env: Mapping[str, str] | None,
 ) -> str | None:
+    prog = parsed.program
+    flags = _INLINE_FLAGS.get(prog, ("-c",))
     code_pieces: list[str] = []
 
     args = parsed.args
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg == "-c":
+        if arg in flags:
             if i + 1 < len(args):
                 code_pieces.append(args[i + 1])
                 i += 2
             else:
                 i += 1
-        elif arg.startswith("-c"):
-            code_pieces.append(arg[2:])
+        elif any(arg.startswith(f) and len(arg) > len(f) for f in flags if len(f) == 2):
+            for f in flags:
+                if len(f) == 2 and arg.startswith(f) and len(arg) > len(f):
+                    code_pieces.append(arg[len(f):])
+                    break
             i += 1
         else:
             i += 1
@@ -825,10 +951,12 @@ def _python_check(
     if "<<" in statement:
         code_pieces.append(statement)
 
+    prog_title = "PHP" if prog == "php" else prog.title()
+
     for code in code_pieces:
-        if _PY_EXEC_RE.search(code) and _PY_LAUNCHER_RE.search(code):
+        if _INLINE_EXEC_RE.search(code) and _PY_LAUNCHER_RE.search(code):
             return (
-                "R2 direct model launch via Python denied: "
+                f"R2 direct model launch via {prog_title} denied: "
                 f"\"{_snippet(statement)}\". "
                 f"Reach the model only through {_ROUTER}."
             )
@@ -836,32 +964,41 @@ def _python_check(
         # code that even references it is presumed tampering (R2-1).
         if _PY_SPECIAL_STRINGS_RE.search(code):
             return (
-                "R3 guarded-path mutation via Python denied (heuristic speed bump): "
+                f"R3 guarded-path mutation via {prog_title} denied (heuristic speed bump): "
                 f"\"{_snippet(statement)}\". "
                 f"Send the change through {_ROUTER}."
             )
-        if _PY_WRITE_RE.search(code):
+        if _INLINE_WRITE_RE.search(code):
             if _SOURCE_EXT_STR_RE.search(code):
                 return (
-                    "R3 source-file mutation via Python denied (heuristic speed bump): "
+                    f"R3 source-file mutation via {prog_title} denied (heuristic speed bump): "
                     f"\"{_snippet(statement)}\". "
                     f"Send the change through {_ROUTER}."
                 )
             for literal in re.findall(r"['\"]([^'\"]+)['\"]", code):
                 if _is_guarded(literal, effective_cwd, env):
                     return (
-                        "R3 guarded-path mutation via Python denied (heuristic speed bump): "
+                        f"R3 guarded-path mutation via {prog_title} denied (heuristic speed bump): "
                         f"\"{_snippet(statement)}\". "
                         f"Send the change through {_ROUTER}."
                     )
                 if _is_source_target(literal, effective_cwd, env):
                     return (
-                        "R3 source-file mutation via Python denied (heuristic speed bump): "
+                        f"R3 source-file mutation via {prog_title} denied (heuristic speed bump): "
                         f"\"{_snippet(statement)}\". "
                         f"Send the change through {_ROUTER}."
                     )
 
     return None
+
+
+def _python_check(
+    statement: str,
+    parsed: _Cmd,
+    effective_cwd: str,
+    env: Mapping[str, str] | None,
+) -> str | None:
+    return _inline_code_check(statement, parsed, effective_cwd, env)
 
 
 def _git_check(
@@ -1333,7 +1470,12 @@ def _posix_shell_operand(args: list[str]) -> str | None:
         if arg in _POSIX_SHELL_VALUE_FLAGS:
             i += 2
             continue
-        if arg.startswith("-"):
+        if arg.startswith("--"):
+            i += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            if "c" in arg[1:]:
+                return None
             i += 1
             continue
         return arg
@@ -1345,6 +1487,12 @@ def _ps_shell_operand(args: list[str]) -> str | None:
     while i < len(args):
         arg = args[i]
         low = arg.lower()
+        if _is_ps_encoded_flag(arg):
+            if ":" not in arg and "=" not in arg and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+            continue
         if low == "--":
             return args[i + 1] if i + 1 < len(args) else None
         if low in {"-file", "-f", "--file"}:
@@ -1354,7 +1502,7 @@ def _ps_shell_operand(args: list[str]) -> str | None:
         if low in _PS_SHELL_VALUE_FLAGS:
             i += 2
             continue
-        if low.startswith("-"):
+        if low.startswith("-") or low.startswith("/"):
             i += 1
             continue
         return arg
@@ -1737,6 +1885,8 @@ def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
             index += 1
             if wrapper == "env" and word in _ENV_VALUE_FLAGS and index < len(words):
                 index += 1
+            if wrapper in {"exec", "command"} and word in {"-a"} and index < len(words):
+                index += 1
             continue
         if wrapper in {"start", "call"} and word.startswith("/"):
             index += 1
@@ -1747,6 +1897,8 @@ def _skip_wrapper(words: list[str], index: int, wrapper: str) -> int:
 
 def _normalize_exe(token: str) -> str:
     cleaned = token.strip().strip("'\"")
+    if cleaned.startswith("$'") and cleaned.endswith("'"):
+        cleaned = cleaned[2:-1]
     if cleaned == "&":
         return "&"
     base = _basename(cleaned)
@@ -1854,6 +2006,63 @@ def _read_word(text: str, index: int) -> tuple[str, int]:
     length = len(text)
     while index < length:
         ch = text[index]
+        if ch == "$" and index + 1 < length and text[index + 1] == "'":
+            index += 2
+            while index < length and text[index] != "'":
+                if text[index] == "\\" and index + 1 < length:
+                    nxt = text[index + 1]
+                    if nxt == "n":
+                        parts.append("\n")
+                        index += 2
+                    elif nxt == "r":
+                        parts.append("\r")
+                        index += 2
+                    elif nxt == "t":
+                        parts.append("\t")
+                        index += 2
+                    elif nxt == "a":
+                        parts.append("\a")
+                        index += 2
+                    elif nxt == "b":
+                        parts.append("\b")
+                        index += 2
+                    elif nxt == "f":
+                        parts.append("\f")
+                        index += 2
+                    elif nxt == "v":
+                        parts.append("\v")
+                        index += 2
+                    elif nxt in {"e", "E"}:
+                        parts.append("\x1b")
+                        index += 2
+                    elif nxt in "'\"\\":
+                        parts.append(nxt)
+                        index += 2
+                    elif nxt == "x" and index + 3 < length:
+                        hex_str = text[index + 2:index + 4]
+                        try:
+                            parts.append(chr(int(hex_str, 16)))
+                            index += 4
+                        except ValueError:
+                            parts.append(nxt)
+                            index += 2
+                    elif nxt in "01234567":
+                        oct_digits = ""
+                        j = index + 1
+                        while j < length and j < index + 4 and text[j] in "01234567":
+                            oct_digits += text[j]
+                            j += 1
+                        parts.append(chr(int(oct_digits, 8)))
+                        index = j
+                    else:
+                        parts.append(nxt)
+                        index += 2
+                    continue
+                parts.append(text[index])
+                index += 1
+            if index < length and text[index] == "'":
+                index += 1
+            continue
         if ch == "'":
             index += 1
             while index < length and text[index] != "'":
@@ -1899,6 +2108,7 @@ def _strip_bodies(command: str) -> str:
     pending: list[tuple[str, bool, bool]] = []
     in_single = False
     in_double = False
+    in_ansi = False
     escaped = False
 
     while index < length:
@@ -1906,6 +2116,16 @@ def _strip_bodies(command: str) -> str:
         if escaped:
             out.append(ch)
             escaped = False
+            index += 1
+            continue
+        if in_ansi:
+            out.append(ch)
+            if ch == "\\" and index + 1 < length:
+                out.append(command[index + 1])
+                index += 2
+                continue
+            if ch == "'":
+                in_ansi = False
             index += 1
             continue
         if in_single:
@@ -1971,6 +2191,12 @@ def _strip_bodies(command: str) -> str:
                 out.append("\n")
                 index = end
                 continue
+        if ch == "$" and index + 1 < length and command[index + 1] == "'":
+            in_ansi = True
+            out.append(ch)
+            out.append("'")
+            index += 2
+            continue
         if ch == "\\":
             escaped = True
             out.append(ch)

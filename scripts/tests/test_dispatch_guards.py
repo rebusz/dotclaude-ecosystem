@@ -1289,3 +1289,73 @@ def test_round2_legitimate_commands_remain_allowed(tmp_path: Path, command: str)
     work.mkdir()
     payload = _hook("Bash", {"command": command}, cwd=str(work))
     assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None
+
+
+# --- round 3 (Grok 4.7 review) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -lc "codex exec hi"',
+        'sh -ic "codex exec hi"',
+        "pwsh -ec Zm9v",
+        "pwsh -en Zm9v",
+        "command codex exec hi",
+        'eval "codex exec hi"',
+        "exec codex exec hi",
+        "$'codex' exec hi",
+        'node -e "require(\\"child_process\\").execSync(\\"codex exec hi\\")"',
+        'node -e "const cp = require(\\"child_process\\"); cp.execSync(\\"codex exec hi\\")"',
+    ],
+)
+def test_round3_shell_and_inline_bypasses_are_denied(tmp_path: Path, command: str) -> None:
+    result = dispatch_bash_guard.decide(_bash(command), _env(tmp_path))
+    assert result is not None
+    assert "R2" in _reason(result)
+
+
+def test_round3_powershell_function_body_launch_is_denied(tmp_path: Path) -> None:
+    result = dispatch_bash_guard.decide(
+        _bash("function f { codex exec hi }; f", "PowerShell"), _env(tmp_path)
+    )
+    assert result is not None
+    assert "R2" in _reason(result)
+
+
+@pytest.mark.parametrize("flag", ["-ec", "-en"])
+def test_round3_powershell_tool_encoded_command_is_denied(tmp_path: Path, flag: str) -> None:
+    result = dispatch_bash_guard.decide(
+        _bash(f"pwsh {flag} Zm9v", "PowerShell"), _env(tmp_path)
+    )
+    assert result is not None
+    assert "R2" in _reason(result)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status",
+        "python -m pytest -q",
+        "echo x > notes.md",
+    ],
+)
+def test_round3_legitimate_commands_remain_allowed(tmp_path: Path, command: str) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = _hook("Bash", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload, _env(tmp_path / "state")) is None
+    payload_ps = _hook("PowerShell", {"command": command}, cwd=str(work))
+    assert dispatch_bash_guard.decide(payload_ps, _env(tmp_path / "state")) is None
+
+
+def test_round3_dispatch_bash_guard_subprocess(tmp_path: Path) -> None:
+    proc = _run_hook(
+        "dispatch_bash_guard.py",
+        json.dumps(_bash('bash -lc "codex exec hi"')).encode(),
+        tmp_path,
+    )
+    body = _stdout_json(proc)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "R2" in body["hookSpecificOutput"]["permissionDecisionReason"]
+
