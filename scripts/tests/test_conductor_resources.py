@@ -26,6 +26,8 @@ from scripts.conductor_resources import (
     classify_pytest_invocation,
     get_stale_slot_ttl_seconds,
     _iso,
+    PERPLEXITY_SOURCE_CAPACITY,
+    provider_source_capacity,
 )
 from scripts.conductor_store import (
     ConductorStore,
@@ -792,11 +794,10 @@ def test_isolation_fenced_cdp_does_not_block_other_pools(tmp_path: pathlib.Path)
     assert blocked_ppl["state"] == HostResourceRequestState.QUEUED.value
     assert blocked_ppl["reason_code"] == "SLOT_KEY_BUSY"
 
-    # Fill remaining 2 slots of cdp:perplexity (1 fenced + 2 active = 3 capacity)
-    k_req = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-k", agent_instance="ag-k", slot_key="kimi-3")
-    s_req = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-s", agent_instance="ag-s", slot_key="sonnet-5")
-    assert k_req["state"] == HostResourceRequestState.ACTIVE.value
-    assert s_req["state"] == HostResourceRequestState.ACTIVE.value
+    # Fill the remaining cdp:perplexity slots (1 fenced + N-1 active = capacity)
+    for i in range(PERPLEXITY_SOURCE_CAPACITY - 1):
+        fill = manager_ppl.request(purpose="cdp_perplexity", attempt_id=f"att-fill-{i}", agent_instance=f"ag-fill-{i}", slot_key=f"fill-model-{i}")
+        assert fill["state"] == HostResourceRequestState.ACTIVE.value
 
     # 4th request on cdp:perplexity queues with HOST_RESOURCE_BUSY
     r4_ppl = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-r4", agent_instance="ag-r4", slot_key="grok-4.6")
@@ -832,33 +833,41 @@ def test_isolation_fenced_cdp_does_not_block_other_pools(tmp_path: pathlib.Path)
     assert heavy_req["lease_id"] is not None
 
 
-def test_capacity_cdp_perplexity_three_slots_and_promotion(tmp_path: pathlib.Path):
+def test_capacity_cdp_perplexity_slots_and_promotion(tmp_path: pathlib.Path):
     """CAPACITY test:
-    Three concurrent admits in cdp:perplexity (capacity 3); fourth queues with HOST_RESOURCE_BUSY;
-    release of one promotes the queued request.
+    PERPLEXITY_SOURCE_CAPACITY concurrent admits in cdp:perplexity; the next queues with
+    HOST_RESOURCE_BUSY; release of one promotes the queued request.
     """
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    assert PERPLEXITY_SOURCE_CAPACITY == 6
+    admitted = [
+        manager.request(purpose="cdp_perplexity", attempt_id=f"at-{i}", agent_instance=f"ag-{i}", slot_key=f"model-{i}")
+        for i in range(PERPLEXITY_SOURCE_CAPACITY)
+    ]
+    assert all(r["state"] == HostResourceRequestState.ACTIVE.value for r in admitted)
 
-    r1 = manager.request(purpose="cdp_perplexity", attempt_id="at-1", agent_instance="ag-1", slot_key="model-1")
-    r2 = manager.request(purpose="cdp_perplexity", attempt_id="at-2", agent_instance="ag-2", slot_key="model-2")
-    r3 = manager.request(purpose="cdp_perplexity", attempt_id="at-3", agent_instance="ag-3", slot_key="model-3")
+    over = manager.request(purpose="cdp_perplexity", attempt_id="at-over", agent_instance="ag-over", slot_key="model-over")
+    assert over["state"] == HostResourceRequestState.QUEUED.value
+    assert over["reason_code"] == "HOST_RESOURCE_BUSY"
 
-    assert r1["state"] == HostResourceRequestState.ACTIVE.value
-    assert r2["state"] == HostResourceRequestState.ACTIVE.value
-    assert r3["state"] == HostResourceRequestState.ACTIVE.value
-
-    # 4th request must be queued with HOST_RESOURCE_BUSY
-    r4 = manager.request(purpose="cdp_perplexity", attempt_id="at-4", agent_instance="ag-4", slot_key="model-4")
-    assert r4["state"] == HostResourceRequestState.QUEUED.value
-    assert r4["reason_code"] == "HOST_RESOURCE_BUSY"
-
-    # Release r1 -> r4 is promoted
-    rel = manager.release(r1["request_id"])
+    rel = manager.release(admitted[0]["request_id"])
     assert rel["status"] == "RELEASED"
     assert rel["promoted"] is not None
-    assert rel["promoted"]["request_id"] == r4["request_id"]
+    assert rel["promoted"]["request_id"] == over["request_id"]
     assert rel["promoted"]["state"] == HostResourceRequestState.ACTIVE.value
+
+
+def test_other_provider_sources_keep_capacity_three(tmp_path: pathlib.Path):
+    """Only Perplexity is widened; ChatGPT/other provider sources stay at 3."""
+    assert provider_source_capacity("chatgpt") == 3
+    assert provider_source_capacity("cursor") == 3
+    assert provider_source_capacity("perplexity") == PERPLEXITY_SOURCE_CAPACITY
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:chatgpt")
+    rs = [manager.request(purpose="cdp_chatgpt", attempt_id=f"g-{i}", agent_instance=f"ag-g-{i}", slot_key=f"gm-{i}") for i in range(4)]
+    assert [r["state"] for r in rs[:3]] == [HostResourceRequestState.ACTIVE.value] * 3
+    assert rs[3]["state"] == HostResourceRequestState.QUEUED.value
 
 
 def test_slot_exclusivity_blocks_duplicate_model_even_with_free_capacity(tmp_path: pathlib.Path):
@@ -894,6 +903,9 @@ def test_promotion_skips_slot_busy_candidate_and_promotes_next_eligible(tmp_path
     """
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    # Promotion-order semantics, not capacity: pin the pool to 3 units.
+    with store._connection() as conn:
+        conn.execute("UPDATE host_resource_pools SET capacity = 3 WHERE resource_key = 'cdp:perplexity'")
 
     # Occupy all 3 slots
     k1 = manager.request(purpose="cdp_perplexity", attempt_id="at-k1", agent_instance="ag-k1", slot_key="kimi-3")
@@ -931,6 +943,9 @@ def test_priority_overrides_earlier_queued_request_and_both_admit(tmp_path: path
     """
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    # Promotion-order semantics, not capacity: pin the pool to 3 units.
+    with store._connection() as conn:
+        conn.execute("UPDATE host_resource_pools SET capacity = 3 WHERE resource_key = 'cdp:perplexity'")
 
     # Fill all 3 units
     a1 = manager.request(purpose="cdp_perplexity", attempt_id="at-a1", agent_instance="ag-a1", slot_key="m1")

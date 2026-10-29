@@ -8,7 +8,12 @@ import sys
 import pytest
 
 from scripts.conductor_model import HostResourcePool
-from scripts.conductor_resources import HostResourceManager, ResourceAdmissionError, ResourceBusyError
+from scripts.conductor_resources import (
+    HostResourceManager,
+    ResourceAdmissionError,
+    ResourceBusyError,
+    provider_source_capacity,
+)
 from scripts.conductor_store import ConductorStore
 
 
@@ -20,17 +25,19 @@ def request(manager, name, purpose=None, **kwargs):
 
 @pytest.mark.parametrize("source", ["chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"])
 def test_three_plus_one_survives_distinct_clients_restart_and_uses_same_queue(tmp_path, source):
+    cap = provider_source_capacity(source)
+    assert cap == (6 if source == "perplexity" else 3)
     managers = [HostResourceManager(ConductorStore(root_dir=tmp_path), f"provider:{source}")
-                for _ in range(4)]
+                for _ in range(cap + 1)]
     admitted = [request(manager, f"job-{index}") for index, manager in enumerate(managers)]
-    assert [row["state"] for row in admitted] == ["ACTIVE", "ACTIVE", "ACTIVE", "QUEUED"]
+    assert [row["state"] for row in admitted] == ["ACTIVE"] * cap + ["QUEUED"]
     restarted = HostResourceManager(ConductorStore(root_dir=tmp_path), f"provider:{source}")
-    assert request(restarted, "job-3")["request_id"] == admitted[3]["request_id"]
+    assert request(restarted, f"job-{cap}")["request_id"] == admitted[cap]["request_id"]
     promoted = restarted.release(admitted[0]["request_id"], reason="NATIVE_TERMINAL_CONFIRMED")
-    assert promoted["promoted"]["request_id"] == admitted[3]["request_id"]
-    replay = request(restarted, "job-3")
+    assert promoted["promoted"]["request_id"] == admitted[cap]["request_id"]
+    replay = request(restarted, f"job-{cap}")
     assert replay["state"] == "ACTIVE" and replay["idempotent_replay"] is True
-    assert len(restarted.store.list_resource_requests(resource_key=f"provider:{source}")) == 4
+    assert len(restarted.store.list_resource_requests(resource_key=f"provider:{source}")) == cap + 1
 
 
 def test_concurrent_clients_cannot_split_cap_between_cdp_and_native(tmp_path):
@@ -65,7 +72,7 @@ def test_release_promotes_waiting_sibling_pool(tmp_path):
     store = ConductorStore(root_dir=tmp_path)
     cdp = HostResourceManager(store, "cdp:perplexity")
     local = HostResourceManager(store, "provider:perplexity")
-    held = [request(cdp, f"held-{i}") for i in range(3)]
+    held = [request(cdp, f"held-{i}") for i in range(provider_source_capacity("perplexity"))]
     queued = request(local, "local")
     assert queued["state"] == "QUEUED"
     result = cdp.release(held[0]["request_id"], reason="NATIVE_TERMINAL_CONFIRMED")

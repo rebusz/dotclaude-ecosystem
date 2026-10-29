@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from scripts.conductor_resources import HostResourceManager, ResourceAdmissionError
+from scripts.conductor_resources import HostResourceManager, ResourceAdmissionError, provider_source_capacity
 from scripts.conductor_store import ConductorStore
 
 
@@ -69,9 +69,10 @@ def test_existing_request_is_refenced_in_place_and_never_double_counted(tmp_path
     # A second evidence observation about the same original is not another slot.
     retain(owner, key="second-observation", native_attempt_id="native-original")
     assert len(owner.store.list_resource_requests()) == 1
-    assert request(owner, "new-1")["state"] == "ACTIVE"
-    assert request(owner, "new-2")["state"] == "ACTIVE"
-    assert request(owner, "new-3")["state"] == "QUEUED"
+    # The re-fenced original holds one slot; the rest of the perplexity budget admits.
+    for index in range(provider_source_capacity("perplexity") - 1):
+        assert request(owner, f"new-{index}")["state"] == "ACTIVE"
+    assert request(owner, "new-over")["state"] == "QUEUED"
 
 
 def test_foreign_binding_and_unverified_identity_cannot_reclassify_request(tmp_path):
@@ -152,7 +153,7 @@ def test_owner_mismatch_cannot_refence_or_promote_released_original(tmp_path):
                original_owner="wrong-scope-owner")
     assert owner.store.get_resource_request(original["request_id"]) == before
     # Valid registration fences the exact row; it never grants queued work.
-    for index in range(3):
+    for index in range(provider_source_capacity("perplexity")):
         request(owner, f"occupied-{index}")
     queued = request(owner, "waiting")
     retain(owner, native_attempt_id="native-original", existing_request_id=original["request_id"],

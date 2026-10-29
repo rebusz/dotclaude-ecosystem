@@ -71,13 +71,23 @@ PROVIDER_SOURCE_BY_POOL = {
 }
 # Codex sessions have no source policy pool; callers retain platform admission.
 PROVIDER_SOURCE_CAPACITY = 3
+# Perplexity runs light, browser-tab review/diagnose sessions (one tab per model,
+# still one active request per model via slot_key). Owner asked 2026-10-28 to use
+# more Perplexity parallelism; 6 = one slot per usable picker model.
+PERPLEXITY_SOURCE_CAPACITY = 6
+PROVIDER_SOURCE_CAPACITIES = {"perplexity": PERPLEXITY_SOURCE_CAPACITY}
+
+
+def provider_source_capacity(source: str) -> int:
+    """Concurrent ACTIVE/INHERITED/RECOVERY_REQUIRED budget for one provider source."""
+    return PROVIDER_SOURCE_CAPACITIES.get(source, PROVIDER_SOURCE_CAPACITY)
 # The closed set of pools this host has. Anything else is a typo or an attempt
 # to mint a private pool beside the capacity-one one (audit C1).
 KNOWN_RESOURCE_KEYS = frozenset({RESOURCE_KEY}) | CDP_POOLS | PROVIDER_POOLS
 DEFAULT_POOL_CAPACITIES = {
-    **{key: PROVIDER_SOURCE_CAPACITY for key in PROVIDER_POOLS},
+    **{key: provider_source_capacity(PROVIDER_SOURCE_BY_POOL[key]) for key in PROVIDER_POOLS},
     "host:heavy": 1,
-    "cdp:perplexity": 3,
+    "cdp:perplexity": PERPLEXITY_SOURCE_CAPACITY,
     "cdp:chatgpt": 3,
     "cdp:gemini": 1,
     # chrome_tv is a dedicated, continuous TradingView capture lane (port 9225,
@@ -1845,7 +1855,7 @@ class HostResourceManager:
             f"SELECT COUNT(*) FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
             "AND state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')", keys).fetchone()[0]
         # Missing PID/heartbeat, expiry and uncertain results never create space.
-        return count >= PROVIDER_SOURCE_CAPACITY
+        return count >= provider_source_capacity(source)
 
     def _promote_related_locked(self, conn: Any, *, resource_key: str, actor: str) -> Optional[Dict[str, Any]]:
         source = PROVIDER_SOURCE_BY_POOL.get(resource_key)

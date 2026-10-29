@@ -742,7 +742,7 @@ def test_schema_migration_v5_adds_slot_key_and_seeds_cdp_pools(tmp_path: pathlib
     # Check pools
     p_ppl = store.get_resource_pool("cdp:perplexity")
     assert p_ppl is not None
-    assert p_ppl.capacity == 3
+    assert p_ppl.capacity == 6
     assert p_ppl.enabled is True
 
     p_gpt = store.get_resource_pool("cdp:chatgpt")

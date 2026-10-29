@@ -1718,7 +1718,7 @@ class ConductorStore:
                     """
                     INSERT OR IGNORE INTO host_resource_pools
                         (resource_key, capacity, enabled, schema_version)
-                        VALUES ('cdp:perplexity', 3, 1, 'conductor.resource-pool.v1')
+                        VALUES ('cdp:perplexity', 6, 1, 'conductor.resource-pool.v1')
                     """
                 )
                 conn.execute(
