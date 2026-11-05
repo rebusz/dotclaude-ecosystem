@@ -37,6 +37,8 @@ LEASE_ENV = "TDCONDUCTOR_LEASE_ID"
 DEFAULT_LEASE_TTL_SECONDS = 300
 DEFAULT_STALE_SLOT_TTL_SECONDS = 900
 STALE_SLOT_TTL_ENV = "TDCONDUCTOR_STALE_SLOT_TTL_S"
+DEFAULT_CDP_MAX_HOLD_SECONDS = 900
+CDP_MAX_HOLD_ENV = "TDCONDUCTOR_CDP_MAX_HOLD_S"
 DEFAULT_STALE_QUEUED_UNRECORDED_TTL_SECONDS = 14400
 STALE_QUEUED_UNRECORDED_TTL_ENV = "TDCONDUCTOR_STALE_QUEUED_UNRECORDED_TTL_S"
 
@@ -62,6 +64,17 @@ def get_stale_slot_ttl_seconds() -> int:
     return DEFAULT_STALE_SLOT_TTL_SECONDS
 
 
+def get_cdp_max_hold_seconds() -> int:
+    """Maximum admission age for ChatGPT and Perplexity CDP slots (0 disables)."""
+    env_val = os.environ.get(CDP_MAX_HOLD_ENV)
+    if env_val is not None:
+        try:
+            return max(0, int(env_val))
+        except ValueError:
+            pass
+    return DEFAULT_CDP_MAX_HOLD_SECONDS
+
+
 CDP_POOLS = frozenset({"cdp:perplexity", "cdp:chatgpt", "cdp:gemini", "cdp:tv"})
 PROVIDER_SOURCES = frozenset({"chatgpt", "perplexity", "cursor", "antigravity", "zai", "claude"})
 PROVIDER_POOLS = frozenset(f"provider:{source}" for source in PROVIDER_SOURCES)
@@ -77,8 +90,8 @@ KNOWN_RESOURCE_KEYS = frozenset({RESOURCE_KEY}) | CDP_POOLS | PROVIDER_POOLS
 DEFAULT_POOL_CAPACITIES = {
     **{key: PROVIDER_SOURCE_CAPACITY for key in PROVIDER_POOLS},
     "host:heavy": 1,
-    "cdp:perplexity": 3,
-    "cdp:chatgpt": 3,
+    "cdp:perplexity": 4,
+    "cdp:chatgpt": 4,
     "cdp:gemini": 1,
     # chrome_tv is a dedicated, continuous TradingView capture lane (port 9225,
     # profile TV, not fleet-shared). One browser doing one capture, so capacity 1.
@@ -355,6 +368,16 @@ class HostResourceManager:
                 self.store.save_resource_pool(
                     HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
                 )
+            elif resource_key in {"cdp:chatgpt", "cdp:perplexity"}:
+                default_capacity = DEFAULT_POOL_CAPACITIES[resource_key]
+                if pool.capacity < default_capacity:
+                    self.store.save_resource_pool(
+                        HostResourcePool(
+                            resource_key=resource_key,
+                            capacity=default_capacity,
+                            enabled=pool.enabled,
+                        )
+                    )
 
     @staticmethod
     def _attempt_is_revoked_locked(conn, attempt_id: str) -> bool:
@@ -363,13 +386,13 @@ class HostResourceManager:
         ).fetchone()
         if att_row and (
             att_row["status"] == "UNKNOWN"
-            or att_row["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+            or att_row["reason_code"] in {"STALE_SLOT_AUTO_RELEASED", "CDP_MAX_HOLD_EXCEEDED"}
         ):
             return True
         revoked_req = conn.execute(
             """
             SELECT 1 FROM host_resource_requests
-            WHERE attempt_id = ? AND reason_code = 'STALE_SLOT_AUTO_RELEASED'
+            WHERE attempt_id = ? AND reason_code IN ('STALE_SLOT_AUTO_RELEASED', 'CDP_MAX_HOLD_EXCEEDED')
             """,
             (attempt_id,),
         ).fetchone()
@@ -705,7 +728,8 @@ class HostResourceManager:
         """Sweep stale slots: auto-RELEASE requests older than TTL with dead/unrecorded owners."""
         if ttl_seconds is None:
             ttl_seconds = get_stale_slot_ttl_seconds()
-        if ttl_seconds <= 0:
+        cdp_max_hold_seconds = get_cdp_max_hold_seconds()
+        if ttl_seconds <= 0 and cdp_max_hold_seconds <= 0:
             return {"swept_count": 0, "swept_request_ids": [], "receipts": [], "dry_run": dry_run}
 
         now = now or _now()
@@ -740,6 +764,13 @@ class HostResourceManager:
                 if req_id in swept_ids:
                     continue
 
+                cdp_max_hold_exceeded = (
+                    state == HostResourceRequestState.ACTIVE.value
+                    and req["resource_key"] in {"cdp:chatgpt", "cdp:perplexity"}
+                    and cdp_max_hold_seconds > 0
+                    and (now - parse_iso_or_expired(req["created_at_utc"])).total_seconds()
+                    >= cdp_max_hold_seconds
+                )
                 lease_row = conn.execute(
                     "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                 ).fetchone()
@@ -754,7 +785,7 @@ class HostResourceManager:
                     else:
                         exp_str = lease_row["expires_at_utc"]
                         heartbeat_expired = bool(exp_str and parse_iso_or_expired(exp_str) <= now)
-                    if not heartbeat_expired:
+                    if not heartbeat_expired and not cdp_max_hold_exceeded:
                         continue
 
                 # (a) Check age relative to TTL:
@@ -774,7 +805,7 @@ class HostResourceManager:
                 max_ev = conn.execute(
                     """
                     SELECT MAX(recorded_at_utc) AS max_ev FROM host_resource_events
-                    WHERE request_id = ? AND reason_code NOT IN ('LEASE_EXPIRED', 'STALE_SLOT_AUTO_RELEASED')
+                    WHERE request_id = ? AND reason_code NOT IN ('LEASE_EXPIRED', 'STALE_SLOT_AUTO_RELEASED', 'CDP_MAX_HOLD_EXCEEDED')
                     """,
                     (req_id,),
                 ).fetchone()
@@ -783,14 +814,16 @@ class HostResourceManager:
 
                 latest_activity = max(timestamps)
                 age_seconds = (now - latest_activity).total_seconds()
-                if age_seconds < ttl_seconds:
+                if not cdp_max_hold_exceeded and (ttl_seconds <= 0 or age_seconds < ttl_seconds):
                     continue
 
                 # (b) Owner liveness resolves EVERY recorded identity, on the
                 # lease and on the request (finding 2). One live -- or
                 # unprovable -- owner keeps the hold; elapsed TTL alone never
                 # establishes process death.
-                if state == HostResourceRequestState.INHERITED.value:
+                if cdp_max_hold_exceeded:
+                    evidence = "CDP_MAX_HOLD_EXCEEDED"
+                elif state == HostResourceRequestState.INHERITED.value:
                     child_lease = conn.execute(
                         "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                     ).fetchone()
@@ -861,18 +894,19 @@ class HostResourceManager:
                 if not dry_run:
                     old_state = req["state"]
                     old_reason = req["reason_code"]
+                    release_reason = "CDP_MAX_HOLD_EXCEEDED" if cdp_max_hold_exceeded else "STALE_SLOT_AUTO_RELEASED"
                     event_details = {
                         "previous_state": old_state,
                         "previous_reason_code": old_reason,
                         "evidence": evidence,
-                        "stale_reason": "STALE_SLOT_AUTO_RELEASED",
+                        "stale_reason": release_reason,
                         "ttl_seconds": ttl_seconds,
                         "age_seconds": age_seconds,
                     }
                     receipt_result = {
                         "request_id": req_id,
                         "status": "RELEASED",
-                        "reason": "STALE_SLOT_AUTO_RELEASED",
+                        "reason": release_reason,
                         "previous_state": old_state,
                         "previous_reason_code": old_reason,
                         "resource_key": req["resource_key"],
@@ -885,7 +919,7 @@ class HostResourceManager:
 
                     conn.execute(
                         "UPDATE host_resource_requests SET state = ?, released_at_utc = ?, reason_code = ? WHERE request_id = ?",
-                        (HostResourceRequestState.RELEASED.value, now_iso, "STALE_SLOT_AUTO_RELEASED", req_id),
+                        (HostResourceRequestState.RELEASED.value, now_iso, release_reason, req_id),
                     )
 
                     # (H2) Revoke the lease row this request owns. A row reached
@@ -913,7 +947,7 @@ class HostResourceManager:
                             (
                                 HostResourceRequestState.RELEASED.value,
                                 now_iso,
-                                "STALE_SLOT_AUTO_RELEASED",
+                                release_reason,
                                 attempt_id,
                                 HostResourceRequestState.QUEUED.value,
                             ),
@@ -924,10 +958,10 @@ class HostResourceManager:
                         conn.execute(
                             """
                             UPDATE attempts
-                            SET status = 'UNKNOWN', reason_code = 'STALE_SLOT_AUTO_RELEASED', ended_at_utc = ?
+                            SET status = 'UNKNOWN', reason_code = ?, ended_at_utc = ?
                             WHERE attempt_id = ?
                             """,
-                            (now_iso, attempt_id),
+                            (release_reason, now_iso, attempt_id),
                         )
                         att_row = conn.execute(
                             "SELECT work_item_id FROM attempts WHERE attempt_id = ?", (attempt_id,)
@@ -983,12 +1017,13 @@ class HostResourceManager:
                                             old_wi_st,
                                             target_wi_st,
                                             actor,
-                                            "STALE_SLOT_AUTO_RELEASED",
+                                            release_reason,
                                             now_iso,
                                             json.dumps(
                                                 {
                                                     "outcome": "UNKNOWN",
-                                                    "stale_slot_auto_released": True,
+                                                    "stale_slot_auto_released": release_reason == "STALE_SLOT_AUTO_RELEASED",
+                                                    "release_reason": release_reason,
                                                     "evidence": evidence,
                                                     "age_seconds": age_seconds,
                                                     **(
@@ -1009,7 +1044,7 @@ class HostResourceManager:
                         previous=old_state,
                         next_state=HostResourceRequestState.RELEASED.value,
                         actor=actor,
-                        reason="STALE_SLOT_AUTO_RELEASED",
+                        reason=release_reason,
                         details=event_details,
                         event_time=now,
                     )
@@ -1845,7 +1880,11 @@ class HostResourceManager:
             f"SELECT COUNT(*) FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
             "AND state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')", keys).fetchone()[0]
         # Missing PID/heartbeat, expiry and uncertain results never create space.
-        return count >= PROVIDER_SOURCE_CAPACITY
+        capacity = {
+            "chatgpt": 4,
+            "perplexity": 4,
+        }.get(source, PROVIDER_SOURCE_CAPACITY)
+        return count >= capacity
 
     def _promote_related_locked(self, conn: Any, *, resource_key: str, actor: str) -> Optional[Dict[str, Any]]:
         source = PROVIDER_SOURCE_BY_POOL.get(resource_key)
@@ -1913,7 +1952,8 @@ class HostResourceManager:
                     "SELECT status, reason_code FROM attempts WHERE attempt_id = ?", (q_attempt,)
                 ).fetchone()
                 if q_att and (
-                    q_att["status"] == "UNKNOWN" or q_att["reason_code"] == "STALE_SLOT_AUTO_RELEASED"
+                    q_att["status"] == "UNKNOWN"
+                    or q_att["reason_code"] in {"STALE_SLOT_AUTO_RELEASED", "CDP_MAX_HOLD_EXCEEDED"}
                 ):
                     continue
             eligible_row = qrow

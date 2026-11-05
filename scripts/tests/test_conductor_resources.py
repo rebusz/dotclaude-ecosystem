@@ -792,13 +792,15 @@ def test_isolation_fenced_cdp_does_not_block_other_pools(tmp_path: pathlib.Path)
     assert blocked_ppl["state"] == HostResourceRequestState.QUEUED.value
     assert blocked_ppl["reason_code"] == "SLOT_KEY_BUSY"
 
-    # Fill remaining 2 slots of cdp:perplexity (1 fenced + 2 active = 3 capacity)
+    # Fill remaining 3 slots of cdp:perplexity (1 fenced + 3 active = 4 capacity)
     k_req = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-k", agent_instance="ag-k", slot_key="kimi-3")
     s_req = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-s", agent_instance="ag-s", slot_key="sonnet-5")
+    t_req = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-t", agent_instance="ag-t", slot_key="terra")
     assert k_req["state"] == HostResourceRequestState.ACTIVE.value
     assert s_req["state"] == HostResourceRequestState.ACTIVE.value
+    assert t_req["state"] == HostResourceRequestState.ACTIVE.value
 
-    # 4th request on cdp:perplexity queues with HOST_RESOURCE_BUSY
+    # 5th request queues with HOST_RESOURCE_BUSY
     r4_ppl = manager_ppl.request(purpose="cdp_perplexity", attempt_id="att-r4", agent_instance="ag-r4", slot_key="grok-4.6")
     assert r4_ppl["state"] == HostResourceRequestState.QUEUED.value
     assert r4_ppl["reason_code"] == "HOST_RESOURCE_BUSY"
@@ -832,9 +834,9 @@ def test_isolation_fenced_cdp_does_not_block_other_pools(tmp_path: pathlib.Path)
     assert heavy_req["lease_id"] is not None
 
 
-def test_capacity_cdp_perplexity_three_slots_and_promotion(tmp_path: pathlib.Path):
+def test_capacity_cdp_perplexity_four_slots_and_promotion(tmp_path: pathlib.Path):
     """CAPACITY test:
-    Three concurrent admits in cdp:perplexity (capacity 3); fourth queues with HOST_RESOURCE_BUSY;
+    Four concurrent admits in cdp:perplexity (capacity 4); fifth queues with HOST_RESOURCE_BUSY;
     release of one promotes the queued request.
     """
     store = ConductorStore(root_dir=tmp_path)
@@ -843,48 +845,148 @@ def test_capacity_cdp_perplexity_three_slots_and_promotion(tmp_path: pathlib.Pat
     r1 = manager.request(purpose="cdp_perplexity", attempt_id="at-1", agent_instance="ag-1", slot_key="model-1")
     r2 = manager.request(purpose="cdp_perplexity", attempt_id="at-2", agent_instance="ag-2", slot_key="model-2")
     r3 = manager.request(purpose="cdp_perplexity", attempt_id="at-3", agent_instance="ag-3", slot_key="model-3")
+    r4 = manager.request(purpose="cdp_perplexity", attempt_id="at-4", agent_instance="ag-4", slot_key="model-4")
 
     assert r1["state"] == HostResourceRequestState.ACTIVE.value
     assert r2["state"] == HostResourceRequestState.ACTIVE.value
     assert r3["state"] == HostResourceRequestState.ACTIVE.value
+    assert r4["state"] == HostResourceRequestState.ACTIVE.value
 
-    # 4th request must be queued with HOST_RESOURCE_BUSY
-    r4 = manager.request(purpose="cdp_perplexity", attempt_id="at-4", agent_instance="ag-4", slot_key="model-4")
-    assert r4["state"] == HostResourceRequestState.QUEUED.value
-    assert r4["reason_code"] == "HOST_RESOURCE_BUSY"
+    # 5th request must be queued with HOST_RESOURCE_BUSY
+    r5 = manager.request(purpose="cdp_perplexity", attempt_id="at-5", agent_instance="ag-5", slot_key="model-5")
+    assert r5["state"] == HostResourceRequestState.QUEUED.value
+    assert r5["reason_code"] == "HOST_RESOURCE_BUSY"
 
     # Release r1 -> r4 is promoted
     rel = manager.release(r1["request_id"])
     assert rel["status"] == "RELEASED"
     assert rel["promoted"] is not None
-    assert rel["promoted"]["request_id"] == r4["request_id"]
+    assert rel["promoted"]["request_id"] == r5["request_id"]
     assert rel["promoted"]["state"] == HostResourceRequestState.ACTIVE.value
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_provider_pools_admit_four_and_queue_fifth(
+    tmp_path: pathlib.Path, resource_key: str, purpose: str
+):
+    manager = HostResourceManager(ConductorStore(root_dir=tmp_path), resource_key=resource_key)
+    def request_slot(index: int):
+        return manager.request(
+            purpose=purpose,
+            attempt_id=f"four-slot-{resource_key}-{index}",
+            agent_instance=f"agent-{index}",
+            slot_key=f"model-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(request_slot, range(4)))
+    results.append(request_slot(4))
+    assert [row["state"] for row in results] == ["ACTIVE"] * 4 + ["QUEUED"]
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
+    tmp_path: pathlib.Path, resource_key: str, purpose: str
+):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key=resource_key)
+    live_start = psutil.Process(os.getpid()).create_time()
+    old = manager.request(
+        purpose=purpose, attempt_id="old-live-cdp", agent_instance="live-owner",
+        slot_key="old-model", owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    fresh = manager.request(
+        purpose=purpose, attempt_id="fresh-live-cdp", agent_instance="live-owner",
+        slot_key="fresh-model", owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    heavy = HostResourceManager(store, resource_key="host:heavy").request(
+        purpose="pytest_full", attempt_id="heavy-live", agent_instance="live-owner",
+        owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    gemini = HostResourceManager(store, resource_key="cdp:gemini").request(
+        purpose="cdp_gemini", attempt_id="gemini-live", agent_instance="live-owner",
+        owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    now = datetime.now(timezone.utc)
+    future = now + timedelta(seconds=2)
+    with store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            ((now - timedelta(seconds=901)).isoformat(), old["request_id"]),
+        )
+    result = manager.sweep_stale_slots(now=future)
+    assert old["request_id"] in result["swept_request_ids"]
+    old_row = store.get_resource_request(old["request_id"])
+    assert old_row.state == HostResourceRequestState.RELEASED
+    assert old_row.reason_code == "CDP_MAX_HOLD_EXCEEDED"
+    assert store.get_resource_request(fresh["request_id"]).state == HostResourceRequestState.ACTIVE
+    assert store.get_resource_request(heavy["request_id"]).state == HostResourceRequestState.ACTIVE
+    assert store.get_resource_pool("host:heavy").capacity == 1
+    assert store.get_resource_request(gemini["request_id"]).state == HostResourceRequestState.ACTIVE
+    with store._connection() as conn:
+        event = conn.execute(
+            "SELECT reason_code FROM host_resource_events WHERE request_id = ? ORDER BY recorded_at_utc DESC LIMIT 1",
+            (old["request_id"],),
+        ).fetchone()
+    assert event["reason_code"] == "CDP_MAX_HOLD_EXCEEDED"
+
+
+@pytest.mark.parametrize("resource_key", ["cdp:chatgpt", "cdp:perplexity"])
+def test_existing_cdp_pool_capacity_is_upgraded_idempotently(tmp_path: pathlib.Path, resource_key: str):
+    store = ConductorStore(root_dir=tmp_path)
+    store.save_resource_pool(HostResourcePool(resource_key=resource_key, capacity=2, enabled=False))
+    HostResourceManager(store, resource_key=resource_key)
+    HostResourceManager(store, resource_key=resource_key)
+    pool = store.get_resource_pool(resource_key)
+    assert pool.capacity == 4
+    assert pool.enabled is False
+
+
+def test_other_provider_sources_keep_capacity_three(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="provider:cursor")
+    assert store.get_resource_pool("provider:cursor").capacity == 3
+    requests = [
+        manager.request(
+            purpose="provider_cursor", attempt_id=f"cursor-{index}", agent_instance=f"cursor-{index}"
+        )
+        for index in range(4)
+    ]
+    assert [row["state"] for row in requests] == ["ACTIVE", "ACTIVE", "ACTIVE", "QUEUED"]
 
 
 def test_slot_exclusivity_blocks_duplicate_model_even_with_free_capacity(tmp_path: pathlib.Path):
     """SLOT EXCLUSIVITY test:
     With slot_key 'kimi-3' ACTIVE, a second 'kimi-3' request queues with SLOT_KEY_BUSY
-    even though pool capacity (3) is not full; 'sonnet-5' and 'grok-4.6' admit concurrently.
+    even though pool capacity (4) is not full; three other models admit concurrently.
     """
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
 
-    # 1st kimi-3 admits (1/3 capacity used)
+    # 1st kimi-3 admits (1/4 capacity used)
     kimi1 = manager.request(purpose="cdp_perplexity", attempt_id="at-k1", agent_instance="ag-k1", slot_key="kimi-3")
     assert kimi1["state"] == HostResourceRequestState.ACTIVE.value
 
-    # 2nd kimi-3 is queued with SLOT_KEY_BUSY despite capacity < 3
+    # 2nd kimi-3 is queued with SLOT_KEY_BUSY despite capacity < 4
     kimi2 = manager.request(purpose="cdp_perplexity", attempt_id="at-k2", agent_instance="ag-k2", slot_key="kimi-3")
     assert kimi2["state"] == HostResourceRequestState.QUEUED.value
     assert kimi2["reason_code"] == "SLOT_KEY_BUSY"
 
-    # sonnet-5 admits (2/3 capacity used)
+    # Other model slots fill the remaining capacity.
     sonnet = manager.request(purpose="cdp_perplexity", attempt_id="at-s1", agent_instance="ag-s1", slot_key="sonnet-5")
     assert sonnet["state"] == HostResourceRequestState.ACTIVE.value
 
-    # grok-4.6 admits (3/3 capacity used)
+    # grok-4.6 admits (3/4 capacity used)
     grok = manager.request(purpose="cdp_perplexity", attempt_id="at-g1", agent_instance="ag-g1", slot_key="grok-4.6")
     assert grok["state"] == HostResourceRequestState.ACTIVE.value
+    terra = manager.request(purpose="cdp_perplexity", attempt_id="at-t1", agent_instance="ag-t1", slot_key="terra")
+    assert terra["state"] == HostResourceRequestState.ACTIVE.value
 
 
 def test_promotion_skips_slot_busy_candidate_and_promotes_next_eligible(tmp_path: pathlib.Path):
@@ -895,10 +997,11 @@ def test_promotion_skips_slot_busy_candidate_and_promotes_next_eligible(tmp_path
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
 
-    # Occupy all 3 slots
+    # Occupy all 4 slots
     k1 = manager.request(purpose="cdp_perplexity", attempt_id="at-k1", agent_instance="ag-k1", slot_key="kimi-3")
     s1 = manager.request(purpose="cdp_perplexity", attempt_id="at-s1", agent_instance="ag-s1", slot_key="sonnet-5")
     manager.request(purpose="cdp_perplexity", attempt_id="at-g1", agent_instance="ag-g1", slot_key="grok-4.6")
+    manager.request(purpose="cdp_perplexity", attempt_id="at-x1", agent_instance="ag-x1", slot_key="extra")
 
     # Queue head (higher priority 80): kimi-3 (blocked by k1 slot)
     k2 = manager.request(purpose="cdp_perplexity", attempt_id="at-k2", agent_instance="ag-k2", slot_key="kimi-3", priority=80)
@@ -932,10 +1035,11 @@ def test_priority_overrides_earlier_queued_request_and_both_admit(tmp_path: path
     store = ConductorStore(root_dir=tmp_path)
     manager = HostResourceManager(store, resource_key="cdp:perplexity")
 
-    # Fill all 3 units
+    # Fill all 4 units
     a1 = manager.request(purpose="cdp_perplexity", attempt_id="at-a1", agent_instance="ag-a1", slot_key="m1")
     a2 = manager.request(purpose="cdp_perplexity", attempt_id="at-a2", agent_instance="ag-a2", slot_key="m2")
     manager.request(purpose="cdp_perplexity", attempt_id="at-a3", agent_instance="ag-a3", slot_key="m3")
+    manager.request(purpose="cdp_perplexity", attempt_id="at-a4", agent_instance="ag-a4", slot_key="m6")
 
     # Queue req_low at priority 50 first
     req_low = manager.request(purpose="cdp_perplexity", attempt_id="at-low", agent_instance="ag-low", slot_key="m4", priority=50)
@@ -2261,6 +2365,3 @@ def test_sweep_of_non_inherited_child_does_not_delete_parent_lease(manager: Host
     assert parent_id not in sweep["swept_request_ids"]
     assert manager.store.get_resource_request(parent_id).state == HostResourceRequestState.ACTIVE
     assert manager.store.get_resource_lease(parent_lease_id) is not None
-
-
-
