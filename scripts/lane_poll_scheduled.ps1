@@ -2,10 +2,14 @@
   lane_poll_scheduled.ps1 - scheduled lane probe, drain and status.
 
   Registered as Windows Scheduled Task "TsignalLanePoll" (every 15 minutes).
-  Each run, in order, with a 5-minute timeout per command:
-      py D:/APPS/_shared/dispatch/dispatch.py lane probe --all
-      py D:/APPS/_shared/dispatch/dispatch.py lane drain
-      py D:/APPS/_shared/dispatch/dispatch.py lane status
+  Each run, in order:
+      py D:/APPS/_shared/dispatch/dispatch.py lane probe --all   (5 min budget)
+      py D:/APPS/_shared/dispatch/dispatch.py lane drain         (18 min budget)
+      py D:/APPS/_shared/dispatch/dispatch.py lane status        (2 min budget)
+  The drain budget must outlast one lane job (router cap 900 s + 120 s lease
+  margin); a drain killed mid-job leaves that job 'held' (owner_died) for the
+  supervisor instead of re-running it. The drain writes
+  ~\.claude\state\lane_poll_heartbeat.json, and `lane status` reports its age.
   The status text is appended to ~\.claude\state\lane_poll.log (last 200 lines kept).
 
   Single-instance mutex. The script makes no network calls of its own, never
@@ -31,6 +35,8 @@ $ErrorActionPreference = 'Continue'
 $TaskName = 'TsignalLanePoll'
 $Dispatch = 'D:/APPS/_shared/dispatch/dispatch.py'
 $CommandTimeoutMs = 300000
+$DrainTimeoutMs = 1080000
+$StatusTimeoutMs = 120000
 $ScriptPath = $PSCommandPath
 if (-not $ScriptPath) {
     $ScriptPath = $MyInvocation.MyCommand.Path
@@ -72,7 +78,7 @@ function Lock-LanePoll {
 }
 
 function Invoke-LaneCommand {
-    param([string]$Arguments)
+    param([string]$Arguments, [int]$TimeoutMs = $CommandTimeoutMs)
     $step = @{
         ExitCode = 1
         Text     = ''
@@ -108,7 +114,7 @@ function Invoke-LaneCommand {
         $stderrTask = $proc.StandardError.ReadToEndAsync()
         $exited = $false
         try {
-            $exited = $proc.WaitForExit($CommandTimeoutMs)
+            $exited = $proc.WaitForExit($TimeoutMs)
         } catch {
             $exited = $false
         }
@@ -198,8 +204,8 @@ function Invoke-LanePoll {
         $env:PYTHONIOENCODING = 'utf-8'
         $quoted = '"{0}"' -f $Dispatch
         $probe = Invoke-LaneCommand -Arguments ($quoted + ' lane probe --all')
-        $drain = Invoke-LaneCommand -Arguments ($quoted + ' lane drain')
-        $status = Invoke-LaneCommand -Arguments ($quoted + ' lane status')
+        $drain = Invoke-LaneCommand -Arguments ($quoted + ' lane drain') -TimeoutMs $DrainTimeoutMs
+        $status = Invoke-LaneCommand -Arguments ($quoted + ' lane status') -TimeoutMs $StatusTimeoutMs
         $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         $header = '{0}  probe={1} drain={2} status={3}' -f $stamp, (Format-StepCode $probe), (Format-StepCode $drain), (Format-StepCode $status)
         $entry = $header
@@ -238,7 +244,7 @@ function Register-LanePollTask {
     # 9999 days is the scheduler maximum, so the 15-minute repeat does not expire.
     $trigger = New-ScheduledTaskTrigger -Once -At $startAt -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 9999)
     $trigger.Repetition.StopAtDurationEnd = $false
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -DontStopOnIdleEnd
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -DontStopOnIdleEnd
     $description = 'Probe lanes, drain queued jobs, append lane status. Hidden window, no elevation.'
     try {
         # S4U: current user, no stored password, RunLevel Limited (no elevation).

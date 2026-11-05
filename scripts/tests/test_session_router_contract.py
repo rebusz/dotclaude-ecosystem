@@ -44,8 +44,12 @@ _DOOR = (
     "--risk R0..R3 --verify-cmd CMD]"
 )
 _HARD_RULES = (
-    "The supervisor writes no code, does no review and no diagnosis",
-    "NEVER fall back to Claude",
+    # Operator decisions 2026-11-05: the supervisor may read to verify, and a
+    # Claude Code Sonnet lane ends every chain ("there is always an AI source").
+    "The supervisor does not write bulk code",
+    "It may read diffs, receipts, test output and source to verify lane work",
+    "Never stall: there is always an AI source.",
+    "No paid API spend",
     "Free lanes before quota lanes",
     "Every quota hit or DOWN lane is reported to the operator in the same turn, one line.",
     "overrides only via the operator-run `lane_authorize.py --interactive`",
