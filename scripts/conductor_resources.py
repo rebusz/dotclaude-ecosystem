@@ -1898,14 +1898,7 @@ class HostResourceManager:
             f"SELECT COUNT(*) FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
             "AND state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')", keys).fetchone()[0]
         # Missing PID/heartbeat, expiry and uncertain results never create space.
-        capacity = next(
-            (
-                DEFAULT_POOL_CAPACITIES[key]
-                for key in keys
-                if key.startswith("cdp:") and key in DEFAULT_POOL_CAPACITIES
-            ),
-            PROVIDER_SOURCE_CAPACITY,
-        )
+        capacity = max(PROVIDER_SOURCE_CAPACITY, DEFAULT_POOL_CAPACITIES.get(f"cdp:{source}", 0))
         return count >= capacity
 
     def _promote_related_locked(self, conn: Any, *, resource_key: str, actor: str) -> Optional[Dict[str, Any]]:

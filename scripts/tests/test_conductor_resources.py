@@ -1034,6 +1034,36 @@ def test_other_provider_sources_keep_capacity_three(tmp_path: pathlib.Path):
     assert [row["state"] for row in requests] == ["ACTIVE", "ACTIVE", "ACTIVE", "QUEUED"]
 
 
+def test_source_full_uses_per_source_capacity_with_real_store(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    antigravity = HostResourceManager(store, resource_key="provider:antigravity")
+    for index in range(2):
+        antigravity.request(
+            purpose="provider_antigravity", attempt_id=f"antigravity-{index}",
+            agent_instance=f"antigravity-{index}",
+        )
+    with store._connection() as conn:
+        assert not HostResourceManager._source_full_locked(conn, "provider:antigravity")
+
+    antigravity.request(
+        purpose="provider_antigravity", attempt_id="antigravity-2", agent_instance="antigravity-2"
+    )
+    with store._connection() as conn:
+        assert HostResourceManager._source_full_locked(conn, "provider:antigravity")
+
+    chatgpt = HostResourceManager(store, resource_key="cdp:chatgpt")
+    for index in range(3):
+        chatgpt.request(
+            purpose="cdp_chatgpt", attempt_id=f"chatgpt-{index}", agent_instance=f"chatgpt-{index}"
+        )
+    with store._connection() as conn:
+        assert not HostResourceManager._source_full_locked(conn, "cdp:chatgpt")
+
+    chatgpt.request(purpose="cdp_chatgpt", attempt_id="chatgpt-3", agent_instance="chatgpt-3")
+    with store._connection() as conn:
+        assert HostResourceManager._source_full_locked(conn, "cdp:chatgpt")
+
+
 def test_slot_exclusivity_blocks_duplicate_model_even_with_free_capacity(tmp_path: pathlib.Path):
     """SLOT EXCLUSIVITY test:
     With slot_key 'kimi-3' ACTIVE, a second 'kimi-3' request queues with SLOT_KEY_BUSY
