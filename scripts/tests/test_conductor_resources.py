@@ -917,7 +917,8 @@ def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
     future = now + timedelta(seconds=2)
     with store._connection() as conn:
         conn.execute(
-            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            "UPDATE host_resource_events SET recorded_at_utc = ? "
+            "WHERE request_id = ? AND reason_code = 'HOST_RESOURCE_ADMITTED'",
             ((now - timedelta(seconds=901)).isoformat(), old["request_id"]),
         )
     result = manager.sweep_stale_slots(now=future)
@@ -938,14 +939,86 @@ def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
 
 
 @pytest.mark.parametrize("resource_key", ["cdp:chatgpt", "cdp:perplexity"])
-def test_existing_cdp_pool_capacity_is_upgraded_idempotently(tmp_path: pathlib.Path, resource_key: str):
+def test_existing_old_default_cdp_pool_capacity_is_upgraded(tmp_path: pathlib.Path, resource_key: str):
     store = ConductorStore(root_dir=tmp_path)
-    store.save_resource_pool(HostResourcePool(resource_key=resource_key, capacity=2, enabled=False))
+    store.save_resource_pool(HostResourcePool(resource_key=resource_key, capacity=3, enabled=False))
     HostResourceManager(store, resource_key=resource_key)
     HostResourceManager(store, resource_key=resource_key)
     pool = store.get_resource_pool(resource_key)
     assert pool.capacity == 4
     assert pool.enabled is False
+
+
+@pytest.mark.parametrize("capacity", [2, 4])
+@pytest.mark.parametrize("resource_key", ["cdp:chatgpt", "cdp:perplexity"])
+def test_existing_nondefault_cdp_pool_capacity_is_preserved(
+    tmp_path: pathlib.Path, resource_key: str, capacity: int
+):
+    store = ConductorStore(root_dir=tmp_path)
+    store.save_resource_pool(HostResourcePool(resource_key=resource_key, capacity=capacity, enabled=False))
+    HostResourceManager(store, resource_key=resource_key)
+    assert store.get_resource_pool(resource_key).capacity == capacity
+
+
+def test_promoted_queued_cdp_request_max_hold_starts_at_promotion(tmp_path: pathlib.Path):
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    live_start = psutil.Process(os.getpid()).create_time()
+    active = [
+        manager.request(
+            purpose="cdp_perplexity", attempt_id=f"promote-active-{i}",
+            agent_instance=f"agent-{i}", slot_key=f"active-{i}",
+            owner_pid=os.getpid(), owner_start_time=live_start,
+        )
+        for i in range(4)
+    ]
+    queued = manager.request(
+        purpose="cdp_perplexity", attempt_id="promote-old-queued",
+        agent_instance="queued-agent", slot_key="queued-model",
+        owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    assert queued["state"] == HostResourceRequestState.QUEUED.value
+    old_created = (datetime.now(timezone.utc) - timedelta(seconds=1800)).isoformat()
+    with store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            (old_created, queued["request_id"]),
+        )
+
+    released = manager.release(active[0]["request_id"])
+    assert released["promoted"]["request_id"] == queued["request_id"]
+    with store._connection() as conn:
+        event = conn.execute(
+            "SELECT recorded_at_utc FROM host_resource_events "
+            "WHERE request_id = ? AND reason_code = 'HOST_RESOURCE_PROMOTED'",
+            (queued["request_id"],),
+        ).fetchone()
+    promoted_at = datetime.fromisoformat(event["recorded_at_utc"])
+    immediate = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=1))
+    assert queued["request_id"] not in immediate["swept_request_ids"]
+    expired = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=901))
+    assert queued["request_id"] in expired["swept_request_ids"]
+
+
+def test_zero_cdp_max_hold_disables_max_hold_for_old_live_slot(tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.setenv("TDCONDUCTOR_CDP_MAX_HOLD_S", "0")
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key="cdp:perplexity")
+    live_start = psutil.Process(os.getpid()).create_time()
+    request = manager.request(
+        purpose="cdp_perplexity", attempt_id="disabled-max-hold",
+        agent_instance="live-owner", slot_key="disabled-model",
+        owner_pid=os.getpid(), owner_start_time=live_start,
+    )
+    old_created = (datetime.now(timezone.utc) - timedelta(seconds=1800)).isoformat()
+    with store._connection() as conn:
+        conn.execute(
+            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+            (old_created, request["request_id"]),
+        )
+    result = manager.sweep_stale_slots(now=datetime.now(timezone.utc) + timedelta(seconds=1))
+    assert request["request_id"] not in result["swept_request_ids"]
+    assert store.get_resource_request(request["request_id"]).state == HostResourceRequestState.ACTIVE
 
 
 def test_other_provider_sources_keep_capacity_three(tmp_path: pathlib.Path):

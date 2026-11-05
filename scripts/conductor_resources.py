@@ -368,9 +368,9 @@ class HostResourceManager:
                 self.store.save_resource_pool(
                     HostResourcePool(resource_key=resource_key, capacity=default_capacity, enabled=True)
                 )
-            elif resource_key in {"cdp:chatgpt", "cdp:perplexity"}:
+            elif resource_key in {"cdp:chatgpt", "cdp:perplexity"} and pool.capacity == PROVIDER_SOURCE_CAPACITY:
                 default_capacity = DEFAULT_POOL_CAPACITIES[resource_key]
-                if pool.capacity < default_capacity:
+                if pool.capacity != default_capacity:
                     self.store.save_resource_pool(
                         HostResourcePool(
                             resource_key=resource_key,
@@ -764,13 +764,31 @@ class HostResourceManager:
                 if req_id in swept_ids:
                     continue
 
-                cdp_max_hold_exceeded = (
+                cdp_max_hold_exceeded = False
+                if (
                     state == HostResourceRequestState.ACTIVE.value
                     and req["resource_key"] in {"cdp:chatgpt", "cdp:perplexity"}
                     and cdp_max_hold_seconds > 0
-                    and (now - parse_iso_or_expired(req["created_at_utc"])).total_seconds()
-                    >= cdp_max_hold_seconds
-                )
+                ):
+                    promoted = conn.execute(
+                        "SELECT recorded_at_utc FROM host_resource_events "
+                        "WHERE request_id = ? AND reason_code = 'HOST_RESOURCE_PROMOTED' "
+                        "ORDER BY recorded_at_utc DESC LIMIT 1",
+                        (req_id,),
+                    ).fetchone()
+                    activation = promoted["recorded_at_utc"] if promoted else None
+                    if activation is None:
+                        lease_event = conn.execute(
+                            "SELECT recorded_at_utc FROM host_resource_events "
+                            "WHERE request_id = ? AND lease_id IS NOT NULL "
+                            "ORDER BY recorded_at_utc LIMIT 1",
+                            (req_id,),
+                        ).fetchone()
+                        activation = lease_event["recorded_at_utc"] if lease_event else None
+                    activation = activation or req["created_at_utc"]
+                    cdp_max_hold_exceeded = (
+                        now - parse_iso_or_expired(activation)
+                    ).total_seconds() >= cdp_max_hold_seconds
                 lease_row = conn.execute(
                     "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                 ).fetchone()
@@ -1880,10 +1898,14 @@ class HostResourceManager:
             f"SELECT COUNT(*) FROM host_resource_requests WHERE resource_key IN ({','.join('?' for _ in keys)}) "
             "AND state IN ('ACTIVE','INHERITED','RECOVERY_REQUIRED')", keys).fetchone()[0]
         # Missing PID/heartbeat, expiry and uncertain results never create space.
-        capacity = {
-            "chatgpt": 4,
-            "perplexity": 4,
-        }.get(source, PROVIDER_SOURCE_CAPACITY)
+        capacity = next(
+            (
+                DEFAULT_POOL_CAPACITIES[key]
+                for key in keys
+                if key.startswith("cdp:") and key in DEFAULT_POOL_CAPACITIES
+            ),
+            PROVIDER_SOURCE_CAPACITY,
+        )
         return count >= capacity
 
     def _promote_related_locked(self, conn: Any, *, resource_key: str, actor: str) -> Optional[Dict[str, Any]]:
