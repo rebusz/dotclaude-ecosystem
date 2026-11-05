@@ -26,7 +26,7 @@ where it does, the contract wins.
 | **z.ai GLM CLI** (`glm.cmd`, GLM family; separate zcode MCP limit) | **implementation, tests, fixes** in a worktree | separate source from Perplexity's GLM entry; 5h window resets |
 | **Cursor CLI** (`cursor-agent`) | **implementation, tests, fixes** in a worktree | main local workhorse |
 | **Codex CLI** (gpt-6.1-terra first, gpt-6-luna fallback if the CLI rejects terra for ChatGPT accounts (medium effort only; never Astra/Sol on Codex)) | local worker when the three above are busy; implementation only (no planning role) | LAST in the implementation queue |
-| **Claude** (this session: Opus 5.5 / Fable 5.1; subagents Sonnet) | **management, supervision, coordination, critical decisions, plans, synthesis, adversarial verification** | not bulk implementation; Sonnet subagent only for root-cause work when local lanes are down; per-task coordinators run on Sonnet/Haiku, never Opus/Fable; Claude never falls back into bulk implementation, review or diagnosis (chain exhausted = QUEUED) |
+| **Claude** (this session: Opus 5.5 / Fable 5.1; subagents Sonnet) | **management, supervision, coordination, critical decisions, plans, synthesis, adversarial verification** | not bulk implementation; may read diffs, receipts and source to verify (operator 2026-11-05); per-task coordinators run on Sonnet/Haiku, never Opus/Fable; a Claude Code Sonnet lane ends every chain, reviewing only work Claude did not write |
 | Haiku | mechanical bulk without judgement, if at all | **never audits, reviews or code** |
 | **OpenCode Zen free** (`opencode run`; free models ONLY, never paid): **DeepSeek V4.1 Flash** (`opencode/deepseek-v4.1-flash-free`), **GLM-5.3-Flash** (`opencode/glm-5.3-flash-free`, a third GLM source, separate from z.ai and Perplexity) | **implementation, tests, fixes** in a worktree (agentic: edits files, runs pytest); second-opinion R0/R1 review | free for a limited time, no end date; 200K context cap; ZDR claimed (OpenCode statement via press, no primary doc). R2/R3 code only with the operator's OK |
 | Local Qwen, LongCat (OpenCode free), Grok bot | night/offline, free extra lane, QA operator lane | opportunistic |
@@ -35,16 +35,11 @@ Highest-weight decisions and plans run in parallel at the highest efforts on
 **Astra (Pro/max), Fable/Opus (xhigh), and Argon**; the supervisor synthesizes
 the three, it does not average them.
 
-> **Operating facts and bans (operator, 2026-10-19; supersedes the Codex/Luna/ChatGPT notes of 2026-10-18).**
+> **Live state is data, not prose (operator 2026-11-05).** Quota hits, bans, resets and DOWN lanes live in `dispatch.py lane status` (lane_health.json); never write dated quota facts into this file. Durable facts kept from the 2026-10-19 block:
 >
-> - **Codex: not used at all, Luna included.** The Codex weekly pool is at 100% until 2026-10-24 14:41; after the limit it burns paid credits. No Codex CLI, no Codex app, no `codex exec` for writing, review or supervision until the operator says otherwise in a new message. The earlier 'gpt-6-luna writer-only' exception (v1.9) is suspended.
-> - **ChatGPT surfaces:** the Work surface shares the Codex pool, so anything that runs in ChatGPT Work is counted (GitHub-connector tasks go to Work: `cdp_chatgpt_code.py` with a GitHub reference). ChatGPT Chat (GPT-6 / GPT-6 Pro via the auditgpt default) is a separate, uncounted limit. Use Chat; never route Astra through the Codex app; wrap submits in `cdp_lane_lock.py` (section 5).
-> - **z.ai GLM:** weekly limit exhausted (error 1310), resets 2026-10-25 21:55:17 as printed in the message. No GLM dispatch until then.
-> - **Cursor:** monthly limit used up; send it no work (`--model auto` does not help).
-> - **Writers now:** OpenCode DeepSeek V4.1 Flash free (unreliable: has hung or produced no output repeatedly; always wrap in `timeout` and check `git status`) and Claude Sonnet/Haiku subagents (Haiku only for well-specified R0/R1 slices). **Sub-sessions run on Sonnet 5.5 or Haiku, not Opus; writing goes to workers.**
-> - **Reviews now:** Gemini 4 Argon (through `cdp_lane_lock.py`) or Perplexity Sol / Grok / Kimi through CoderPX. Argon has returned confident false 'ship-blocking' claims; verify each against the code and get a second family to arbitrate before overriding a BLOCK.
->
-> **Precedence:** this block overrides every table row, invocation line and review requirement below that names Codex (incl. Luna), Cursor, z.ai GLM or Astra in Work mode. Where a rule below asks for one of them, use the substitutes above (writers: DeepSeek free or Sonnet/Haiku subagent; reviewers: Argon or Perplexity); never wait on an exhausted source and never stall a lane for lack of a named model. Each quota hit is still reported at once.
+> - **ChatGPT surfaces:** the Work surface shares the Codex pool (GitHub-connector tasks go to Work: `cdp_chatgpt_code.py` with a GitHub reference); ChatGPT Chat (GPT-6 / GPT-6 Pro via the auditgpt default) is a separate limit. Prefer Chat; never route Astra through the Codex app.
+> - **Argon reviews:** Argon has returned confident false 'ship-blocking' claims; verify each against the code and get a second family to arbitrate before overriding a BLOCK.
+> - **Never stall:** when the external lanes for a role are out, the Claude Code Sonnet lane takes the job (operator 2026-11-05: "there is always an AI source"); paid API spend stays off.
 
 ## 1a. Model map by task and R-class (v1.3, operator 2026-10-16)
 
@@ -122,6 +117,8 @@ Effort defaults: Astra `pro` for R2/R3 plans and R3 reviews (escalation reason r
 - Guard every launch: `cd <worktree> && [ "$(git rev-parse --abbrev-ref HEAD)" = "<branch>" ] && <launch>`; never `git add -A`.
 
 ## 6. Changelog
+
+- v2.1 (2026-11-05, operator answers to the workflow audit): the 2026-10-19 dated facts block is removed (live state is `lane status`); the supervisor may read to verify; a Claude Code Sonnet lane ends every chain instead of QUEUED; no paid API spend.
 
 - v1.2 2026-10-16: supervisor may restart apps via the EcosystemControl CLI (operator GO); fleet comes up with WatchF.
 - v1.1 2026-10-16: agy headless implementation recipe (globalPermissionGrants), z.ai reset times are UTC.
