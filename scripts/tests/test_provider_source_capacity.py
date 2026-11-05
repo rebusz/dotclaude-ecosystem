@@ -40,8 +40,18 @@ def test_concurrent_clients_cannot_split_cap_between_cdp_and_native(tmp_path):
                 for i in range(12)]
     with ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(lambda pair: request(pair[1], f"job-{pair[0]}"), enumerate(managers)))
-    assert sum(row["state"] == "ACTIVE" for row in results) == 3
-    assert sum(row["state"] == "QUEUED" for row in results) == 9
+    assert sum(row["state"] == "ACTIVE" for row in results) == 4
+    assert sum(row["state"] == "QUEUED" for row in results) == 8
+
+
+def test_three_cap_source_cannot_split_between_cdp_and_provider_pools(tmp_path):
+    store = ConductorStore(root_dir=tmp_path)
+    cdp = HostResourceManager(store, "cdp:gemini")
+    provider = HostResourceManager(store, "provider:antigravity")
+    assert request(cdp, "gemini")["state"] == "ACTIVE"
+    held = [request(provider, f"agy-{index}") for index in range(2)]
+    assert all(row["state"] == "ACTIVE" for row in held)
+    assert request(provider, "agy-over-cap")["state"] == "QUEUED"
 
 
 def test_agy_gemini_share_source_and_keep_gemini_platform_capacity_one(tmp_path):
@@ -65,7 +75,7 @@ def test_release_promotes_waiting_sibling_pool(tmp_path):
     store = ConductorStore(root_dir=tmp_path)
     cdp = HostResourceManager(store, "cdp:perplexity")
     local = HostResourceManager(store, "provider:perplexity")
-    held = [request(cdp, f"held-{i}") for i in range(3)]
+    held = [request(cdp, f"held-{i}") for i in range(4)]
     queued = request(local, "local")
     assert queued["state"] == "QUEUED"
     result = cdp.release(held[0]["request_id"], reason="NATIVE_TERMINAL_CONFIRMED")
@@ -111,8 +121,8 @@ def test_platform_pool_raise_or_inheritance_cannot_evade_source_limit(tmp_path):
     store = ConductorStore(root_dir=tmp_path)
     cdp = HostResourceManager(store, "cdp:chatgpt")
     store.save_resource_pool(HostResourcePool(resource_key="cdp:chatgpt", capacity=9))
-    held = [request(cdp, f"held-{i}") for i in range(3)]
-    assert request(cdp, "fourth")["state"] == "QUEUED"
+    held = [request(cdp, f"held-{i}") for i in range(4)]
+    assert request(cdp, "fifth")["state"] == "QUEUED"
     with pytest.raises(ResourceBusyError, match="PROVIDER_SOURCE_BUSY"):
         request(cdp, "inherited", parent_lease_id=held[0]["lease_id"])
 

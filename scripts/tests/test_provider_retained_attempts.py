@@ -71,7 +71,8 @@ def test_existing_request_is_refenced_in_place_and_never_double_counted(tmp_path
     assert len(owner.store.list_resource_requests()) == 1
     assert request(owner, "new-1")["state"] == "ACTIVE"
     assert request(owner, "new-2")["state"] == "ACTIVE"
-    assert request(owner, "new-3")["state"] == "QUEUED"
+    assert request(owner, "new-3")["state"] == "ACTIVE"
+    assert request(owner, "new-4")["state"] == "QUEUED"
 
 
 def test_foreign_binding_and_unverified_identity_cannot_reclassify_request(tmp_path):
