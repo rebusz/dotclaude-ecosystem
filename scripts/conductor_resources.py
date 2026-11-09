@@ -839,9 +839,7 @@ class HostResourceManager:
                 # lease and on the request (finding 2). One live -- or
                 # unprovable -- owner keeps the hold; elapsed TTL alone never
                 # establishes process death.
-                if cdp_max_hold_exceeded:
-                    evidence = "CDP_MAX_HOLD_EXCEEDED"
-                elif state == HostResourceRequestState.INHERITED.value:
+                if state == HostResourceRequestState.INHERITED.value:
                     child_lease = conn.execute(
                         "SELECT * FROM host_resource_leases WHERE request_id = ?", (req_id,)
                     ).fetchone()
@@ -884,6 +882,10 @@ class HostResourceManager:
                     if owner_pid is not None:
                         identities.append((owner_pid, owner_start_time))
                     if not identities:
+                        # A max-hold deadline is not proof that an unrecorded
+                        # owner is gone. Preserve the ordinary stale-slot TTL.
+                        if cdp_max_hold_exceeded and (ttl_seconds <= 0 or age_seconds < ttl_seconds):
+                            continue
                         is_gone, evidence = True, "OWNER_UNRECORDED"
                     else:
                         is_gone, evidence = self._all_recorded_owners_gone(identities)

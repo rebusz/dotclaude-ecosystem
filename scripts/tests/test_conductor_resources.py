@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from unittest.mock import patch
 import json
 import os
@@ -891,7 +892,7 @@ def test_cdp_provider_pools_admit_four_and_queue_fifth(
     ("resource_key", "purpose"),
     [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
 )
-def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
+def test_cdp_max_hold_keeps_live_owner_fresh_heartbeat_and_other_pools(
     tmp_path: pathlib.Path, resource_key: str, purpose: str
 ):
     store = ConductorStore(root_dir=tmp_path)
@@ -922,10 +923,9 @@ def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
             ((now - timedelta(seconds=901)).isoformat(), old["request_id"]),
         )
     result = manager.sweep_stale_slots(now=future)
-    assert old["request_id"] in result["swept_request_ids"]
+    assert old["request_id"] not in result["swept_request_ids"]
     old_row = store.get_resource_request(old["request_id"])
-    assert old_row.state == HostResourceRequestState.RELEASED
-    assert old_row.reason_code == "CDP_MAX_HOLD_EXCEEDED"
+    assert old_row.state == HostResourceRequestState.ACTIVE
     assert store.get_resource_request(fresh["request_id"]).state == HostResourceRequestState.ACTIVE
     assert store.get_resource_request(heavy["request_id"]).state == HostResourceRequestState.ACTIVE
     assert store.get_resource_pool("host:heavy").capacity == 1
@@ -935,7 +935,159 @@ def test_cdp_max_hold_releases_live_owner_but_keeps_fresh_and_other_pools(
             "SELECT reason_code FROM host_resource_events WHERE request_id = ? ORDER BY recorded_at_utc DESC LIMIT 1",
             (old["request_id"],),
         ).fetchone()
-    assert event["reason_code"] == "CDP_MAX_HOLD_EXCEEDED"
+    assert event["reason_code"] != "CDP_MAX_HOLD_EXCEEDED"
+
+
+@contextmanager
+def _retained_cdp_owner():
+    """Real owned process/creation identity, bounded cleanup, no liveness mock."""
+    process = subprocess.Popen(
+        [sys.executable, "-B", "-c", "import sys; sys.stdin.buffer.read()"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        start = psutil.Process(process.pid).create_time()
+        assert process.poll() is None
+        yield process, start
+    finally:
+        if process.stdin and not process.stdin.closed:
+            process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def _old_cdp_with_current_heartbeat(tmp_path, monkeypatch, resource_key, purpose, owner):
+    from scripts import conductor_resources as resources
+
+    assert pathlib.Path(resources.__file__).resolve() == pathlib.Path(__file__).resolve().parents[1] / "conductor_resources.py"
+    clock = [datetime.now(timezone.utc)]
+    monkeypatch.setattr(resources, "_now", lambda: clock[0])
+    monkeypatch.setattr(resources, "current_utc_iso", lambda: _iso(clock[0]))
+    store = ConductorStore(root_dir=tmp_path)
+    manager = HostResourceManager(store, resource_key=resource_key)
+    pid, start = (owner[0].pid, owner[1]) if owner else (None, None)
+    holder = manager.request(
+        purpose=purpose, attempt_id="clocked-cdp-holder", agent_instance="real-owner",
+        slot_key="same-model", owner_pid=pid, owner_start_time=start,
+        lease_ttl_seconds=1200,
+    )
+    clock[0] += timedelta(seconds=901)
+    manager.heartbeat(holder["lease_id"], 2)
+    return manager, store, holder, clock
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_live_popen_owner_keeps_slot_and_dead_owner_reclaims(
+    tmp_path, monkeypatch, resource_key, purpose
+):
+    with _retained_cdp_owner() as owner:
+        manager, store, holder, clock = _old_cdp_with_current_heartbeat(
+            tmp_path, monkeypatch, resource_key, purpose, owner
+        )
+        assert owner[0].poll() is None
+        assert psutil.Process(owner[0].pid).create_time() == owner[1]
+        result = manager.sweep_stale_slots(now=clock[0])
+        assert holder["request_id"] not in result["swept_request_ids"]
+        assert store.get_resource_request(holder["request_id"]).state == HostResourceRequestState.ACTIVE
+        other = manager.request(purpose=purpose, attempt_id="second-live", agent_instance="second", slot_key="same-model")
+        assert other["state"] == "QUEUED" and other["reason_code"] == "SLOT_KEY_BUSY"
+        assert store.get_receipt(f"stale_slot_auto_release_{holder['request_id']}") is None
+
+        owner[0].stdin.close()
+        assert owner[0].wait(timeout=5) == 0
+        result = manager.sweep_stale_slots(now=clock[0])
+        assert holder["request_id"] in result["swept_request_ids"]
+        assert store.get_resource_request(holder["request_id"]).reason_code == "CDP_MAX_HOLD_EXCEEDED"
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_cross_pool_request_does_not_sweep_live_popen_owner(
+    tmp_path, monkeypatch, resource_key, purpose
+):
+    with _retained_cdp_owner() as owner:
+        _, store, holder, _ = _old_cdp_with_current_heartbeat(tmp_path, monkeypatch, resource_key, purpose, owner)
+        gemini = HostResourceManager(store, resource_key="cdp:gemini").request(
+            purpose="cdp_gemini", attempt_id="other-pool", agent_instance="gemini",
+        )
+        assert gemini["state"] == "ACTIVE"
+        assert store.get_resource_request(holder["request_id"]).state == HostResourceRequestState.ACTIVE
+        assert store.get_receipt(f"stale_slot_auto_release_{holder['request_id']}") is None
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_unproven_identity_never_reclaims(tmp_path, monkeypatch, resource_key, purpose):
+    with _retained_cdp_owner() as owner:
+        manager, store, holder, clock = _old_cdp_with_current_heartbeat(tmp_path, monkeypatch, resource_key, purpose, owner)
+        # Real live PID with legacy/incomplete persisted start identity. No
+        # fake liveness verdict: the production identity check must be unsure.
+        with store._connection() as conn:
+            conn.execute("UPDATE host_resource_requests SET owner_process_start_time = NULL WHERE request_id = ?", (holder["request_id"],))
+            conn.execute("UPDATE host_resource_leases SET process_start_time = NULL WHERE lease_id = ?", (holder["lease_id"],))
+        assert manager._owner_liveness(owner[0].pid, None)[1] == "OWNER_LIVENESS_UNPROVEN"
+        assert holder["request_id"] not in manager.sweep_stale_slots(now=clock[0])["swept_request_ids"]
+        assert store.get_resource_request(holder["request_id"]).state == HostResourceRequestState.ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_unrecorded_fresh_owner_not_expired_by_age_alone(tmp_path, monkeypatch, resource_key, purpose):
+    manager, store, holder, clock = _old_cdp_with_current_heartbeat(tmp_path, monkeypatch, resource_key, purpose, None)
+    assert holder["request_id"] not in manager.sweep_stale_slots(now=clock[0])["swept_request_ids"]
+    assert store.get_resource_request(holder["request_id"]).state == HostResourceRequestState.ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_recovery_with_live_popen_owner_keeps_fence(tmp_path, monkeypatch, resource_key, purpose):
+    with _retained_cdp_owner() as owner:
+        manager, store, holder, clock = _old_cdp_with_current_heartbeat(tmp_path, monkeypatch, resource_key, purpose, owner)
+        clock[0] += timedelta(seconds=1201)
+        manager.reconcile(now=clock[0])
+        assert store.get_resource_request(holder["request_id"]).state == HostResourceRequestState.RECOVERY_REQUIRED
+        assert holder["request_id"] not in manager.sweep_stale_slots(now=clock[0])["swept_request_ids"]
+
+
+@pytest.mark.parametrize(
+    ("resource_key", "purpose"),
+    [("cdp:chatgpt", "cdp_chatgpt"), ("cdp:perplexity", "cdp_perplexity")],
+)
+def test_cdp_max_hold_dead_parent_with_inherited_live_popen_child_keeps_slot(tmp_path, monkeypatch, resource_key, purpose):
+    from scripts import conductor_resources as resources
+
+    with _retained_cdp_owner() as parent, _retained_cdp_owner() as child:
+        clock = [datetime.now(timezone.utc)]
+        monkeypatch.setattr(resources, "_now", lambda: clock[0])
+        monkeypatch.setattr(resources, "current_utc_iso", lambda: _iso(clock[0]))
+        store = ConductorStore(root_dir=tmp_path)
+        manager = HostResourceManager(store, resource_key=resource_key)
+        holder = manager.request(purpose=purpose, attempt_id="parent", agent_instance="parent", owner_pid=parent[0].pid, owner_start_time=parent[1], lease_ttl_seconds=1200)
+        inherited = manager.request(purpose=purpose, attempt_id="child", agent_instance="child", parent_lease_id=holder["lease_id"], owner_pid=child[0].pid, owner_start_time=child[1])
+        assert inherited["state"] == "INHERITED"
+        clock[0] += timedelta(seconds=901)
+        manager.heartbeat(holder["lease_id"], 2)
+        parent[0].stdin.close()
+        assert parent[0].wait(timeout=5) == 0
+        result = manager.sweep_stale_slots(now=clock[0])
+        assert holder["request_id"] not in result["swept_request_ids"]
+        assert inherited["request_id"] not in result["swept_request_ids"]
+        assert store.get_resource_request(inherited["request_id"]).state == HostResourceRequestState.INHERITED
 
 
 @pytest.mark.parametrize("resource_key", ["cdp:chatgpt", "cdp:perplexity"])
@@ -961,43 +1113,45 @@ def test_existing_nondefault_cdp_pool_capacity_is_preserved(
 
 
 def test_promoted_queued_cdp_request_max_hold_starts_at_promotion(tmp_path: pathlib.Path):
-    store = ConductorStore(root_dir=tmp_path)
-    manager = HostResourceManager(store, resource_key="cdp:perplexity")
-    live_start = psutil.Process(os.getpid()).create_time()
-    active = [
-        manager.request(
-            purpose="cdp_perplexity", attempt_id=f"promote-active-{i}",
-            agent_instance=f"agent-{i}", slot_key=f"active-{i}",
-            owner_pid=os.getpid(), owner_start_time=live_start,
+    with _retained_cdp_owner() as (owner, live_start):
+        store = ConductorStore(root_dir=tmp_path)
+        manager = HostResourceManager(store, resource_key="cdp:perplexity")
+        active = [
+            manager.request(
+                purpose="cdp_perplexity", attempt_id=f"promote-active-{i}",
+                agent_instance=f"agent-{i}", slot_key=f"active-{i}",
+                owner_pid=owner.pid, owner_start_time=live_start,
+            )
+            for i in range(4)
+        ]
+        queued = manager.request(
+            purpose="cdp_perplexity", attempt_id="promote-old-queued",
+            agent_instance="queued-agent", slot_key="queued-model",
+            owner_pid=owner.pid, owner_start_time=live_start,
         )
-        for i in range(4)
-    ]
-    queued = manager.request(
-        purpose="cdp_perplexity", attempt_id="promote-old-queued",
-        agent_instance="queued-agent", slot_key="queued-model",
-        owner_pid=os.getpid(), owner_start_time=live_start,
-    )
-    assert queued["state"] == HostResourceRequestState.QUEUED.value
-    old_created = (datetime.now(timezone.utc) - timedelta(seconds=1800)).isoformat()
-    with store._connection() as conn:
-        conn.execute(
-            "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
-            (old_created, queued["request_id"]),
-        )
+        assert queued["state"] == HostResourceRequestState.QUEUED.value
+        old_created = (datetime.now(timezone.utc) - timedelta(seconds=1800)).isoformat()
+        with store._connection() as conn:
+            conn.execute(
+                "UPDATE host_resource_requests SET created_at_utc = ? WHERE request_id = ?",
+                (old_created, queued["request_id"]),
+            )
 
-    released = manager.release(active[0]["request_id"])
-    assert released["promoted"]["request_id"] == queued["request_id"]
-    with store._connection() as conn:
-        event = conn.execute(
-            "SELECT recorded_at_utc FROM host_resource_events "
-            "WHERE request_id = ? AND reason_code = 'HOST_RESOURCE_PROMOTED'",
-            (queued["request_id"],),
-        ).fetchone()
-    promoted_at = datetime.fromisoformat(event["recorded_at_utc"])
-    immediate = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=1))
-    assert queued["request_id"] not in immediate["swept_request_ids"]
-    expired = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=901))
-    assert queued["request_id"] in expired["swept_request_ids"]
+        released = manager.release(active[0]["request_id"])
+        assert released["promoted"]["request_id"] == queued["request_id"]
+        with store._connection() as conn:
+            event = conn.execute(
+                "SELECT recorded_at_utc FROM host_resource_events "
+                "WHERE request_id = ? AND reason_code = 'HOST_RESOURCE_PROMOTED'",
+                (queued["request_id"],),
+            ).fetchone()
+        promoted_at = datetime.fromisoformat(event["recorded_at_utc"])
+        owner.stdin.close()
+        assert owner.wait(timeout=5) == 0
+        immediate = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=1))
+        assert queued["request_id"] not in immediate["swept_request_ids"]
+        expired = manager.sweep_stale_slots(now=promoted_at + timedelta(seconds=901))
+        assert queued["request_id"] in expired["swept_request_ids"]
 
 
 def test_zero_cdp_max_hold_disables_max_hold_for_old_live_slot(tmp_path: pathlib.Path, monkeypatch):
