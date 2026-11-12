@@ -114,10 +114,11 @@ independent reviewer with no local access; it is active only after an
 installed ordinary-router receipt identifies the served Vertex lane,
 `modelVersion`, and a successful result for the requested role.
 
-- **Task stamp**: For code use the ordinary CoderPX task stamp `lane: vertex`,
-  `mode: file` or `mode: patch`, optional model `gemini-4-carbon` or
-  `gemini-3.8-flash`. Supervised work goes through `dispatch.py lane` with a
-  supported role. There is no automatic reorder of the outward chain.
+- **Task stamp**: For code use the ordinary CoderPX task stamp `lane: vertex_gemini`,
+  `mode: file` or `mode: patch`, and allow an optional model selector from the
+  installed route's allowlist, verified against returned `modelVersion`.
+  Supervised work goes through `dispatch.py lane` with a supported role.
+  There is no automatic reorder of the outward chain.
 - **Review selector**: Use candidate review selector `review: vertex_gemini` if
   qualified against a producer of another family. Strict family independence
   applies: no Gemini family reviewer for a Gemini producer even if different
