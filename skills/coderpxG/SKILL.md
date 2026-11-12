@@ -41,6 +41,8 @@ the Perplexity lane; it is not the ChatGPT driver specification. Use verified
 chrome_ppl and chrome_gpt routes and existing stamps, limits and Conductor.
 Do not use these design instructions as an invented driver interface.
 
+If evaluating the optional GCP Vertex AI authoring route, see [vertex-ai.md](references/vertex-ai.md).
+
 1. Prepare one self-contained packet per coherent slice: exact base HEAD,
    allowed paths, current relevant files/contracts, intended behavior, test
    commands and return format (complete files or an applicable patch). Use
