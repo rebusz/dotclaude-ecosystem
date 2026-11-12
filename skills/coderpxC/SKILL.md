@@ -107,6 +107,36 @@ Extra High when Pro is out" means model `Pro` first, then model `GPT-5.6 Sol`
 with the effort slider at Extra High. Never claim a model or an effort you did
 not read back from the UI.
 
+## Candidate Vertex dispatch
+
+Vertex is a candidate, explicitly selected response-only producer and
+independent reviewer with no local access; it is active only after an
+installed ordinary-router receipt identifies the served Vertex lane,
+`modelVersion`, and a successful result for the requested role.
+
+- **Task stamp**: For code use the ordinary CoderPX task stamp `lane: vertex`,
+  `mode: file` or `mode: patch`, optional model `gemini-4-carbon` or
+  `gemini-3.8-flash`. Supervised work goes through `dispatch.py lane` with a
+  supported role. There is no automatic reorder of the outward chain.
+- **Review selector**: Use candidate review selector `review: vertex_gemini` if
+  qualified against a producer of another family. Strict family independence
+  applies: no Gemini family reviewer for a Gemini producer even if different
+  transport; Vertex may review a verified independent non-Gemini producer.
+- **Local execution under C**: Vertex has no local access. The C assignment
+  selects a qualified local executor. That executor verifies the base,
+  applies the returned file or patch in its
+  owned worktree, runs the component suite, then routes the exact applied head
+  to an independent other-family reviewer.
+- **Packet and stream handling**: Use normal scan on the rendered outbound
+  packet and attachments and reject unsafe packets before sending. If SSE stops
+  after a possible submit without confirmed completion, keep the original attempt
+  and reservation as `SUBMIT_UNCONFIRMED`. Do not retry or replace it. Exclude
+  Google AI Studio from the Vertex fallback chain.
+- **Receipt readback**: Verify returned `modelVersion` vs request, effort only
+  from a provider response that explicitly reports it. A copy of the request
+  in `verified_effort` is unverified. Omit `effort` from the slice stamp until
+  the installed stamp parser supports it. Actual cost requires billing readback.
+
 ## Step 4 — write the packet
 
 Fill `D:/APPS/_shared/coderpx/PACKET_TEMPLATE.md`, every section, UTF-8. The
