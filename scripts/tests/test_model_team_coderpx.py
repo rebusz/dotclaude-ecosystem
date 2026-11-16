@@ -296,6 +296,8 @@ def test_relative_md_links_resolve_to_existing_files() -> None:
     skill_paths = [
         root / "skills" / "run-model-team" / "SKILL.md",
         root / "skills" / "coderpxG" / "SKILL.md",
+        root / "agy-skills" / "coderpxA" / "SKILL.md",
+        root / "agy-skills" / "fwa" / "SKILL.md",
     ]
     pattern = r"\[([^\]]*)\]\(([^)]+\.md)\)"
     for skill_path in skill_paths:

@@ -34,9 +34,11 @@ Siblings: **coderpxA** (Antigravity `agy`, local executor) and **coderpxG**
    frontier lane grades the plan instead of its author.
 2. **Implementation is outward by default.** Pull it in-house only for a reason
    in Step 2, and say the reason in one line.
-3. **Plans and architecture are YOURS.** This is where you differ from
-   coderpxA, which is forbidden from authoring plans. Delegate the *grill* of
-   your plan, never its authorship.
+3. **Plans and architecture are YOURS (or Carbon-backed in coderpxA).** Delegate
+   the *grill* of your plan, never letting non-Carbon workers invent scope;
+   `coderpxA` may author plans only via Carbon on AGY (`Orchestrator (Carbon)` /
+   `Gemini 4 Carbon`) or Gemini CDP (`carbon_cdp`) and may consult Fable/Opus
+   or Codex Astra via `dispatch.py lane`.
 4. **Do not read the repo to build a packet** when the GitHub connector covers
    it (Tsignal, TsignalLAB, WatchF, TSU). Name paths and let the connector
    fetch. Inline excerpts only for repos it cannot see — `apps-shared` is one.
