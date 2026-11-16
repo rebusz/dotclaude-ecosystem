@@ -4,7 +4,8 @@ description: >-
   Execute a stamped, audited plan: run each slice on the lane its stamp names,
   verify the result against the repo, route review away from whoever produced
   it, and land the work. Use when an agy or Codex user types /fwa or asks to
-  execute work tracks. The executor never writes the plan.
+  execute work tracks. Non-Carbon AGY workers execute plans without inventing
+  scope; coderpxA may author plans only with Carbon on AGY or Gemini CDP.
 ---
 
 # `/fwa` — execute a stamped plan
@@ -21,12 +22,16 @@ the stage procedure, not a second copy of the contract.
 You are **coderpxA** if you are Antigravity (`agy`), **coderpxG** if you are
 Codex. `/fwf` and `/fwp` belong to coderpxC, the planning runtime.
 
-## You do not design plans
+## Plan authoring boundary
 
-If the input is an idea rather than a plan, stop and route it for a plan first:
-the gpt lane, then the ppl lane with GLM 5.3. Do not invent scope and then
-implement it. An unverified or failed external result is `NO_PLAN`, not
-permission to write one yourself.
+If the input is an idea rather than a stamped plan, stop and route it for a
+plan first: `coderpxA` may author it using **Carbon on AGY**
+(`agy_orchestrator_carbon_plan` / `agy_carbon_plan`, `--caller coderpxA`),
+optionally consulting `agy_opus55_consult` or read-only `codex_astra_high` on
+`diagnose`/`grill`, or route it to the `gpt`/`ppl` lane (`coderpxC`). Never
+invent scope inline on a Hydrogen or Flash worker; an unverified or failed
+external result is `NO_PLAN`, not permission for a non-Carbon worker to improvise
+one.
 
 ## Step 1 — read the stamps
 

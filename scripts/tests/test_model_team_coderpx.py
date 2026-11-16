@@ -296,6 +296,8 @@ def test_relative_md_links_resolve_to_existing_files() -> None:
     skill_paths = [
         root / "skills" / "run-model-team" / "SKILL.md",
         root / "skills" / "coderpxG" / "SKILL.md",
+        root / "agy-skills" / "coderpxA" / "SKILL.md",
+        root / "agy-skills" / "fwa" / "SKILL.md",
     ]
     pattern = r"\[([^\]]*)\]\(([^)]+\.md)\)"
     for skill_path in skill_paths:
@@ -306,5 +308,64 @@ def test_relative_md_links_resolve_to_existing_files() -> None:
             if not target.startswith(("http://", "https://")):
                 resolved = (skill_path.parent / target).resolve()
                 assert resolved.exists(), f"Link '{target}' in {skill_path} resolves to nonexistent {resolved}"
+
+
+def test_coderpxa_docs_reference_valid_lanes_and_sonnet_policy() -> None:
+    root = Path(__file__).resolve().parents[2]
+    skill_text = (root / "agy-skills" / "coderpxA" / "SKILL.md").read_text(encoding="utf-8")
+    agy_ref_text = (root / "agy-skills" / "coderpxA" / "references" / "agy.md").read_text(encoding="utf-8")
+
+    assert "agy_argon_plan" not in skill_text
+    assert "agy_argon_plan" not in agy_ref_text
+    assert "carbon_cdp" not in skill_text
+    assert "carbon_cdp" not in agy_ref_text
+    assert "dszuber" in agy_ref_text
+    for expected in (
+        "agy_hydrogen_high",
+        "agy_orchestrator_carbon",
+        "agy_orchestrator_carbon_plan",
+        "agy_carbon_high",
+        "agy_carbon_plan",
+        "agy_argon_high",
+        "agy_argon_consult",
+        "agy_flash_high",
+        "argon_cdp",
+        "hydrogen_cdp",
+        "agy_opus55_consult",
+        "codex_astra_high",
+        "perplexity_sonnet",
+    ):
+        assert expected in agy_ref_text, f"Missing documented selector '{expected}'"
+    assert "--author-family gemini" in agy_ref_text
+
+    # Cross-repo registry check runs when apps-shared is present locally alongside dotclaude-ecosystem.
+    for candidate in (
+        Path("D:/APPS/_worktrees/apps-shared-coderpxa-carbon-20261116/dispatch/lanes.json"),
+        Path("D:/APPS/_shared/dispatch/lanes.json"),
+    ):
+        if candidate.exists():
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            by_id = {row["id"]: row for row in data.get("lane_registry", {}).get("lanes", [])}
+            if "agy_argon_consult" in by_id:
+                assert "carbon_cdp" not in by_id
+                for selector in (
+                    "agy_hydrogen_high",
+                    "agy_orchestrator_carbon",
+                    "agy_orchestrator_carbon_plan",
+                    "agy_carbon_high",
+                    "agy_carbon_plan",
+                    "agy_argon_high",
+                    "agy_argon_consult",
+                    "agy_flash_high",
+                    "argon_cdp",
+                    "hydrogen_cdp",
+                    "agy_opus55_consult",
+                    "codex_astra_high",
+                    "perplexity_sonnet",
+                ):
+                    assert selector in by_id, f"Registry {candidate} missing {selector}"
+                for non_plan in ("agy_argon_consult", "hydrogen_cdp", "agy_opus55_consult", "codex_astra_high"):
+                    assert "plan" not in by_id[non_plan]["roles"]
+                break
 
 
