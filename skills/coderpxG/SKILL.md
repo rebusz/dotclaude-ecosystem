@@ -1,9 +1,11 @@
 ---
-name: coderpxG
+name: coderpxg
 description: Conserve local Codex tokens by assigning implementation and independent review to Perplexity CDP and ChatGPT CDP. Astra authors the plan and key decisions; Codex owns local files, tests and Git. Handles /coderpxG, /coderpxg and model-team compatibility.
 ---
 
 # CoderPX G v1 — subscription CDP work, local execution
+
+For Antigravity assignments, use [AGY model selection](references/agy.md) for the model and effort.
 
 The operator's objective is efficient local token use. Astra writes the plan
 and resolves the most important architectural, scope and conflicting-evidence
