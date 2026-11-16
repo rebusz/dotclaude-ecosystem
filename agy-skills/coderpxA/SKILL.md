@@ -5,8 +5,9 @@ description: >-
   EXECUTOR with full file-edit authority (default Gemini 4 Hydrogen,
   Orchestrator Carbon, Argon/Flash as needed) and the dispatcher that routes
   plans, consultations, and reviews outward. coderpxA may author plans using
-  Carbon on AGY or Gemini CDP and consult Claude Fable/Opus or Astra via Codex;
-  it preserves verified model identity and finishes with an ownership ledger.
+  Carbon on AGY (`Orchestrator (Carbon)` / `Gemini 4 Carbon`) and consult Claude
+  Opus 5.5 / Fable or Astra via Codex; it preserves verified model identity and
+  finishes with an ownership ledger.
 ---
 
 # `/coderpxA` — Antigravity: execute locally, plan on Carbon, designate outward
@@ -40,22 +41,29 @@ ban on agy; earlier notes claiming one were wrong and have been corrected.
 - **AGY on demand**: **Gemini 4 Argon** (`gemini-4-argon-*`,
   `gemini-pro-orchestrator-argon`), direct **Gemini 4 Carbon**
   (`gemini-4-carbon-*`), and **Gemini 3.8 Flash** (`gemini-3.8-flash-*`).
-- **Gemini CDP (`chrome_gemini`:9223)**: **Gemini 4 Argon** (`argon_cdp`),
-  **Gemini 4 Carbon** (`carbon_cdp`), and **Gemini 4 Hydrogen**
-  (`hydrogen_cdp`) as needed.
+- **Gemini CDP (`chrome_gemini`:9223)**: Pro accounts only (`dszuber` Ultra
+  account is strictly forbidden in CDP due to ban risk) — **Gemini 4 Argon**
+  (`argon_cdp`) and **Gemini 4 Hydrogen** (`hydrogen_cdp`, non-plan) as needed;
+  no Carbon in CDP.
 
 **Plan authoring and consultation:**
-- `coderpxA` MAY author plans when using **Carbon on AGY**
+- `coderpxA` MAY author plans **only** when using **Carbon on AGY**
   (`Orchestrator (Carbon)` / `agy_orchestrator_carbon_plan` or direct
-  `Gemini 4 Carbon` / `agy_carbon_plan`) or **Carbon on Gemini CDP**
-  (`carbon_cdp`). Non-Carbon worker models (Hydrogen, Flash) execute plans and
-  never invent scope on their own (`NO_PLAN` on an unverified or failed plan
-  route).
+  `Gemini 4 Carbon` / `agy_carbon_plan`) with `dispatch.py lane plan --caller coderpxA`.
+  Non-Carbon worker models (Hydrogen, Flash, Argon) and Gemini CDP lanes never
+  author `coderpxA` plans (`NO_PLAN` on an unverified or failed plan route).
+- Because Carbon is `family: gemini`, both **grill** and **review** of a
+  Carbon-authored plan MUST pass `--author-family gemini` so they run on a
+  non-Gemini family.
 - To consult on a plan, architecture question, or diagnosis, `coderpxA` may
-  invoke **Claude Fable/Opus** (`agy_opus55_consult` -> `claude-opus-5-5-high`,
+  invoke **Claude Opus 5.5 / Fable** (`agy_opus55_consult` -> `claude-opus-5-5-high`,
   or an active Claude Opus/Fable session) or **GPT-6 Astra via Codex**
-  (`codex_astra_high` -> `gpt-6-astra` high) through
-  `python D:/APPS/_shared/dispatch/dispatch.py lane <plan|diagnose|grill> --prefer-lane <lane_id> --brief <file>`.
+  (`codex_astra_high` -> `gpt-6-astra` high, enforced `-s read-only` sandbox)
+  through
+  `python D:/APPS/_shared/dispatch/dispatch.py lane <diagnose|grill> --prefer-lane <lane_id> --brief <file>`.
+- **No AGY Sonnet**: never route reviews to AGY Sonnet (`agy_sonnet55_review` /
+  `agy_claude_sonnet` hits a ~5-minute quota limit). Whenever Sonnet is needed,
+  route through **Perplexity Sonnet** (`perplexity_sonnet` -> `Claude Sonnet 5.5`).
 
 **Escalation leaves Antigravity.** When a slice is hard, designate it outward
 to the gpt lane or the ppl lane rather than grinding on it locally. You may
@@ -177,11 +185,16 @@ order path.
 
 ## Red lines
 
-- Non-Carbon AGY workers (Hydrogen, Flash) never author or complete a plan;
-  plan authoring in `coderpxA` requires Carbon on AGY (`Orchestrator (Carbon)` /
-  `Gemini 4 Carbon`) or Carbon on Gemini CDP (`carbon_cdp`), optionally
-  consulting Fable/Opus (`agy_opus55_consult` / Claude session) or Codex Astra
-  (`codex_astra_high`).
+- Non-Carbon AGY/Gemini CDP models (`Hydrogen`, `Flash`, `Argon`) never author
+  or complete a `coderpxA` plan (`--caller coderpxA`); plan authoring requires
+  Carbon on AGY (`Orchestrator (Carbon)` / `Gemini 4 Carbon`), optionally
+  consulting Claude Opus 5.5 / Fable (`agy_opus55_consult` / Claude session) or
+  Codex Astra (`codex_astra_high`, read-only) via `diagnose` or `grill`.
+  Never use the `dszuber` account in Gemini CDP.
+- Carbon-authored plans (`family: gemini`) must be grilled and reviewed by a
+  non-Gemini family (`--author-family gemini`).
+- Never waste quota on AGY Sonnet (~5-minute limit); use `perplexity_sonnet`
+  whenever Sonnet is needed.
 - agy never de-escalates a slice stamped for an outward lane.
 - Never claim a model or an effort without observed identity.
 - Never send a third round for a slice.

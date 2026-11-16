@@ -10,8 +10,9 @@ Roles, fixed order:
 - impl = AGY gemini-4-hydrogen-high -> AGY flash -> GLM -> Cursor -> Kimi -> Codex terra (luna fallback; last)
 - review = ChatGPT Chat GPT-6 Pro -> Argon CDP -> Perplexity (Grok/Kimi K3/GLM) -> Kimi -> GLM -> Astra (R3 only)
 - grill = Perplexity (strongest other-family model) -> Argon
-- plan / top decision = Astra on Work + Argon (Sol if Astra is out); coderpxA plans on Carbon (AGY/Gemini CDP), consults Opus/Fable or Codex Astra
+- plan / top decision = Astra on Work + Argon (Sol if Astra is out)
 - diagnose = Argon -> ChatGPT Chat -> Perplexity
+- coderpxA = plans on Carbon (AGY only, `--caller coderpxA`); consults Opus 5.5/Fable or read-only Codex Astra via `diagnose`/`grill`; Carbon plans use non-Gemini `grill`/`review`; Sonnet via `perplexity_sonnet` (never AGY Sonnet); `dszuber` excluded from Gemini CDP (Pro Argon/Hydrogen only)
 Reviewers are always a different family than the author; every non-impl answer must start with a MODEL line that matches.
 
 Hard rules:

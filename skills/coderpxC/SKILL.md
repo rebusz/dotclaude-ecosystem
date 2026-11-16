@@ -37,8 +37,9 @@ Siblings: **coderpxA** (Antigravity `agy`, local executor) and **coderpxG**
 3. **Plans and architecture are YOURS (or Carbon-backed in coderpxA).** Delegate
    the *grill* of your plan, never letting non-Carbon workers invent scope;
    `coderpxA` may author plans only via Carbon on AGY (`Orchestrator (Carbon)` /
-   `Gemini 4 Carbon`) or Gemini CDP (`carbon_cdp`) and may consult Fable/Opus
-   or Codex Astra via `dispatch.py lane`.
+   `Gemini 4 Carbon`, `--caller coderpxA`) and may consult Fable/Opus
+   (`agy_opus55_consult`) or read-only Codex Astra (`codex_astra_high`) via
+   `dispatch.py lane <diagnose|grill>`.
 4. **Do not read the repo to build a packet** when the GitHub connector covers
    it (Tsignal, TsignalLAB, WatchF, TSU). Name paths and let the connector
    fetch. Inline excerpts only for repos it cannot see — `apps-shared` is one.

@@ -26,9 +26,9 @@ Codex. `/fwf` and `/fwp` belong to coderpxC, the planning runtime.
 
 If the input is an idea rather than a stamped plan, stop and route it for a
 plan first: `coderpxA` may author it using **Carbon on AGY**
-(`agy_orchestrator_carbon_plan` / `agy_carbon_plan`) or **Carbon on Gemini CDP**
-(`carbon_cdp`, optionally consulting `agy_opus55_consult` or
-`codex_astra_high`), or route it to the `gpt`/`ppl` lane (`coderpxC`). Never
+(`agy_orchestrator_carbon_plan` / `agy_carbon_plan`, `--caller coderpxA`),
+optionally consulting `agy_opus55_consult` or read-only `codex_astra_high` on
+`diagnose`/`grill`, or route it to the `gpt`/`ppl` lane (`coderpxC`). Never
 invent scope inline on a Hydrogen or Flash worker; an unverified or failed
 external result is `NO_PLAN`, not permission for a non-Carbon worker to improvise
 one.
