@@ -134,3 +134,35 @@ PR remains draft; no merge, main fast-forward or real new interactive chat was
 performed. Installed policy and validated native fallback remain available.
 No operator permission command is required for the completed instruction install.
 Next action: reconcile the held Perplexity review attempt before any replacement.
+
+
+## Follow-up reconciliation and session-refresh boundary
+
+Operator resumed delivery without resubmitting uncertain work. The held
+Perplexity attempt was reconciled through its original output and actual
+`D:/APPS/WatchF/scripts/coderpx.py` control flow: admission failure log at waited
+117 seconds is followed unconditionally by a 10-second sleep, then a new lease
+and the next acquire. The outer adapter killed/reaped the process at 120.312
+seconds, before that next acquire. Provider submit code is reachable only after
+successful acquire. This establishes terminal PRE_SUBMIT_BLOCKED, not a sent
+prompt; original timeout/attempt are retained. The job was moved from held to
+failed with this reconciliation under its existing resume lock, with no retry,
+account switch or clearing of foreign holders. A distinct read-only reviewer can
+therefore be assigned without duplicating a provider submission.
+
+Installed contract and global rules are already read back; no reinstall or
+permission change is required. The desktop's exposed chat tools provide no
+operation to replace developer instructions in an existing active chat.
+`codex --help` exposes new/resume/fork runs, no in-place developer-instruction
+reload. Official instruction documentation says the instruction chain is built
+at start and recommends a fresh run for stale file instructions:
+https://learn.chatgpt.com/docs/agent-configuration/agents-md
+Official `/compact` documentation describes summary/context reduction, not
+replacement of developer instructions; `/new` starts a fresh chat and `/resume`
+preserves original history:
+https://learn.chatgpt.com/docs/developer-commands?surface=cli
+No supported in-place removal of the original chat's developer-level supervisor
+ban has been established. Fresh SessionStart process readback proves the installed
+contract, not retroactive removal of that ban. A new correctly initialized chat
+is the supported fresh-context route; no new TST chat/worktree, restart or
+instruction/permission override was performed by this session.
