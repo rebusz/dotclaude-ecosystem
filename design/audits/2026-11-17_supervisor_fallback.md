@@ -99,3 +99,38 @@ are pending at this documentation commit and must be reported with real receipts
 Public repo CI is standard `windows-latest`, 30-minute cap, no workstation route;
 draft PR CI is intentionally skipped until ready. No branch protection was
 reported by GitHub (404); that does not waive policy gates.
+
+
+## Final delivery readback
+
+Draft PR: https://github.com/rebusz/dotclaude-ecosystem/pull/151.
+Code/test head and separate-session native GPT review target:
+`7d05d6c777a4bb494f0eed3cb9e29ea1e9de1a80`, no P1/P2; supplemental
+review ran 19 tests and 8 subtests, exit 0. Cross-family gate is still NO_REVIEW.
+
+The supported router's z.ai review preflight returned QUEUED/exit 3 with zero
+attempts: quota until `2026-11-17T19:26:52Z`. No model was launched or entitled
+identity inferred from binary presence. That zero-attempt job was retained as
+failed (terminal pre-submit result), preventing a future automatic drain.
+Receipt: `D:/APPS/_scratch/supervisor-fallback-review-01a1ea08.json`.
+
+One independent Perplexity Sonnet review was then scoped through the supported
+router, with every other lane excluded. The actual adapter timed out at
+120.312 seconds, exit -1; router returned QUEUED/exit 3 with no verdict. Logs show
+`SLOT_KEY_BUSY` admission waits through 117 seconds, not a verified model answer.
+Requested model was Claude Sonnet 5.5; actual model and effort remain UNKNOWN.
+The final submit boundary is unconfirmed, so the original job was put in the
+router's existing `held` state with reason `submit_unconfirmed`, under its resume
+lock using lane_state.update_job. Attempts/outputs remain intact, no retry,
+replacement or account rotation. No source/Conductor holder was cleared.
+Job: `supervisor-fallback-review-ppl-01a1ea08`.
+Receipt: `D:/APPS/_scratch/supervisor-fallback-review-ppl-01a1ea08.json`.
+Raw log: `C:/Users/dszub/.claude/state/lane_receipts/supervisor-fallback-review-ppl-01a1ea08.attempt1.out`.
+This is the real scoped blocker of review/ready/merge, not implementation.
+
+CI: `suite` SKIPPED for draft PR, not PASS:
+https://github.com/rebusz/dotclaude-ecosystem/actions/runs/44111363098/job/134137531972.
+PR remains draft; no merge, main fast-forward or real new interactive chat was
+performed. Installed policy and validated native fallback remain available.
+No operator permission command is required for the completed instruction install.
+Next action: reconcile the held Perplexity review attempt before any replacement.
