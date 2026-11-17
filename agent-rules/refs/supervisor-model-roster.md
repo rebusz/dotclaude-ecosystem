@@ -15,6 +15,17 @@ Routing, fallback and enforcement are defined by `templates/supervisor-contract.
 router; this file is reference for roles and quotas and must not contradict it;
 where it does, the contract wins.
 
+## Operator correction 2026-11-17
+
+Delegation is preferred, not required for progress. The contract requires native
+supervisor completion after documented terminal worker failure or pre-submit
+unavailability, including main Codex, without another takeover GO. Old bans on
+supervisor source reads, diagnosis, coding/tests and the 20-line cap do not apply
+to that fallback. Uncertain attempts, live foreign owners, permission refusals,
+independent review/CI and protected triggers retain their boundaries. No account
+rotation, infinite retries or QUEUED-only stalling. Historical roles below do not
+reverse this correction.
+
 ## 1. Roles by source
 
 | Source (own quota) | Role | Notes |
