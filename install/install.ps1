@@ -8,7 +8,7 @@
 # One manifest drives both modes, so -Check can never fall out of step with
 # what install actually copies.
 
-param([switch]$Check)
+param([switch]$Check, [switch]$SupervisorContractOnly)
 
 $ErrorActionPreference = "Stop"
 
@@ -40,7 +40,7 @@ $RetiredSkillReplacements = @{
 $RetiredSkillDirs = @($RetiredSkillReplacements.Keys)
 
 function Get-ManifestPairs {
-    $pairs = @()
+    $pairs = @(@{ Src = (Join-Path $RepoRoot "templates\supervisor-contract.md"); Dst = (Join-Path $ClaudeHome "refs\supervisor-contract.md"); Kind = "file"; Label = "claude/refs/supervisor-contract.md" })
     foreach ($skill in $BundledSkills) {
         $pairs += @{ Src = (Join-Path $RepoRoot "skills\$skill"); Dst = (Join-Path $ClaudeHome "skills\$skill"); Kind = "dir"; Label = "claude/skills/$skill" }
     }
@@ -92,6 +92,36 @@ function Get-TreeHashes([string]$root) {
         $map[$rel] = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash
     }
     return $map
+}
+
+# Scoped policy refresh: no settings, hooks, permissions, services or other skills.
+# Also used before landing when the operator explicitly requests installation.
+if ($SupervisorContractOnly) {
+    $pair = @(Get-ManifestPairs | Where-Object { $_.Label -eq "claude/refs/supervisor-contract.md" })[0]
+    if (-not (Test-Path -LiteralPath $pair.Src -PathType Leaf)) { throw "Missing contract source" }
+    $matches = (Test-Path -LiteralPath $pair.Dst -PathType Leaf) -and
+        ((Get-FileHash -LiteralPath $pair.Src).Hash -eq (Get-FileHash -LiteralPath $pair.Dst).Hash)
+    if ($Check) {
+        if (-not $matches) { Write-Error "Supervisor contract drift"; exit 1 }
+        Write-Host "Supervisor contract matches source"
+        exit 0
+    }
+    if (-not $matches) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pair.Dst) | Out-Null
+        if (Test-Path -LiteralPath $pair.Dst) {
+            $bakRoot = Join-Path $ClaudeHome "refs.bak\$Stamp"
+            New-Item -ItemType Directory -Force -Path $bakRoot | Out-Null
+            Copy-Item -LiteralPath $pair.Dst -Destination (Join-Path $bakRoot "supervisor-contract.md")
+        }
+        $temp = $pair.Dst + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+        Copy-Item -LiteralPath $pair.Src -Destination $temp
+        Move-Item -LiteralPath $temp -Destination $pair.Dst -Force
+    }
+    if ((Get-FileHash -LiteralPath $pair.Src).Hash -ne (Get-FileHash -LiteralPath $pair.Dst).Hash) {
+        throw "Supervisor contract readback mismatch"
+    }
+    Write-Host "Installed supervisor contract with hash readback"
+    exit 0
 }
 
 # ---------------------------------------------------------------- check mode

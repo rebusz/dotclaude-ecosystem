@@ -66,6 +66,15 @@ else
     mkdir -p "$CLAUDE_HOME"
 fi
 
+# Canonical instruction contract (not a permissions override).
+mkdir -p "$CLAUDE_HOME/refs"
+if [ -f "$CLAUDE_HOME/refs/supervisor-contract.md" ]; then
+    mkdir -p "$CLAUDE_HOME/refs.bak/$STAMP"
+    cp "$CLAUDE_HOME/refs/supervisor-contract.md" "$CLAUDE_HOME/refs.bak/$STAMP/"
+fi
+cp "$REPO_ROOT/templates/supervisor-contract.md" "$CLAUDE_HOME/refs/supervisor-contract.md.tmp"
+mv "$CLAUDE_HOME/refs/supervisor-contract.md.tmp" "$CLAUDE_HOME/refs/supervisor-contract.md"
+
 # Scripts
 echo "[2/6] Copy scripts -> ~/.claude/scripts/"
 mkdir -p "$CLAUDE_HOME/scripts"

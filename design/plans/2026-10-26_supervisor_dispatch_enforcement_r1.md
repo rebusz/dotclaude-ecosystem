@@ -8,6 +8,30 @@ owner: operator (dszub)
 
 ## Status: Active
 
+# Operator correction 2026-11-17 (R1, approved implementation)
+
+This section supersedes every contrary fallback/read/edit/20-line/QUEUED rule
+below; the older design is retained as history. Why: unavailable AI workers must
+not stop authorized work when the supervisor has functioning native tools.
+DoD: install the canonical contract, regenerate the affected managed rules,
+exercise the actual SessionStart loader and installed tool guard, and prove a
+native fixture source edit plus test after a synthetic terminal worker failure.
+No TST source, broker, desktop, service restart or live order action is in scope.
+
+Delegation is an optimization. Confirmed terminal worker failure or pre-submit
+unavailability requires the supervisor, including main Codex, to finish the
+approved scope natively without another GO, including diagnosis, source reads,
+code, tests, integration, Git and honest verification. No exhaustive retries or
+queue-only stalling. Preserve attempts, attribution, requested/actual identity
+and effort, uncertainty and live foreign owners. Independent review, CI and all
+protected triggers remain gated; no permissions/sandbox change or refusal bypass.
+If the native environment also fails, report its actual blocker.
+
+Implementation evidence goes in
+`design/audits/2026-11-17_supervisor_fallback.md`. The loader currently returns
+`could not detect repo` for the valid Git root; bounded source reads found this
+existing plan and IDEA_BOX (no matching competing fallback plan or vision).
+
 # Problem
 
 The operator has explained the supervisor model for months (roster refs, memory notes, the injected `model-launch-rules.md`). The same failures still come back every day.
