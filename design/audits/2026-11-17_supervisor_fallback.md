@@ -166,3 +166,42 @@ ban has been established. Fresh SessionStart process readback proves the install
 contract, not retroactive removal of that ban. A new correctly initialized chat
 is the supported fresh-context route; no new TST chat/worktree, restart or
 instruction/permission override was performed by this session.
+
+
+## Follow-up final gate results
+
+On `c8bdef8a330e3044378c8135dbe2e6175605a3bb`, the installed AGY Argon
+read-only review adapter preflight rejected `gemini-4-argon-high` as unavailable
+on the current account. Duration 0, no model invocation. Its queued record was
+closed as failed under its resume lock; there is no automatic retry/account swap.
+Receipt: `D:/APPS/_scratch/supervisor-fallback-review-agy-01a1ea08.json`.
+
+The same installed catalog reported `claude-sonnet-4-6` offered. A task-local copy
+of the existing `agy_claude_sonnet` row was passed to the installed run_job API,
+with explicit `--mode plan --sandbox --model claude-sonnet-4-6 --effort high`
+plus a log path, retaining the adapter/source admission and replacing its broader
+default flags with this read-only profile. No persistent registry, setting,
+permission, ACL, guard or sandbox configuration was changed. manage_queue=False
+prevented a new automatic queue; allow_reset=False forbade any worktree reset.
+The actual launch guard rejected it with `AGY_RATE_LIMITED` before model start,
+duration 0, reason `agy_rate_limited`, no verdict or actual-model proof. This
+refusal is retained and was not bypassed or rerouted. Requested model/effort
+remain requested only. Receipt:
+`D:/APPS/_scratch/supervisor-fallback-review-sonnet46-01a1ea08.json`.
+Raw output:
+`C:/Users/dszub/.claude/state/lane_receipts/supervisor-fallback-review-sonnet46-01a1ea08.attempt1.out`.
+
+An initial Python import error in the manual adapter invocation happened before
+any job or provider action; correcting package import did not replay a submission.
+The task-local profile is retained in scratch for inspection; it is not a new
+router or a persistent workflow-policy edit.
+
+Final installed check repeated: scoped contract -Check exit 0; all four global
+sync targets clean, exit 0. Code/test artifacts are unchanged since the 64-test
+validation; only this delivery evidence changed. No new TST worktree, application
+code, desktop interaction, services or brokers were touched. Cross-family review
+remains NO_REVIEW; PR151 stays draft, CI SKIPPED, no merge/main checkout sync.
+This concrete review guard refusal is the remaining gate, not a native authoring
+block. No active auto-retry queue was left for this assignment.
+Next action: obtain independent cross-family review after legitimate reviewer
+admission is available, without bypassing the current AGY process guard.
