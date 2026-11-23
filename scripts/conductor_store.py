@@ -21,7 +21,9 @@ import sys
 import tempfile
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from urllib.parse import quote as _uri_quote
 import uuid
+import zipfile
 
 from scripts.conductor_model import (
     Attempt,
@@ -75,20 +77,67 @@ def _file_signature(path: pathlib.Path) -> tuple[bool, int, int]:
         return False, 0, 0
 
 
+def _sqlite_ro_uri(db_path: pathlib.Path, *, immutable: bool = False) -> str:
+    """Build a POSIX-safe SQLite file: URI for read-only access."""
+    resolved = db_path.resolve()
+    posix = resolved.as_posix()
+    if not posix.startswith("/"):
+        posix = "/" + posix
+    encoded = _uri_quote(posix, safe="/:")
+    suffix = "mode=ro&immutable=1" if immutable else "mode=ro"
+    return f"file:{encoded}?{suffix}"
+
+
 @contextmanager
 def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Connection]:
-    """Open a consistent temp copy so SQLite never writes WAL/SHM beside the live DB."""
-    source_paths = (db_path, db_path.with_name(f"{db_path.name}-wal"))
+    """Open a read-only SQLite connection without creating WAL/SHM beside the live DB.
+
+    Zero-copy fast paths avoid copying a multi-hundred-MB database on every poll:
+      1. When no non-empty ``-wal`` file exists, open with ``mode=ro&immutable=1``
+         (zero bytes copied, zero ``-wal``/``-shm`` files created).
+      2. When a live ``-wal`` and ``-shm`` already exist, open directly with
+         ``mode=ro`` + ``PRAGMA query_only=ON`` (zero bytes copied, no new files
+         created, sees live WAL transactions without snapshot-race errors).
+      3. Only in the rare crash-leftover case (non-empty ``-wal`` without ``-shm``)
+         fall back to an isolated temp copy so read-only probes never trigger
+         WAL recovery on the live directory.
+    """
+    wal_path = db_path.with_name(f"{db_path.name}-wal")
+    shm_path = db_path.with_name(f"{db_path.name}-shm")
+    wal_exists, wal_size, _ = _file_signature(wal_path)
+    shm_exists, _, _ = _file_signature(shm_path)
+
+    if not wal_exists or wal_size == 0:
+        conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=True), uri=True, timeout=5.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            yield conn
+            return
+        finally:
+            conn.close()
+
+    if shm_exists:
+        conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=False), uri=True, timeout=5.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA query_only=ON")
+            yield conn
+            return
+        finally:
+            conn.close()
+
+    source_paths = (db_path, wal_path)
     with tempfile.TemporaryDirectory(prefix="conductor-read-snapshot-") as temp_dir:
         snapshot_db = pathlib.Path(temp_dir) / db_path.name
         for attempt in range(3):
             before = tuple(_file_signature(path) for path in source_paths)
             try:
                 shutil.copy2(db_path, snapshot_db)
-                source_wal = source_paths[1]
                 snapshot_wal = snapshot_db.with_name(f"{snapshot_db.name}-wal")
-                if source_wal.is_file():
-                    shutil.copy2(source_wal, snapshot_wal)
+                if wal_path.is_file():
+                    shutil.copy2(wal_path, snapshot_wal)
                 else:
                     snapshot_wal.unlink(missing_ok=True)
             except OSError:
@@ -911,21 +960,130 @@ def read_work_item_snapshot(
 
 
 def _directory_usage(path: pathlib.Path) -> Dict[str, int]:
-    """Return recursive file count/bytes without following symlinks."""
+    """Return recursive file count/bytes using os.scandir without following symlinks."""
     file_count = 0
     byte_count = 0
-    try:
-        for entry in path.rglob("*"):
-            if entry.is_symlink() or not entry.is_file():
-                continue
+    if not path.exists():
+        return {"files": 0, "bytes": 0, "read_error": 0}
+    stack: List[pathlib.Path] = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(pathlib.Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            byte_count += entry.stat(follow_symlinks=False).st_size
+                            file_count += 1
+                    except OSError:
+                        continue
+        except OSError:
+            return {"files": file_count, "bytes": byte_count, "read_error": 1}
+    return {"files": file_count, "bytes": byte_count, "read_error": 0}
+
+
+def compact_conductor_storage(
+    root_dir: Optional[Union[str, pathlib.Path]] = None,
+    *,
+    max_age_hours: float = 48.0,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Archive aged receipt JSON files into a verified cold zip bundle.
+
+    Preserves recent receipts (< max_age_hours) and verifies zip integrity
+    before unlinking any source receipt file. Archives live outside the hot
+    ``receipts/`` directory under ``receipts_archive/``.
+    """
+    root = pathlib.Path(root_dir).expanduser().resolve() if root_dir else get_default_conductor_dir()
+    receipts_dir = root / "receipts"
+    archive_dir = root / "receipts_archive"
+    before = read_storage_status(root)
+    if not receipts_dir.is_dir():
+        return {
+            "status": "NOOP",
+            "dry_run": bool(dry_run),
+            "archived_files": 0,
+            "archived_bytes": 0,
+            "archive_path": None,
+            "storage_before": before,
+            "storage_after": before,
+        }
+
+    cutoff_epoch = time.time() - max(0.0, float(max_age_hours)) * 3600.0
+    candidates: List[tuple[pathlib.Path, int]] = []
+    with os.scandir(receipts_dir) as it:
+        for entry in it:
             try:
-                byte_count += entry.stat().st_size
-                file_count += 1
+                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                    continue
+                if not entry.name.endswith(".json"):
+                    continue
+                st = entry.stat(follow_symlinks=False)
+                if st.st_mtime <= cutoff_epoch:
+                    candidates.append((pathlib.Path(entry.path), int(st.st_size)))
             except OSError:
                 continue
-    except OSError:
-        return {"files": file_count, "bytes": byte_count, "read_error": 1}
-    return {"files": file_count, "bytes": byte_count, "read_error": 0}
+
+    candidates.sort(key=lambda item: item[0].name)
+    total_bytes = sum(sz for _, sz in candidates)
+    if not candidates or dry_run:
+        return {
+            "status": "DRY_RUN" if dry_run else "NOOP",
+            "dry_run": bool(dry_run),
+            "archived_files": len(candidates),
+            "archived_bytes": total_bytes,
+            "archive_path": None,
+            "storage_before": before,
+            "storage_after": before,
+        }
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    final_zip = archive_dir / f"receipts_{stamp}_{uuid.uuid4().hex[:6]}.zip"
+    tmp_zip = final_zip.with_suffix(".zip.tmp")
+    archived_paths: List[pathlib.Path] = []
+    try:
+        with zipfile.ZipFile(tmp_zip, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for src_path, _ in candidates:
+                try:
+                    zf.write(src_path, arcname=src_path.name)
+                    archived_paths.append(src_path)
+                except OSError:
+                    continue
+        with zipfile.ZipFile(tmp_zip, mode="r") as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                raise OSError(f"archive integrity check failed on {bad}")
+        os.replace(tmp_zip, final_zip)
+    except Exception:
+        tmp_zip.unlink(missing_ok=True)
+        raise
+
+    removed_files = 0
+    removed_bytes = 0
+    size_by_path = {p: sz for p, sz in candidates}
+    for src_path in archived_paths:
+        try:
+            src_path.unlink(missing_ok=True)
+            removed_files += 1
+            removed_bytes += size_by_path.get(src_path, 0)
+        except OSError:
+            continue
+
+    after = read_storage_status(root)
+    return {
+        "status": "COMPACTED",
+        "dry_run": False,
+        "archived_files": removed_files,
+        "archived_bytes": removed_bytes,
+        "archive_path": str(final_zip),
+        "storage_before": before,
+        "storage_after": after,
+    }
 
 
 def read_storage_status(root_dir: Optional[Union[str, pathlib.Path]] = None) -> Dict[str, Any]:
