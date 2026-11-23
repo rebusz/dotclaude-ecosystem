@@ -23,6 +23,7 @@ from scripts.conductor_model import CommandEnvelope  # noqa: E402
 from scripts.conductor_resources import PROVIDER_SOURCES  # noqa: E402
 from scripts.conductor_store import (  # noqa: E402
     ConductorStore,
+    compact_conductor_storage,
     read_all_pools_live,
     read_host_resource_status,
     read_resource_live_snapshot,
@@ -236,7 +237,23 @@ def main(argv: list[str] | None = None) -> int:
     p_exp = subparsers.add_parser("export", help="Export JSONL event ledger")
     p_exp.add_argument("--output", required=True)
 
+    # storage-compact
+    p_compact = subparsers.add_parser(
+        "storage-compact",
+        help="Archive aged receipt JSON files into a verified zip bundle under receipts_archive/",
+    )
+    p_compact.add_argument("--max-age-hours", type=float, default=48.0)
+    p_compact.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
+
+    if args.command == "storage-compact":
+        result = compact_conductor_storage(
+            max_age_hours=args.max_age_hours,
+            dry_run=bool(args.dry_run),
+        )
+        print(json.dumps(result, indent=2))
+        return 0
 
     if args.command == "status":
         result = read_store_status()

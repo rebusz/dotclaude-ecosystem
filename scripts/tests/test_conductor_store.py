@@ -478,26 +478,36 @@ def test_read_resource_live_snapshot_never_calls_storage_status(tmp_path: pathli
 
 def test_read_gate_frame_single_snapshot(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
     import shutil
+    import scripts.conductor_store as _cs
     store = ConductorStore(root_dir=tmp_path)
     store.save_resource_pool(HostResourcePool(resource_key="host:heavy", capacity=1, enabled=True))
     assert store.acquire_leader_lock()
 
-    # Checkpoint WAL so only db_path is copied (no WAL file present)
+    # Checkpoint WAL so DB is clean (zero-copy RO URI path)
     with store._connection() as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     copy_count = 0
+    open_count = 0
     real_copy2 = shutil.copy2
+    real_open = _cs._read_only_snapshot_connection
 
     def counting_copy2(src, dst, *args, **kwargs):
         nonlocal copy_count
         copy_count += 1
         return real_copy2(src, dst, *args, **kwargs)
 
+    def counting_open(*args, **kwargs):
+        nonlocal open_count
+        open_count += 1
+        return real_open(*args, **kwargs)
+
     monkeypatch.setattr(shutil, "copy2", counting_copy2)
+    monkeypatch.setattr(_cs, "_read_only_snapshot_connection", counting_open)
 
     frame = read_gate_frame(resource_key="host:heavy", root_dir=tmp_path)
-    assert copy_count == 1
+    assert open_count == 1
+    assert copy_count == 0
     assert "store" in frame and "gate" in frame
     assert frame["store"]["store_state"] == "AVAILABLE"
     assert frame["store"]["leader_active"] is True
@@ -773,23 +783,31 @@ def test_schema_migration_v5_adds_slot_key_and_seeds_cdp_pools(tmp_path: pathlib
 
 
 def test_read_all_pools_live_single_snapshot_read(tmp_path: pathlib.Path):
-    """ONE SNAPSHOT property: reading all pools takes exactly one DB snapshot via shutil.copy2."""
+    """ONE CONNECTION / ZERO COPY property: reading all pools opens one RO connection and copies 0 bytes."""
     ConductorStore(root_dir=tmp_path)  # creates the DB the readers below open
+    import scripts.conductor_store as _cs
     from scripts.conductor_store import read_all_pools_live, read_gate_frame
     from unittest.mock import patch
 
     real_copy = shutil.copy2
-    with patch("shutil.copy2", side_effect=real_copy) as mock_copy:
+    real_open = _cs._read_only_snapshot_connection
+    with patch("shutil.copy2", side_effect=real_copy) as mock_copy, patch(
+        "scripts.conductor_store._read_only_snapshot_connection", side_effect=real_open
+    ) as mock_open:
         all_pools = read_all_pools_live(root_dir=tmp_path)
-        assert mock_copy.call_count == 1
+        assert mock_open.call_count == 1
+        assert mock_copy.call_count == 0
         assert "host:heavy" in all_pools
         assert "cdp:perplexity" in all_pools
         assert "cdp:chatgpt" in all_pools
         assert "cdp:gemini" in all_pools
 
-    with patch("shutil.copy2", side_effect=real_copy) as mock_copy2:
+    with patch("shutil.copy2", side_effect=real_copy) as mock_copy2, patch(
+        "scripts.conductor_store._read_only_snapshot_connection", side_effect=real_open
+    ) as mock_open2:
         frame = read_gate_frame(root_dir=tmp_path)
-        assert mock_copy2.call_count == 1
+        assert mock_open2.call_count == 1
+        assert mock_copy2.call_count == 0
         assert "gates" in frame
         assert len(frame["gates"]) >= 4
 
@@ -1432,3 +1450,90 @@ def test_v9_migration_backfills_receipt_flags_from_one_directory_listing(tmp_pat
     # The migration flagged every receipt whose file existed (the bounded startup
     # outbox drain may deliver more of the rest, never fewer of these).
     assert {f"cmd_bulk_{i}" for i in range(0, 3000, 2)} <= flagged
+
+
+def test_read_only_snapshot_uses_zero_copy_uri_without_creating_wal_or_shm(
+    store: ConductorStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Read-only queries must never copy a multi-hundred-MB DB into %TEMP% when clean or live-SHM."""
+    import shutil as _shutil
+    from scripts.conductor_store import _read_only_snapshot_connection
+
+    def _forbid_copy(*args, **kwargs):
+        raise AssertionError("shutil.copy2 must not be called on zero-copy read path")
+
+    monkeypatch.setattr(_shutil, "copy2", _forbid_copy)
+
+    # Cleanly closed DB (no active -wal / -shm): immutable RO URI leaves directory untouched
+    for suffix in ("-wal", "-shm"):
+        p = store.db_path.with_name(f"{store.db_path.name}{suffix}")
+        if p.exists():
+            p.unlink()
+
+    with _read_only_snapshot_connection(store.db_path) as conn:
+        assert conn.execute("SELECT 1").fetchone()[0] == 1
+    assert not store.db_path.with_name(f"{store.db_path.name}-wal").exists()
+    assert not store.db_path.with_name(f"{store.db_path.name}-shm").exists()
+
+    # Live WAL + SHM active: isolated temp copy reads WAL-committed rows without touching live -shm
+    monkeypatch.undo()
+    with store._connection() as writer:
+        writer.execute(
+            "INSERT INTO receipts (receipt_id, command_id, idempotency_key, status, result_json, "
+            "error_message, processed_at_utc, schema_version) VALUES (?, ?, ?, 'SUCCESS', '{}', NULL, "
+            "'2026-11-22T00:00:00+00:00', 'conductor.receipt.v1')",
+            ("rcp_live_ro", "cmd_live_ro", "idem_live_ro"),
+        )
+        writer.commit()
+        shm_path = store.db_path.with_name(f"{store.db_path.name}-shm")
+        shm_before = shm_path.read_bytes() if shm_path.is_file() else None
+        with _read_only_snapshot_connection(store.db_path) as ro_conn:
+            row = ro_conn.execute(
+                "SELECT receipt_id FROM receipts WHERE receipt_id = 'rcp_live_ro'"
+            ).fetchone()
+            assert row is not None and row["receipt_id"] == "rcp_live_ro"
+        shm_after = shm_path.read_bytes() if shm_path.is_file() else None
+        assert shm_after == shm_before
+
+
+def test_compact_conductor_storage_archives_old_receipts_and_clears_blocked_quota(
+    store: ConductorStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """storage-compact archives aged receipts into a verified zip, preserves fresh ones, and unblocks quota."""
+    import os
+    import time
+    import zipfile
+    from scripts.conductor_store import compact_conductor_storage
+
+    old_a = store.receipts_dir / "receipt_old_a.json"
+    old_b = store.receipts_dir / "receipt_old_b.json"
+    fresh = store.receipts_dir / "receipt_fresh.json"
+    old_a.write_text('{"id":"a","pad":"' + ("x" * 200) + '"}', encoding="utf-8")
+    old_b.write_text('{"id":"b","pad":"' + ("y" * 200) + '"}', encoding="utf-8")
+    fresh.write_text('{"id":"fresh"}', encoding="utf-8")
+
+    old_epoch = time.time() - (72.0 * 3600.0)
+    os.utime(old_a, (old_epoch, old_epoch))
+    os.utime(old_b, (old_epoch, old_epoch))
+
+    monkeypatch.setitem(STORAGE_QUOTAS_BYTES, "receipts", 100)
+    assert read_storage_status(store.root_dir)["status"] == "BLOCKED"
+
+    dry = compact_conductor_storage(store.root_dir, max_age_hours=48.0, dry_run=True)
+    assert dry["status"] == "DRY_RUN"
+    assert dry["archived_files"] == 2
+    assert old_a.exists() and old_b.exists() and fresh.exists()
+
+    res = compact_conductor_storage(store.root_dir, max_age_hours=48.0, dry_run=False)
+    assert res["status"] == "COMPACTED"
+    assert res["archived_files"] == 2
+    assert not old_a.exists() and not old_b.exists()
+    assert fresh.exists()
+    assert res["storage_after"]["status"] == "PASS"
+    archive_path = pathlib.Path(res["archive_path"])
+    assert archive_path.is_file()
+    with zipfile.ZipFile(archive_path, "r") as zf:
+        assert zf.testzip() is None
+        assert set(zf.namelist()) == {"receipt_old_a.json", "receipt_old_b.json"}
