@@ -107,21 +107,31 @@ def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Co
     wal_exists, wal_size, _ = _file_signature(wal_path)
     shm_exists, _, _ = _file_signature(shm_path)
 
-    if not wal_exists or wal_size == 0:
+    # Check shm_exists FIRST: even with a 0-byte -wal, an existing -shm means a
+    # live writer may be active, so immutable=1 would disable locking/change detection.
+    if shm_exists:
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=False), uri=True, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("SELECT 1").fetchone()
+        except sqlite3.Error:
+            if conn is not None:
+                conn.close()
+                conn = None
+        else:
+            try:
+                yield conn
+                return
+            finally:
+                conn.close()
+
+    if not wal_exists and not shm_exists:
         conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=True), uri=True, timeout=5.0)
         try:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only=ON")
-            yield conn
-            return
-        finally:
-            conn.close()
-
-    if shm_exists:
-        conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=False), uri=True, timeout=5.0)
-        try:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA query_only=ON")
             yield conn
             return
@@ -1013,8 +1023,9 @@ def compact_conductor_storage(
             "storage_after": before,
         }
 
-    cutoff_epoch = time.time() - max(0.0, float(max_age_hours)) * 3600.0
-    candidates: List[tuple[pathlib.Path, int]] = []
+    effective_age_hours = max(1.0, float(max_age_hours))
+    cutoff_epoch = time.time() - effective_age_hours * 3600.0
+    candidates: List[tuple[pathlib.Path, int, int]] = []
     with os.scandir(receipts_dir) as it:
         for entry in it:
             try:
@@ -1024,12 +1035,12 @@ def compact_conductor_storage(
                     continue
                 st = entry.stat(follow_symlinks=False)
                 if st.st_mtime <= cutoff_epoch:
-                    candidates.append((pathlib.Path(entry.path), int(st.st_size)))
+                    candidates.append((pathlib.Path(entry.path), int(st.st_size), int(st.st_mtime_ns)))
             except OSError:
                 continue
 
     candidates.sort(key=lambda item: item[0].name)
-    total_bytes = sum(sz for _, sz in candidates)
+    total_bytes = sum(sz for _, sz, _ in candidates)
     if not candidates or dry_run:
         return {
             "status": "DRY_RUN" if dry_run else "NOOP",
@@ -1045,15 +1056,17 @@ def compact_conductor_storage(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     final_zip = archive_dir / f"receipts_{stamp}_{uuid.uuid4().hex[:6]}.zip"
     tmp_zip = final_zip.with_suffix(".zip.tmp")
-    archived_paths: List[pathlib.Path] = []
+    archived_meta: List[tuple[pathlib.Path, int, int]] = []
     try:
         with zipfile.ZipFile(tmp_zip, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for src_path, _ in candidates:
+            for src_path, sz, mtime_ns in candidates:
                 try:
                     zf.write(src_path, arcname=src_path.name)
-                    archived_paths.append(src_path)
+                    archived_meta.append((src_path, sz, mtime_ns))
                 except OSError:
                     continue
+        with open(tmp_zip, "r+b") as fh:
+            os.fsync(fh.fileno())
         with zipfile.ZipFile(tmp_zip, mode="r") as zf:
             bad = zf.testzip()
             if bad is not None:
@@ -1065,12 +1078,14 @@ def compact_conductor_storage(
 
     removed_files = 0
     removed_bytes = 0
-    size_by_path = {p: sz for p, sz in candidates}
-    for src_path in archived_paths:
+    for src_path, expected_sz, expected_mtime_ns in archived_meta:
         try:
+            st_now = src_path.stat()
+            if int(st_now.st_size) != expected_sz or int(st_now.st_mtime_ns) != expected_mtime_ns:
+                continue  # Modified during archival — keep untouched.
             src_path.unlink(missing_ok=True)
             removed_files += 1
-            removed_bytes += size_by_path.get(src_path, 0)
+            removed_bytes += expected_sz
         except OSError:
             continue
 
