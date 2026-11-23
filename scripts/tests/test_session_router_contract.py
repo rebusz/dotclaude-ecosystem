@@ -44,8 +44,8 @@ _DOOR = (
     "--risk R0..R3 --verify-cmd CMD]"
 )
 _HARD_RULES = (
-    "The supervisor writes no code, does no review and no diagnosis",
-    "NEVER fall back to Claude",
+    "Delegation is preferred. After a documented terminal worker failure or pre-submit unavailability",
+    "A terminal chain failure must not cause repeated QUEUED-only turns when native fallback is available.",
     "Free lanes before quota lanes",
     "Every quota hit or DOWN lane is reported to the operator in the same turn, one line.",
     "overrides only via the operator-run `lane_authorize.py --interactive`",
