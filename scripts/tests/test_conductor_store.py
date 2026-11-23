@@ -1476,7 +1476,8 @@ def test_read_only_snapshot_uses_zero_copy_uri_without_creating_wal_or_shm(
     assert not store.db_path.with_name(f"{store.db_path.name}-wal").exists()
     assert not store.db_path.with_name(f"{store.db_path.name}-shm").exists()
 
-    # Live WAL + SHM active: direct mode=ro reads uncommitted/WAL-committed rows with zero copy
+    # Live WAL + SHM active: isolated temp copy reads WAL-committed rows without touching live -shm
+    monkeypatch.undo()
     with store._connection() as writer:
         writer.execute(
             "INSERT INTO receipts (receipt_id, command_id, idempotency_key, status, result_json, "
@@ -1485,11 +1486,15 @@ def test_read_only_snapshot_uses_zero_copy_uri_without_creating_wal_or_shm(
             ("rcp_live_ro", "cmd_live_ro", "idem_live_ro"),
         )
         writer.commit()
+        shm_path = store.db_path.with_name(f"{store.db_path.name}-shm")
+        shm_before = shm_path.read_bytes() if shm_path.is_file() else None
         with _read_only_snapshot_connection(store.db_path) as ro_conn:
             row = ro_conn.execute(
                 "SELECT receipt_id FROM receipts WHERE receipt_id = 'rcp_live_ro'"
             ).fetchone()
             assert row is not None and row["receipt_id"] == "rcp_live_ro"
+        shm_after = shm_path.read_bytes() if shm_path.is_file() else None
+        assert shm_after == shm_before
 
 
 def test_compact_conductor_storage_archives_old_receipts_and_clears_blocked_quota(

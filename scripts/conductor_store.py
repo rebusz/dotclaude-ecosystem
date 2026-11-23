@@ -90,43 +90,19 @@ def _sqlite_ro_uri(db_path: pathlib.Path, *, immutable: bool = False) -> str:
 
 @contextmanager
 def _read_only_snapshot_connection(db_path: pathlib.Path) -> Iterator[sqlite3.Connection]:
-    """Open a read-only SQLite connection without creating WAL/SHM beside the live DB.
+    """Open a read-only SQLite connection without modifying any file in the live DB dir.
 
-    Zero-copy fast paths avoid copying a multi-hundred-MB database on every poll:
-      1. When no non-empty ``-wal`` file exists, open with ``mode=ro&immutable=1``
-         (zero bytes copied, zero ``-wal``/``-shm`` files created).
-      2. When a live ``-wal`` and ``-shm`` already exist, open directly with
-         ``mode=ro`` + ``PRAGMA query_only=ON`` (zero bytes copied, no new files
-         created, sees live WAL transactions without snapshot-race errors).
-      3. Only in the rare crash-leftover case (non-empty ``-wal`` without ``-shm``)
-         fall back to an isolated temp copy so read-only probes never trigger
-         WAL recovery on the live directory.
+    Zero-copy fast path avoids copying a multi-hundred-MB database on every poll:
+      1. When neither ``-wal`` nor ``-shm`` exists, open with ``mode=ro&immutable=1``
+         (zero bytes copied, zero ``-wal``/``-shm`` files created or touched).
+      2. When a live ``-wal`` or ``-shm`` exists, fall back to an isolated temp copy
+         (``conductor.db`` + ``conductor.db-wal``) so read-only probes see
+         uncheckpointed WAL frames without mutating live ``-shm`` read-marks.
     """
     wal_path = db_path.with_name(f"{db_path.name}-wal")
     shm_path = db_path.with_name(f"{db_path.name}-shm")
-    wal_exists, wal_size, _ = _file_signature(wal_path)
+    wal_exists, _, _ = _file_signature(wal_path)
     shm_exists, _, _ = _file_signature(shm_path)
-
-    # Check shm_exists FIRST: even with a 0-byte -wal, an existing -shm means a
-    # live writer may be active, so immutable=1 would disable locking/change detection.
-    if shm_exists:
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=False), uri=True, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA query_only=ON")
-            conn.execute("SELECT 1").fetchone()
-        except sqlite3.Error:
-            if conn is not None:
-                conn.close()
-                conn = None
-        else:
-            try:
-                yield conn
-                return
-            finally:
-                conn.close()
 
     if not wal_exists and not shm_exists:
         conn = sqlite3.connect(_sqlite_ro_uri(db_path, immutable=True), uri=True, timeout=5.0)

@@ -127,10 +127,14 @@ def test_panel_never_appears_in_resource_ledger(tmp_path: pathlib.Path, tk_root:
 
 
 def test_one_snapshot_per_refresh(tmp_path: pathlib.Path):
-    """Exactly one snapshot is taken per read_gate_frame refresh."""
+    """Exactly one read-only snapshot connection is opened per read_gate_frame refresh, zero file copies."""
+    import scripts.conductor_store as conductor_store
+
     _create_sample_store(tmp_path)
     copy_count = 0
+    open_count = 0
     orig_copy2 = shutil.copy2
+    orig_open = conductor_store._read_only_snapshot_connection
 
     def counting_copy2(src, dst, *args, **kwargs):
         nonlocal copy_count
@@ -138,13 +142,21 @@ def test_one_snapshot_per_refresh(tmp_path: pathlib.Path):
             copy_count += 1
         return orig_copy2(src, dst, *args, **kwargs)
 
-    with patch("shutil.copy2", side_effect=counting_copy2):
+    def counting_open(db_path):
+        nonlocal open_count
+        open_count += 1
+        return orig_open(db_path)
+
+    with (
+        patch("shutil.copy2", side_effect=counting_copy2),
+        patch.object(conductor_store, "_read_only_snapshot_connection", side_effect=counting_open),
+    ):
         frame = read_gate_frame(resource_key="host:heavy", root_dir=tmp_path)
 
     assert frame["store"]["store_state"] == "AVAILABLE"
     assert frame["gate"]["resource_key"] == "host:heavy"
-    # Exactly one snapshot: copies db (and wal if present). Since no wal was created, exactly 1 copy of db.
-    assert copy_count == 1
+    assert open_count == 1
+    assert copy_count == 0
 
 
 def test_signature_gate_no_snapshot_when_unmoved(tmp_path: pathlib.Path):
